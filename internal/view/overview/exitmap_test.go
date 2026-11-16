@@ -173,3 +173,39 @@ func TestFitMemo(t *testing.T) {
 		t.Fatalf("a new exit must frame again: %+v", c)
 	}
 }
+
+func TestMergeRoutesBySharedNode(t *testing.T) {
+	la := model.Place{Country: "US", City: "洛杉矶", Lat: 34.05, Lon: -118.24}
+	guess := model.ExitInfo{Node: "dmit", Place: &la, Source: model.LocateName}
+	probed := model.ExitInfo{Node: "dmit", Place: &la, Source: model.LocateProbe}
+	rs := mergeRoutes([]model.ExitRoute{
+		{Group: "漏网之鱼", Node: "dmit", Exit: guess, Speed: 10, Connections: 2},
+		{Group: "DIRECT", Node: "DIRECT", Speed: 5, Connections: 18},
+		{Group: "节点选择", Node: "dmit", Exit: probed, Speed: 20, Connections: 1, Main: true},
+		{Group: "谷歌服务", Node: "dmit", Exit: guess, Speed: 30, Connections: 4},
+		{Group: "未解析", Node: ""},
+		{Group: "也未解析", Node: ""},
+	})
+	if len(rs) != 4 {
+		t.Fatalf("want 4 routes (dmit, DIRECT, two unresolved), got %d: %+v", len(rs), rs)
+	}
+	m := rs[0]
+	if m.Group != "节点选择" || !m.Main {
+		t.Errorf("main group should name the merged route and lead: %+v", m)
+	}
+	if len(m.Groups) != 3 || m.Groups[0] != "漏网之鱼" || m.Groups[2] != "谷歌服务" {
+		t.Errorf("groups %v", m.Groups)
+	}
+	if m.Speed != 60 || m.Connections != 7 {
+		t.Errorf("sums speed=%d conns=%d", m.Speed, m.Connections)
+	}
+	if m.Exit.Source != model.LocateProbe {
+		t.Error("a measured exit wins over a guessed one")
+	}
+	if m.connsQuery() != "dmit" || rs[1].connsQuery() != "DIRECT" {
+		t.Errorf("conns query %q %q", m.connsQuery(), rs[1].connsQuery())
+	}
+	if rs[1].merged() || rs[2].merged() {
+		t.Error("single groups are not merged")
+	}
+}

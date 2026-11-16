@@ -36,11 +36,79 @@ type destState struct {
 	geo   map[string]*model.Place     // IP → country place (nil = unknown)
 }
 
-// route is one line of the map and the list.
+// route is one line of the map and the list: the groups whose traffic
+// leaves through the same node, merged. Group is the one that names the
+// route (the main group when it is among them), Groups all of them in the
+// core's order, Speed and Connections their sums.
 type route struct {
 	model.ExitRoute
-	place *model.Place
-	color ui.Color
+	Groups []string
+	place  *model.Place
+	color  ui.Color
+}
+
+// merged reports whether the route stands for more than one group.
+func (r route) merged() bool { return len(r.Groups) > 1 }
+
+// connsQuery is what the connections page is filtered by for this route:
+// its group, or for merged groups the node they share, which every one of
+// their connections carries in its chain.
+func (r route) connsQuery() string {
+	if r.merged() && r.Node != "" {
+		return r.Node
+	}
+	return r.Group
+}
+
+// mergeRoutes merges the groups that leave through the same node: several
+// rules hitting one exit are one line on the map and one entry in the
+// list. The first route of a node keeps its place in the order; the main
+// group names the route, and a measured exit wins over a guessed one.
+func mergeRoutes(rs []model.ExitRoute) []route {
+	out := make([]route, 0, len(rs))
+	at := map[string]int{}
+	for _, r := range rs {
+		i, ok := at[r.Node]
+		if r.Node == "" || !ok {
+			if r.Node != "" {
+				at[r.Node] = len(out)
+			}
+			out = append(out, route{ExitRoute: r, Groups: []string{r.Group}, place: r.Exit.Place})
+			continue
+		}
+		m := &out[i]
+		m.Groups = append(m.Groups, r.Group)
+		m.Speed += r.Speed
+		m.Connections += r.Connections
+		if r.Main && !m.Main {
+			m.Group, m.Main = r.Group, true
+		}
+		if better(r.Exit, m.Exit) {
+			m.Exit, m.place = r.Exit, r.Exit.Place
+		}
+	}
+	// The main route stays first (当前出口).
+	for i := range out {
+		if out[i].Main && i > 0 {
+			m := out[i]
+			copy(out[1:i+1], out[:i])
+			out[0] = m
+			break
+		}
+	}
+	return out
+}
+
+// better reports whether exit a says more than b: a place where b has
+// none, or a measurement where b is a guess.
+func better(a, b model.ExitInfo) bool {
+	if a.Place == nil {
+		return false
+	}
+	if b.Place == nil {
+		return true
+	}
+	return a.Source == model.LocateProbe && b.Source != model.LocateProbe
 }
 
 // youPlace returns the user's place and whether it is a guess. Only an
@@ -73,19 +141,17 @@ var localPlace = sync.OnceValue(func() *model.Place {
 // the last call (k = 1 − e^(−dt/τ)), so the easing does not depend on
 // how often the page is built.
 func (p *Page) routes(now time.Time) []route {
-	rs := p.e.API.ExitRoutes()
-	out := make([]route, 0, len(rs))
+	out := mergeRoutes(p.e.API.ExitRoutes())
 	k := 0
 	seen := map[string]bool{}
-	for i, r := range rs {
-		rt := route{ExitRoute: r, place: r.Exit.Place}
+	for i := range out {
+		r := &out[i]
 		if i == 0 || r.Main {
-			rt.color = ui.Color{}
+			r.color = ui.Color{}
 		} else {
-			rt.color = routeColors[k%len(routeColors)]
+			r.color = routeColors[k%len(routeColors)]
 			k++
 		}
-		out = append(out, rt)
 		seen[r.Group] = true
 		f := p.flows[r.Group]
 		if f == nil {
@@ -131,9 +197,13 @@ func (p *Page) destinations(rs []route, mode model.Mode, now time.Time) map[stri
 		return d.lists
 	}
 	d.at = now
-	routeOf := map[string]bool{}
+	// A connection counts for the route its group was merged into.
+	routeOf := map[string]string{}
 	for _, r := range rs {
-		routeOf[r.Group] = true
+		for _, g := range r.Groups {
+			routeOf[g] = r.Group
+		}
+		routeOf[r.Group] = r.Group
 	}
 	for _, m := range d.by {
 		for _, x := range m {
@@ -148,7 +218,8 @@ func (p *Page) destinations(rs []route, mode model.Mode, now time.Time) map[stri
 		if mode == model.ModeGlobal {
 			g = "GLOBAL"
 		}
-		if !routeOf[g] {
+		g, ok := routeOf[g]
+		if !ok {
 			continue
 		}
 		pl := p.countryOf(cn.DstIP)
@@ -171,7 +242,7 @@ func (p *Page) destinations(rs []route, mode model.Mode, now time.Time) map[stri
 	}
 	lists := map[string][]dest{}
 	for g, m := range d.by {
-		if !routeOf[g] {
+		if routeOf[g] != g {
 			delete(d.by, g)
 			continue
 		}

@@ -263,10 +263,16 @@ func (p *Page) exitCard(c *ui.Context, st model.Status, rs []route) {
 		if run && !direct && !held && len(p.hits) > 0 {
 			if x, y, over := m.PointerPosition(); over {
 				if g := p.hitRoute(x, y); g != "" {
+					q := g
+					for _, r := range rs {
+						if r.Group == g {
+							q = r.connsQuery()
+						}
+					}
 					cursor = ui.CursorPointer
-					m.Tooltip(i18n.Tf("查看经 %s 的连接", g))
+					m.Tooltip(i18n.Tf("查看经 %s 的连接", q))
 					if !dragged && m.Clicked() {
-						p.e.Navigate(env.Conns, g)
+						p.e.Navigate(env.Conns, q)
 					}
 				}
 			}
@@ -679,10 +685,15 @@ func (p *Page) drawLabels(fr *mapFrame) {
 		}
 		placeLabel(pt, b, r, yx, yy, youRadius+2+youPulse, txt, t.Text.Alpha(0.5+0.5*yvis), back, labelSize, true, true)
 	}
+	// Exits in one city share one label, the first route's: three
+	// 「洛杉矶」 piled on one spot read as noise.
+	labelled := b.cities
+	clear(labelled)
 	for _, ed := range exits {
-		if ed.vis <= 0 {
+		if ed.vis <= 0 || labelled[ed.place.City] {
 			continue
 		}
+		labelled[ed.place.City] = true
 		name := ed.place.City
 		if f := geo.Flag(ed.place.Country); f != "" {
 			name = f + " " + name

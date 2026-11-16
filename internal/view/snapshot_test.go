@@ -33,6 +33,12 @@ type snapshot struct {
 var snapshots = []snapshot{
 	// Pages as the fake starts them: core running, three subscriptions.
 	{name: "overview", page: env.Overview},
+	// Two rule groups through one node: one arc, one list entry.
+	{name: "overview-merged", page: env.Overview, prep: func(t *testing.T, api *fake.Fake, _ *Shell, _ *ui.Tester) {
+		if err := api.SelectProxy("流媒体", "东京 03"); err != nil {
+			t.Fatal(err)
+		}
+	}},
 	{name: "proxies", page: env.Proxies},
 	{name: "subs", page: env.Subs},
 	{name: "conns", page: env.Conns},

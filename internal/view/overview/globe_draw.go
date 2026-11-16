@@ -20,10 +20,12 @@ const (
 	// arcLiftBase and arcLiftSpan lift an arc above the surface, in radii:
 	// a little for any arc, more the farther it goes (an antipodal arc
 	// rises arcLiftBase+arcLiftSpan), and arcLiftStack more for each
-	// further route to the same city so that they do not coincide.
+	// further route to the same city: just enough for the arcs to run
+	// side by side as separate lines, not a stack towering over the
+	// globe. Routes through one node are already merged into one arc.
 	arcLiftBase  = 0.06
 	arcLiftSpan  = 0.30
-	arcLiftStack = 0.09
+	arcLiftStack = 0.025
 	// fadeLevels is how many opacity steps a fading stroke is cut into.
 	fadeLevels = 3
 )

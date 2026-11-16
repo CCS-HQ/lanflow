@@ -3,6 +3,8 @@
 package overview
 
 import (
+	"strings"
+
 	"github.com/egoist/mygo/ui"
 
 	"lanflow/internal/geo"
@@ -75,7 +77,8 @@ func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct
 		}
 		rt := r
 		col := routeColor(rt, t)
-		item := env.ClickableColumn(c.Key("route:"+rt.Group), i18n.Tf("%s：%s，在代理页查看", rt.Group, rt.Node)).Padding(6).Gap(3).Radius(6)
+		groups := strings.Join(rt.Groups, " · ")
+		item := env.ClickableColumn(c.Key("route:"+rt.Group), i18n.Tf("%s：%s，在代理页查看", groups, rt.Node)).Padding(6).Gap(3).Radius(6)
 		if item.Hovered() {
 			item.Background(t.SurfaceHover)
 		}
@@ -101,7 +104,14 @@ func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct
 				if rt.place != nil {
 					city = rt.place.City
 				}
-				ui.Text(c, rt.Group+" · "+city).FontSize(11).TextColor(t.TextMuted).SingleLine().Grow(1)
+				// One group: 「🚀 节点选择 · 洛杉矶」. Groups merged into
+				// this exit: the city with their count here, the groups
+				// on the line below, wrapping.
+				sub := rt.Group + " · " + city
+				if rt.merged() {
+					sub = i18n.Tf("%s · %d 个分组", city, len(rt.Groups))
+				}
+				ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).SingleLine().Grow(1)
 				switch {
 				case rt.place == nil:
 				case probing:
@@ -112,6 +122,9 @@ func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct
 					k.Tag(c, i18n.T("推测"), "gray")
 				}
 			})
+			if rt.merged() {
+				ui.Text(c, groups).FontSize(11).TextColor(t.TextMuted)
+			}
 			if note, col := pathNote(rt.Exit, t); note != "" {
 				ui.Text(c, note).FontSize(11).TextColor(col)
 			}

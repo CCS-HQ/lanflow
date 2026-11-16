@@ -27,6 +27,7 @@ func init() {
 		"%s：%s，在代理页查看": "%s: %s, see Proxies",
 		"位置未知":         "Unknown location",
 		"%s · %d 个连接":  "%s · %d connections",
+		"%s · %d 个分组":  "%s · %d groups",
 		"经中转 · %s":     "Via relay · %s",
 
 		// internal/view/overview/exitmap_routes.go
