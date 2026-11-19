@@ -228,87 +228,91 @@ func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 		e.Run(func() error { return e.API.ProbeIP(target, online) }, "")
 	}
 	ui.Column(c).Grow(1).Gap(12).Children(func() {
-		ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
-			env.InfoCard(c, i18n.T("出口信息")+" · "+targetLabel(target), func() {
-				if rep.Running {
-					ui.Spinner(c).Size(12, 12).Label(i18n.T("检测中…"))
-					ui.Text(c, i18n.T("检测中…")).FontSize(11).TextColor(t.TextMuted)
-					return
-				}
-				label := i18n.T("检测出口")
-				if has {
-					label = i18n.T("重新检测")
-				}
-				ui.Button(c, label).Tooltip(i18n.T("经所选出口请求 Cloudflare trace，并用本地数据库解析；不访问第三方站点")).OnClick(func() { start(false) })
-			}, func() {
-				switch {
-				case !has:
-					ui.Text(c, "—").FontSize(20).TextColor(t.TextMuted)
-					ui.Text(c, i18n.T("尚未检测。按「检测出口」读取这个出口的地址、位置、ASN 和类型。")).FontSize(11).TextColor(t.TextMuted)
-				case rep.Error != "":
-					ui.Text(c, "—").FontSize(20).TextColor(t.TextMuted)
-					ui.Text(c, rep.Error).FontSize(11).TextColor(t.Danger).Selectable()
-				case rep.Running && rep.IP == "":
-					ui.Text(c, "—").FontSize(20).TextColor(t.TextMuted)
-				default:
-					ui.Text(c, rep.IP).FontSize(20).FontFeatures("tnum").Selectable()
-					ui.Column(c).Gap(5).Children(func() {
-						kv(c, i18n.T("位置"), placeText(rep.Place), nil)
-						kv(c, i18n.T("运营商"), orgText(rep.ASN, rep.Org), nil)
-						kv(c, i18n.T("IP 类型"), "", func() { e.Kit.Tag(c, kindText(rep.Kind), kindTagKind(rep.Kind)) })
-						kv(c, i18n.T("原生 IP"), "", func() {
-							switch rep.Native {
-							case model.NativeYes:
-								e.Kit.Tag(c, i18n.T("原生"), "green")
-							case model.NativeBroadcast:
-								e.Kit.Tag(c, i18n.T("广播"), "orange")
-							default:
-								e.Kit.Tag(c, i18n.T("未知"), "gray")
+		// The two cards scroll together when a long report (an error, many
+		// online sources) is taller than the window.
+		ui.Scroll(c.Key("ipcards")).Shrink(1).Children(func() {
+			ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
+				env.InfoCard(c, i18n.T("出口信息")+" · "+targetLabel(target), func() {
+					if rep.Running {
+						ui.Spinner(c).Size(12, 12).Label(i18n.T("检测中…"))
+						ui.Text(c, i18n.T("检测中…")).FontSize(11).TextColor(t.TextMuted)
+						return
+					}
+					label := i18n.T("检测出口")
+					if has {
+						label = i18n.T("重新检测")
+					}
+					ui.Button(c, label).Tooltip(i18n.T("经所选出口请求 Cloudflare trace，并用本地数据库解析；不访问第三方站点")).OnClick(func() { start(false) })
+				}, func() {
+					switch {
+					case !has:
+						ui.Text(c, "—").FontSize(20).TextColor(t.TextMuted)
+						ui.Text(c, i18n.T("尚未检测。按「检测出口」读取这个出口的地址、位置、ASN 和类型。")).FontSize(11).TextColor(t.TextMuted)
+					case rep.Error != "":
+						ui.Text(c, "—").FontSize(20).TextColor(t.TextMuted)
+						ui.Text(c, rep.Error).FontSize(11).TextColor(t.Danger).Selectable()
+					case rep.Running && rep.IP == "":
+						ui.Text(c, "—").FontSize(20).TextColor(t.TextMuted)
+					default:
+						ui.Text(c, rep.IP).FontSize(20).FontFeatures("tnum").Selectable()
+						ui.Column(c).Gap(5).Children(func() {
+							kv(c, i18n.T("位置"), placeText(rep.Place), nil)
+							kv(c, i18n.T("运营商"), orgText(rep.ASN, rep.Org), nil)
+							kv(c, i18n.T("IP 类型"), "", func() { e.Kit.Tag(c, kindText(rep.Kind), kindTagKind(rep.Kind)) })
+							kv(c, i18n.T("原生 IP"), "", func() {
+								switch rep.Native {
+								case model.NativeYes:
+									e.Kit.Tag(c, i18n.T("原生"), "green")
+								case model.NativeBroadcast:
+									e.Kit.Tag(c, i18n.T("广播"), "orange")
+								default:
+									e.Kit.Tag(c, i18n.T("未知"), "gray")
+								}
+								if rep.NativeWhy != "" {
+									ui.Text(c, rep.NativeWhy).FontSize(11).TextColor(t.TextMuted)
+								}
+							})
+							if rep.Colo != "" {
+								kv(c, i18n.T("CF 机房"), rep.Colo, nil)
 							}
-							if rep.NativeWhy != "" {
-								ui.Text(c, rep.NativeWhy).FontSize(11).TextColor(t.TextMuted)
+							kv(c, i18n.T("来源"), strings.Join(rep.Sources, " · "), nil)
+							if !rep.CheckedAt.IsZero() {
+								kv(c, i18n.T("时间"), rep.CheckedAt.Format("15:04:05"), nil)
 							}
 						})
-						if rep.Colo != "" {
-							kv(c, i18n.T("CF 机房"), rep.Colo, nil)
-						}
-						kv(c, i18n.T("来源"), strings.Join(rep.Sources, " · "), nil)
-						if !rep.CheckedAt.IsZero() {
-							kv(c, i18n.T("时间"), rep.CheckedAt.Format("15:04:05"), nil)
-						}
-					})
-				}
-			})
-			env.InfoCard(c, i18n.T("风险评估"), func() {
-				// The finer score in the browser: handed to it, never
-				// requested by the app.
-				link := env.LinkText(c, i18n.T("在浏览器中检查 IP 纯净度"), "").FontSize(11).Tooltip(i18n.T("在浏览器中打开 ippure.com，查看更细的 IP 风险评分"))
-				if link.Clicked() {
-					_ = mygo.Shell.OpenExternal(ippureURL)
-				}
-				if rep.Running {
-					return
-				}
-				ui.Button(c, i18n.T("在线检测")).Disabled(!has || rep.Error != "").
-					Tooltip(i18n.T("经所选出口各请求一次 ip-api.com 和 ippure.com 的免费接口（无需密钥）")).
-					OnClick(func() { start(true) })
-			}, func() {
-				switch {
-				case !has || rep.Error != "":
-					ui.Text(c, i18n.T("先检测出口信息，再按「在线检测」读取公开的风险评分。")).FontSize(11).TextColor(t.TextMuted)
-				case len(rep.Risk) == 0 && rep.RiskError == "":
-					ui.Text(c, i18n.T("「在线检测」会经所选出口各向 ip-api.com（代理 / 机房 / 移动网络标记）和 ippure.com（风险分、住宅、广播）发送一次请求。只在你按下按钮时发送。")).FontSize(11).TextColor(t.TextMuted)
-				default:
-					ui.Column(c).Gap(6).Children(func() {
-						for _, r := range rep.Risk {
-							p.riskRows(c, t, r)
-						}
-						if rep.RiskError != "" {
-							ui.Text(c, i18n.Tf("在线来源读取失败：%s", rep.RiskError)).FontSize(11).TextColor(t.Warning).Selectable()
-							ui.Button(c, i18n.T("在 ippure.com 查看")).OnClick(func() { _ = mygo.Shell.OpenExternal(ippureURL) })
-						}
-					})
-				}
+					}
+				})
+				env.InfoCard(c, i18n.T("风险评估"), func() {
+					// The finer score in the browser: handed to it, never
+					// requested by the app.
+					link := env.LinkText(c, i18n.T("在浏览器中检查 IP 纯净度"), "").FontSize(11).Tooltip(i18n.T("在浏览器中打开 ippure.com，查看更细的 IP 风险评分"))
+					if link.Clicked() {
+						_ = mygo.Shell.OpenExternal(ippureURL)
+					}
+					if rep.Running {
+						return
+					}
+					ui.Button(c, i18n.T("在线检测")).Disabled(!has || rep.Error != "").
+						Tooltip(i18n.T("经所选出口各请求一次 ip-api.com 和 ippure.com 的免费接口（无需密钥）")).
+						OnClick(func() { start(true) })
+				}, func() {
+					switch {
+					case !has || rep.Error != "":
+						ui.Text(c, i18n.T("先检测出口信息，再按「在线检测」读取公开的风险评分。")).FontSize(11).TextColor(t.TextMuted)
+					case len(rep.Risk) == 0 && rep.RiskError == "":
+						ui.Text(c, i18n.T("「在线检测」会经所选出口各向 ip-api.com（代理 / 机房 / 移动网络标记）和 ippure.com（风险分、住宅、广播）发送一次请求。只在你按下按钮时发送。")).FontSize(11).TextColor(t.TextMuted)
+					default:
+						ui.Column(c).Gap(6).Children(func() {
+							for _, r := range rep.Risk {
+								p.riskRows(c, t, r)
+							}
+							if rep.RiskError != "" {
+								ui.Text(c, i18n.Tf("在线来源读取失败：%s", rep.RiskError)).FontSize(11).TextColor(t.Warning).Selectable()
+								ui.Button(c, i18n.T("在 ippure.com 查看")).OnClick(func() { _ = mygo.Shell.OpenExternal(ippureURL) })
+							}
+						})
+					}
+				})
 			})
 		})
 		if !has && !rep.Running {
@@ -425,13 +429,13 @@ func (p *Page) unlockTab(c *ui.Context, t *ui.Theme, target string) {
 			r := rows[row]
 			switch unlockCols[col].ID {
 			case "service":
-				ui.Text(c, r.Service).SingleLine()
+				ui.Text(c, r.Service).SingleLine().Tooltip(r.Service)
 			case "status":
 				p.statusCell(c, t, r)
 			case "region":
 				ui.Text(c, countryText(r.Region)).SingleLine()
 			case "note":
-				ui.Text(c, env.Dash(r.Note)).TextColor(t.TextMuted).SingleLine()
+				ui.Text(c, env.Dash(r.Note)).TextColor(t.TextMuted).SingleLine().Tooltip(r.Note)
 			case "ms":
 				if r.Millis > 0 {
 					ui.Text(c, fmt.Sprintf("%d ms", r.Millis)).FontFeatures("tnum").TextColor(t.TextMuted)
@@ -458,6 +462,21 @@ func (p *Page) statusCell(c *ui.Context, t *ui.Theme, r model.UnlockResult) {
 	default:
 		ui.Spinner(c).Size(12, 12).Label(i18n.T("检测中…"))
 	}
+}
+
+// unlockText names an unlock verdict, as statusCell's tags do.
+func unlockText(status string) string {
+	switch status {
+	case model.UnlockYes:
+		return i18n.T("可用")
+	case model.UnlockNo:
+		return i18n.T("不可用")
+	case model.UnlockPartial:
+		return i18n.T("仅自制剧")
+	case model.UnlockError:
+		return i18n.T("失败")
+	}
+	return i18n.T("检测中…")
 }
 
 // ---- 地区探查 ----
@@ -558,7 +577,7 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 			r := rows[row]
 			switch regionCols[col].ID {
 			case "node":
-				ui.Text(c, r.Node).SingleLine()
+				ui.Text(c, r.Node).SingleLine().Tooltip(r.Node)
 			case "delay":
 				e.Kit.Delay(c, r.Delay, r.Testing)
 			case "ip":
@@ -568,11 +587,11 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 				case !r.Probed:
 					ui.Text(c, "—").TextColor(t.TextMuted)
 				default:
-					ui.Text(c, r.Exit.IP).FontFeatures("tnum").SingleLine().Selectable()
+					ui.Text(c, r.Exit.IP).FontFeatures("tnum").SingleLine().Selectable().Tooltip(r.Exit.IP)
 				}
 			case "place":
 				if r.Probed {
-					ui.Text(c, placeText(r.Exit.Place)).SingleLine()
+					ui.Text(c, placeText(r.Exit.Place)).SingleLine().Tooltip(placeText(r.Exit.Place))
 				} else {
 					ui.Text(c, "—").TextColor(t.TextMuted)
 				}
@@ -590,7 +609,18 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 					if r.unlocked == 0 {
 						kind = "red"
 					}
-					e.Kit.Tag(c, i18n.Tf("%d / %d 可用", r.unlocked, r.total), kind)
+					// Which services: the tag only counts them.
+					var lines []string
+					for _, u := range r.Unlock {
+						line := u.Service + " · " + unlockText(u.Status)
+						if u.Region != "" {
+							line += " · " + countryText(u.Region)
+						}
+						lines = append(lines, line)
+					}
+					ui.Box(c).Tooltip(strings.Join(lines, "\n")).Children(func() {
+						e.Kit.Tag(c, i18n.Tf("%d / %d 可用", r.unlocked, r.total), kind)
+					})
 				}
 			case "action":
 				if r.Node == cur {

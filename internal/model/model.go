@@ -243,6 +243,11 @@ type UIState struct {
 	ProbeTab  string
 	LogLevel  string // the 日志 page's lowest level shown ("debug"…"error"); "" = default
 	LogSource string // the 日志 page's source: "core" or "app"; "" = default
+	LogWrap   bool   // the 日志 page breaks long lines instead of cutting them
+	// Sizes are the sizes of the panes the user resized, by key (see
+	// internal/view/env/pane.go): detail panel widths, split positions.
+	// Absent = the pane's default.
+	Sizes map[string]float32
 }
 
 // RuleMatch is the result of testing an address against the rules.

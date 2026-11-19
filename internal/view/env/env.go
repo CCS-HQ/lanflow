@@ -137,6 +137,9 @@ type Env struct {
 	// debounced writer (SaveUIState); nil in Env values without a shell
 	// (tests), which then save at once.
 	UIState *UIStateSaver
+
+	// panes holds each PaneSize key's last loaded or saved size.
+	panes map[string]float32
 }
 
 // Kit draws the shared, native-looking building blocks (see docs/design.md §3).

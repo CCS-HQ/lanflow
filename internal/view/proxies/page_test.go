@@ -288,7 +288,7 @@ func TestBigGroupVirtual(t *testing.T) {
 			n++
 		}
 	}
-	if n == 0 || n > 3*bigGroupRows {
+	if n == 0 || n > 3*maxBigGroupRows {
 		t.Fatalf("built %d of 300 rows", n)
 	}
 }
@@ -337,5 +337,17 @@ func TestDisplayPrefsRemembered(t *testing.T) {
 	ui.NewTester(r.View, 900, 700)
 	if r.sort != sortDefault || r.hideTimeout || r.provOpen {
 		t.Fatalf("fallback: sort=%d hide=%v prov=%v", r.sort, r.hideTimeout, r.provOpen)
+	}
+}
+
+// TestGridColumnsFit: the grid fits its column count to its width.
+func TestGridColumnsFit(t *testing.T) {
+	for _, c := range []struct {
+		w    float32
+		want int
+	}{{0, gridColumns}, {300, minGridColumns}, {800, 4}, {1800, maxGridColumns}} {
+		if got := gridColumnsFor(c.w); got != c.want {
+			t.Errorf("gridColumnsFor(%v) = %d, want %d", c.w, got, c.want)
+		}
 	}
 }

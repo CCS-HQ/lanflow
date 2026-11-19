@@ -41,8 +41,11 @@ type Page struct {
 	selected int    // row index the table chooses
 	sel      string // ID of the connection shown in the detail panel
 	hoverRow int
-	form     ruleform.Form
-	icons    *procicon.Cache // application icons of the 进程 column
+	// detailW is the detail panel's width, which the user drags its edge
+	// to change (env.DetailEdge), remembered in the UI state; 0 = default.
+	detailW float32
+	form    ruleform.Form
+	icons   *procicon.Cache // application icons of the 进程 column
 
 	// hidden holds the IDs of the columns the user hid through the header's
 	// context menu; it mirrors Settings.ConnHiddenColumns.
@@ -74,8 +77,8 @@ func New(e *env.Env) *Page {
 // chooses which show by right-clicking the header. 主机 always shows.
 var allColumns = []ui.TableColumn{
 	{Title: "主机", ID: "host", MinWidth: 150, Sortable: true},
-	{Title: "进程", ID: "process", Width: 104, Sortable: true},
-	{Title: "规则", ID: "rule", Width: 118, Sortable: true},
+	{Title: "进程", ID: "process", Width: 120, Sortable: true},
+	{Title: "规则", ID: "rule", Width: 132, Sortable: true},
 	{Title: "链路", ID: "chain", Width: 150, Sortable: true},
 	{Title: "↓ 速度", ID: "down", Width: 84, Align: ui.End, Sortable: true},
 	{Title: "↑ 速度", ID: "up", Width: 84, Align: ui.End, Sortable: true},
@@ -304,6 +307,10 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, active, closed []model.Connectio
 func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, col string) {
 	q := strings.TrimSpace(p.query)
 	muted := t.TextMuted
+	if row == p.selected {
+		// Muted grey is unreadable on the chosen row's accent.
+		muted = t.AccentText
+	}
 	box := ui.Row(c).FillWidth()
 	if box.Hovered() {
 		p.hoverRow = row
@@ -311,7 +318,7 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, co
 	box.Children(func() {
 		switch col {
 		case "host":
-			env.Highlight(c, cn.Host, q, t.Text).SingleLine()
+			env.Highlight(c, cn.Host, q, t.Text).SingleLine().Tooltip(cn.Host)
 		case "process":
 			name := cn.Process
 			if name == "" {
@@ -321,16 +328,16 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, co
 				if cn.Process != "" {
 					p.icons.Draw(c, t, cn.ProcessPath, procicon.Size)
 				}
-				env.Highlight(c, name, q, muted).SingleLine().Shrink(1)
+				env.Highlight(c, name, q, muted).SingleLine().Shrink(1).Tooltip(processTip(cn))
 			})
 		case "rule":
-			env.Highlight(c, ruleName(cn), q, muted).SingleLine()
+			env.Highlight(c, ruleName(cn), q, muted).SingleLine().Tooltip(ruleTip(cn))
 		case "chain":
-			env.Highlight(c, chain(cn), q, t.Text).SingleLine()
+			env.Highlight(c, chain(cn), q, t.Text).SingleLine().Tooltip(chain(cn))
 		case "down":
-			speed(c, t, cn.DownSpeed)
+			speed(c, muted, cn.DownSpeed)
 		case "up":
-			speed(c, t, cn.UpSpeed)
+			speed(c, muted, cn.UpSpeed)
 		case "total":
 			ui.Text(c, env.FmtBytes(cn.Download)).FontFeatures("tnum").SingleLine()
 		case "dur":
@@ -351,10 +358,10 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, co
 	})
 }
 
-func speed(c *ui.Context, t *ui.Theme, v int64) {
+func speed(c *ui.Context, muted ui.Color, v int64) {
 	if v <= 0 {
 		// Idle connections read as a dash, not a unit-less zero.
-		ui.Text(c, "—").TextColor(t.TextMuted).FontFeatures("tnum")
+		ui.Text(c, "—").TextColor(muted).FontFeatures("tnum")
 		return
 	}
 	ui.Text(c, env.FmtSpeed(v)).FontFeatures("tnum").SingleLine()
@@ -391,7 +398,10 @@ func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, cn model.Connection, active bo
 
 func (p *Page) detail(c *ui.Context, t *ui.Theme, cn model.Connection, active bool) {
 	e := p.e
-	ui.Column(c.Key("detail")).Width(detailWidth).FillHeight().BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
+	panel := ui.Column(c.Key("detail")).FillHeight().Shrink(0).BorderWidth(0, 0, 0, 1).BorderColor(t.Border)
+	panel.Children(func() {
+		p.e.PaneSize(env.SizeConnsDetail, &p.detailW)
+		panel.Width(env.DetailEdge(c, &p.detailW, detailWidth))
 		ui.Scroll(c).Grow(1).Padding(14, 16).Gap(12).Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Start).Children(func() {
 				ui.Text(c, cn.Host).Bold().Grow(1).Selectable()
@@ -448,7 +458,7 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, cn model.Connection, active bo
 func (p *Page) kv(c *ui.Context, t *ui.Theme, k, v, sub string) {
 	ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
 		ui.Text(c, k).Width(64).FontSize(12).TextColor(t.TextMuted).Unselectable()
-		ui.Column(c).Grow(1).Children(func() {
+		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 			ui.Text(c, v).FontSize(12).FontFeatures("tnum")
 			if sub != "" {
 				ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted)
@@ -648,4 +658,20 @@ func isIP(h string) bool {
 // rebuilds it only for these (and its own).
 func (p *Page) Topics() []app.Topic {
 	return []app.Topic{app.TopicStatus, app.TopicConns, app.TopicProxies, app.TopicSettings, app.TopicProcIcons}
+}
+
+// processTip is the 进程 cell's tooltip: the name with the full path.
+func processTip(cn model.Connection) string {
+	if cn.ProcessPath == "" {
+		return cn.Process
+	}
+	return cn.Process + "\n" + cn.ProcessPath
+}
+
+// ruleTip is the 规则 cell's tooltip: the rule with its payload.
+func ruleTip(cn model.Connection) string {
+	if cn.RulePayload == "" {
+		return ruleName(cn)
+	}
+	return ruleName(cn) + " " + cn.RulePayload
 }

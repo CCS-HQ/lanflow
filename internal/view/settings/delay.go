@@ -32,12 +32,12 @@ func validDelayURL(u string) bool {
 func (p *Page) delaySection(c *ui.Context, t *ui.Theme, s model.Settings) {
 	e := p.e
 	e.Kit.Section(c, i18n.T("延迟测试"), i18n.T("代理页、代理组和菜单栏的测速都用这里的地址和超时"), func() {
-		e.Kit.Row(c, i18n.T("测速地址"), i18n.T("节点经代理访问该地址，默认 www.gstatic.com/generate_204"), func() {
-			ui.Column(c).Gap(4).AlignItems(ui.End).Children(func() {
+		stackedRow(c, t, i18n.T("测速地址"), i18n.T("节点经代理访问该地址，默认 www.gstatic.com/generate_204"), func() {
+			ui.Column(c).Gap(4).Children(func() {
 				if p.delayURLErr == "" {
 					p.delayURL.show(s.DelayURL)
 				}
-				in := ui.TextInput(c.Key("delay-url"), &p.delayURL.text).Width(300).Font("monospace").FontSize(12).
+				in := ui.TextInput(c.Key("delay-url"), &p.delayURL.text).FillWidth().Font("monospace").FontSize(12).
 					Label(i18n.T("测速地址")).Invalid(p.delayURLErr != "")
 				if in.Changed() {
 					p.delayURLErr = ""
@@ -46,7 +46,7 @@ func (p *Page) delaySection(c *ui.Context, t *ui.Theme, s model.Settings) {
 					p.commitDelayURL(s)
 				}
 				if p.delayURLErr != "" {
-					ui.Text(c, p.delayURLErr).FontSize(11).TextColor(t.Danger).MaxWidth(320).TextAlign(ui.End)
+					ui.Text(c, p.delayURLErr).FontSize(11).TextColor(t.Danger)
 				}
 			})
 		})

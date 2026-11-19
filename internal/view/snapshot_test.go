@@ -2,6 +2,7 @@ package view
 
 import (
 	"errors"
+	"fmt"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -166,7 +167,9 @@ var snapshots = []snapshot{
 		clickSwitch(t, tt, i18n.T("TUN 模式（增强模式）"))
 	}},
 	{name: "dialog-core-install", page: env.Settings, arg: "kernel", prep: clickOnly("安装其他版本…")},
-	{name: "dialog-export", page: env.Settings, arg: "general", prep: clickOnly("导出…")},
+	{name: "dialog-export", page: env.Settings, arg: "general", prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
+		clickScrolled(t, tt, i18n.T("导出…"))
+	}},
 	{name: "dialog-webdav", page: env.Settings, arg: "general", prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
 		clickScrolled(t, tt, i18n.T("配置…"))
 	}},
@@ -188,12 +191,44 @@ var snapshots = []snapshot{
 			t.Logf("hosts: %v", err)
 		}
 	}},
-	{name: "dialog-add-site", page: env.Net, prep: clickOnly("＋ 添加网站")},
+	{name: "dialog-add-site", page: env.Net, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
+		click(t, tt, i18n.T("连通性"))
+		tt.Frame()
+		click(t, tt, i18n.T("＋ 添加网站"))
+	}},
 	{name: "dialog-quit", page: env.Overview, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, _ *ui.Tester) {
 		s.AskQuit(func() {})
 	}},
 	{name: "dialog-recovery", page: env.Overview, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, _ *ui.Tester) {
 		s.recovery = true
+	}},
+	// The shell's own dialogs with long content: they must grow with the
+	// window and scroll rather than run off it.
+	{name: "dialog-error-detail-long", page: env.Overview, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, _ *ui.Tester) {
+		s.showDetail(longText("订阅更新失败：Get \"https://sub.example.com/api/v1/client/subscribe?token=***\": dial tcp 203.0.113.7:443: i/o timeout", 60))
+	}},
+	{name: "dialog-invalid-long", page: env.Overview, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, _ *ui.Tester) {
+		s.handleNotice(nil, app.Notice{Kind: "invalid-config", Title: "配置无法使用", Detail: longText("line 42: proxy-groups[1]: proxy 'xx' not found; rules[17]: unknown rule type RULE-SET-XYZ", 40)})
+	}},
+	{name: "dialog-crash", page: env.Overview, prep: func(_ *testing.T, api *fake.Fake, s *Shell, _ *ui.Tester) {
+		api.SimulateCrash()
+		s.handleNotice(nil, app.Notice{Kind: "crash-report"})
+	}},
+	{name: "dialog-consent-long", page: env.Overview, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, _ *ui.Tester) {
+		s.AskAgentConsent(AgentConsent{Client: "mcp:claude", Agent: "Claude", Kind: "write", Summary: longText(`rules.add {"type":"DOMAIN-SUFFIX","value":"example.com","target":"节点选择"}`, 30)}, func(string) {})
+	}},
+	{name: "dialog-invalid-expanded", page: env.Overview, prep: func(t *testing.T, _ *fake.Fake, s *Shell, tt *ui.Tester) {
+		s.handleNotice(nil, app.Notice{Kind: "invalid-config", Title: "配置无法使用", Detail: longText("line 42: proxy-groups[1]: proxy 'xx' not found", 12)})
+		tt.Frame()
+		click(t, tt, i18n.T("放大窗口"))
+	}},
+	{name: "dialog-feedback", page: env.Overview, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, _ *ui.Tester) {
+		s.OpenFeedback("开启 TUN 后部分网站打不开")
+	}},
+	{name: "dialog-feedback-preview", page: env.Overview, prep: func(t *testing.T, _ *fake.Fake, s *Shell, tt *ui.Tester) {
+		s.OpenFeedback("开启 TUN 后部分网站打不开")
+		tt.Frame()
+		click(t, tt, i18n.T("预览将要发送的内容"))
 	}},
 
 	// Toasts and errors.
@@ -242,6 +277,18 @@ var snapshots = []snapshot{
 	{name: "mode-direct-overview", page: env.Overview, prep: setMode(model.ModeDirect)},
 	{name: "mode-global-overview", page: env.Overview, prep: setMode(model.ModeGlobal)},
 	{name: "mode-direct-proxies", page: env.Proxies, prep: setMode(model.ModeDirect)},
+}
+
+// longText repeats line n times, numbered, as a long error or log would.
+func longText(line string, n int) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		if i > 1 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "%3d  %s", i, line)
+	}
+	return b.String()
 }
 
 // settleToast lets a toast finish fading in (200 ms) before the frame.
@@ -316,6 +363,13 @@ func TestSnapshots(t *testing.T) {
 		name string
 		w, h int
 	}{{"default", DefaultWidth, DefaultHeight}, {"min", MinWidth, MinHeight}}
+	if os.Getenv("LANFLOW_SNAP_LARGE") != "" {
+		// A large window, to check that content grows with it.
+		sizes = append(sizes, struct {
+			name string
+			w, h int
+		}{"large", 1680, 1050})
+	}
 	themes := []struct {
 		name string
 		dark bool

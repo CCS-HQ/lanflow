@@ -31,6 +31,8 @@ type Page struct {
 	imp  importDialog
 	edit editDialog
 	raw  rawDialog
+	// rawBig: 查看配置 fills the window (its 放大 button), kept for the next one.
+	rawBig bool
 
 	mu        sync.Mutex
 	switching string // subscription being switched to
@@ -249,7 +251,7 @@ func (p *Page) cell(c *ui.Context, s model.Subscription, col string, switching s
 			} else {
 				ui.Box(c).Size(8, 8)
 			}
-			name := ui.Text(c, s.Name).FontSize(13).SingleLine()
+			name := ui.Text(c, s.Name).FontSize(13).SingleLine().Shrink(1).Tooltip(s.Name)
 			if s.Current {
 				name.FontWeight(600)
 			}

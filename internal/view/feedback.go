@@ -18,6 +18,7 @@ import (
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/env"
 )
 
 // feedbackDialog is the state of the 反馈问题 dialog.
@@ -36,6 +37,7 @@ type feedbackDialog struct {
 
 	crash     *model.ErrorRecord // the crash prompt
 	crashOpen bool
+	big       bool // enlarged to the window (env.ExpandButton)
 }
 
 // OpenFeedback opens the 反馈问题 dialog (Env.OpenFeedback); safe from any
@@ -144,25 +146,20 @@ func (s *Shell) feedbackDialogs(c *ui.Context) {
 	f := &s.fb
 	if f.crash != nil {
 		cr := f.crash
-		ui.Modal(c, &f.crashOpen, func() {
-			ui.Column(c).Width(440).Gap(12).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).TextColor(t.Warning).Children(func() { k.Icon(c, "warn", 18) })
-					ui.Text(c, i18n.T("上次异常退出，是否反馈？")).FontSize(15).FontWeight(600)
-				})
-				ui.Text(c, i18n.T("澜流上次运行时意外退出。反馈时会附上崩溃记录，发送前可以查看全部内容。")).FontSize(13)
-				ui.Text(c, cr.Message).Font("monospace").FontSize(12).Padding(8, 10).Radius(6).
-					Background(t.Surface).Border(1, t.Border).Selectable()
-				ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-					if ui.Button(c, i18n.T("不用了")).Clicked() {
-						f.crashOpen = false
-					}
-					if ui.PrimaryButton(c, i18n.T("反馈…")).Clicked() {
-						f.crashOpen = false
-						s.OpenFeedback(i18n.Tf("上次澜流意外退出（%s）。", cr.Time.Local().Format("2006-01-02 15:04")))
-					}
-				})
-			})
+		env.Dialog(c, &f.crashOpen, env.DialogOptions{
+			Title: i18n.T("上次异常退出，是否反馈？"), Width: 440,
+			Icon: func() { ui.Box(c).TextColor(t.Warning).Children(func() { k.Icon(c, "warn", 18) }) },
+		}, func() {
+			ui.Text(c, i18n.T("澜流上次运行时意外退出。反馈时会附上崩溃记录，发送前可以查看全部内容。")).FontSize(13).Shrink(0)
+			env.LongText(c, cr.Message, true)
+		}, func() {
+			if ui.Button(c, i18n.T("不用了")).Clicked() {
+				f.crashOpen = false
+			}
+			if ui.PrimaryButton(c, i18n.T("反馈…")).Clicked() {
+				f.crashOpen = false
+				s.OpenFeedback(i18n.Tf("上次澜流意外退出（%s）。", cr.Time.Local().Format("2006-01-02 15:04")))
+			}
 		})
 		if !f.crashOpen {
 			f.crash = nil
@@ -177,15 +174,22 @@ func (s *Shell) feedbackDialogs(c *ui.Context) {
 		return
 	}
 	info := s.api.FeedbackInfo()
-	ui.Modal(c, &f.open, func() {
-		ui.Column(c.Key(fmt.Sprint("feedback-", f.session))).Width(600).Gap(12).Children(func() {
-			ui.Text(c, i18n.T("反馈问题")).FontSize(15).FontWeight(600)
+	env.Dialog(c, &f.open, env.DialogOptions{Title: i18n.T("反馈问题"), Width: 600, Expanded: &f.big}, func() {
+		// Keyed by the session, so that a new dialog starts with empty
+		// inputs.
+		ui.Column(c.Key(fmt.Sprint("feedback-", f.session))).Gap(12).MinHeight(0).Shrink(1).Grow(1).Children(func() {
 			if f.report == nil {
 				s.feedbackCompose(c, t, info)
 			} else {
 				s.feedbackPreview(c, t, info)
 			}
 		})
+	}, func() {
+		if f.report == nil {
+			s.feedbackComposeButtons(c, info)
+		} else {
+			s.feedbackPreviewButtons(c, info)
+		}
 	})
 }
 
@@ -194,7 +198,11 @@ func (s *Shell) feedbackCompose(c *ui.Context, t *ui.Theme, info model.FeedbackI
 	k := s.env.Kit
 	busy := f.busy != ""
 	ui.Text(c, i18n.T("说说遇到了什么问题。发送前会完整展示将要上传的内容，确认后才会发出。")).FontSize(12).TextColor(t.TextMuted)
-	ui.TextArea(c.Key("fb-desc"), &f.desc).Lines(4, 10).Placeholder(i18n.T("例如：开启 TUN 后部分网站打不开，重启内核后恢复")).Label(i18n.T("问题描述")).ReadOnly(busy)
+	maxLines := 10
+	if f.big {
+		maxLines = 30 // enlarged: room for a long account
+	}
+	ui.TextArea(c.Key("fb-desc"), &f.desc).Lines(4, maxLines).Placeholder(i18n.T("例如：开启 TUN 后部分网站打不开，重启内核后恢复")).Label(i18n.T("问题描述")).ReadOnly(busy)
 	ui.TextInput(c.Key("fb-contact"), &f.contact).Placeholder(i18n.T("邮箱或其他联系方式（可选）")).Label(i18n.T("联系方式")).ReadOnly(busy)
 	ui.Column(c).Gap(6).Children(func() {
 		ui.Checkbox(c.Key("fb-diag"), &f.withDiag, i18n.T("附带诊断信息：脱敏后的设置与配置、内核的警告和错误、网络状态")).Disabled(busy)
@@ -212,40 +220,45 @@ func (s *Shell) feedbackCompose(c *ui.Context, t *ui.Theme, info model.FeedbackI
 	if f.err != "" {
 		ui.Text(c, f.err).FontSize(12).TextColor(t.Danger).Selectable()
 	}
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		if busy {
-			ui.Spinner(c).Label(i18n.T("正在生成报告")).Size(14, 14)
-		}
-		ui.Spacer(c)
-		if ui.Button(c, i18n.T("取消")).Clicked() {
-			f.open = false
-		}
-		empty := strings.TrimSpace(f.desc) == ""
-		if ui.PrimaryButton(c, i18n.T("预览将要发送的内容")).Disabled(busy || empty).Clicked() {
-			opts := model.FeedbackOptions{Description: f.desc, Contact: f.contact, IncludeDiagnostics: f.withDiag, IncludeLog: f.withLog}
-			var rep model.FeedbackReport
-			s.fbJob("build", func() (err error) {
-				rep, err = s.api.BuildFeedback(opts)
-				return err
-			}, func(err error) {
-				if err == nil {
-					f.report, f.preview, f.expanded = &rep, previewJSON(rep), map[string]*bool{}
-				}
-			})
-		}
-	})
+}
+
+// feedbackComposeButtons is the footer of the compose step.
+func (s *Shell) feedbackComposeButtons(c *ui.Context, info model.FeedbackInfo) {
+	f := &s.fb
+	busy := f.busy != ""
+	if busy {
+		ui.Spinner(c).Label(i18n.T("正在生成报告")).Size(14, 14)
+	}
+	ui.Spacer(c)
+	if ui.Button(c, i18n.T("取消")).Clicked() {
+		f.open = false
+	}
+	empty := strings.TrimSpace(f.desc) == ""
+	if ui.PrimaryButton(c, i18n.T("预览将要发送的内容")).Disabled(busy || empty).Clicked() {
+		opts := model.FeedbackOptions{Description: f.desc, Contact: f.contact, IncludeDiagnostics: f.withDiag, IncludeLog: f.withLog}
+		var rep model.FeedbackReport
+		s.fbJob("build", func() (err error) {
+			rep, err = s.api.BuildFeedback(opts)
+			return err
+		}, func(err error) {
+			if err == nil {
+				f.report, f.preview, f.expanded = &rep, previewJSON(rep), map[string]*bool{}
+			}
+		})
+	}
 }
 
 func (s *Shell) feedbackPreview(c *ui.Context, t *ui.Theme, info model.FeedbackInfo) {
 	f := &s.fb
 	rep := f.report
-	busy := f.busy != ""
 	where := i18n.T("未设置上报地址，只能保存到文件")
 	if info.Endpoint != "" {
 		where = i18n.Tf("将发送到 %s", endpointHost(info.Endpoint))
 	}
 	ui.Text(c, i18n.Tf("报告 %s · 共 %s · %s", rep.ID, fmtSize(rep.Size), where)).FontSize(12).TextColor(t.TextMuted).Selectable()
-	ui.Scroll(c).MaxHeight(420).Children(func() {
+	// The report fills the dialog's height and scrolls; enlarged, it has
+	// nearly the whole window.
+	ui.Scroll(c).Grow(1).Shrink(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(10).Children(func() {
 			ui.Text(c, i18n.T("报告内容")).FontSize(13).FontWeight(600)
 			ui.Text(c, f.preview).Font("monospace").FontSize(11).Padding(8, 10).Radius(6).
@@ -269,44 +282,49 @@ func (s *Shell) feedbackPreview(c *ui.Context, t *ui.Theme, info model.FeedbackI
 	if f.err != "" {
 		ui.Text(c, f.err).FontSize(12).TextColor(t.Danger).Selectable()
 	}
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		switch f.busy {
-		case "send":
-			ui.Spinner(c).Label(i18n.T("正在发送")).Size(14, 14)
-		case "save":
-			ui.Spinner(c).Label(i18n.T("正在保存")).Size(14, 14)
-		}
-		if ui.Button(c, i18n.T("返回修改")).Disabled(busy).Clicked() {
-			f.report, f.preview, f.err = nil, "", ""
-		}
-		ui.Spacer(c)
-		if ui.Button(c, i18n.T("保存到文件…")).Disabled(busy).Clicked() {
-			id := rep.ID
-			go s.saveFeedback(id)
-		}
-		if ui.PrimaryButton(c, i18n.T("发送")).Disabled(busy || info.Endpoint == "").Clicked() {
-			id := rep.ID
-			var sent model.FeedbackSent
-			s.fbJob("send", func() (err error) {
-				sent, err = s.api.SendFeedback(id)
-				return err
-			}, func(err error) {
-				if err != nil {
-					return
-				}
-				f.open = false
-				msg := i18n.T("反馈已发送，谢谢！")
-				if sent.Duplicate {
-					msg = i18n.T("这份反馈之前已发送过")
-				}
-				detail := i18n.Tf("报告 ID：%s", sent.ID)
-				if sent.URL != "" {
-					detail += "\n" + sent.URL
-				}
-				s.toast(toastReq{msg: msg, detail: detail})
-			})
-		}
-	})
+}
+
+// feedbackPreviewButtons is the footer of the preview step.
+func (s *Shell) feedbackPreviewButtons(c *ui.Context, info model.FeedbackInfo) {
+	f := &s.fb
+	rep := f.report
+	busy := f.busy != ""
+	switch f.busy {
+	case "send":
+		ui.Spinner(c).Label(i18n.T("正在发送")).Size(14, 14)
+	case "save":
+		ui.Spinner(c).Label(i18n.T("正在保存")).Size(14, 14)
+	}
+	if ui.Button(c, i18n.T("返回修改")).Disabled(busy).Clicked() {
+		f.report, f.preview, f.err = nil, "", ""
+	}
+	ui.Spacer(c)
+	if ui.Button(c, i18n.T("保存到文件…")).Disabled(busy).Clicked() {
+		id := rep.ID
+		go s.saveFeedback(id)
+	}
+	if ui.PrimaryButton(c, i18n.T("发送")).Disabled(busy || info.Endpoint == "").Clicked() {
+		id := rep.ID
+		var sent model.FeedbackSent
+		s.fbJob("send", func() (err error) {
+			sent, err = s.api.SendFeedback(id)
+			return err
+		}, func(err error) {
+			if err != nil {
+				return
+			}
+			f.open = false
+			msg := i18n.T("反馈已发送，谢谢！")
+			if sent.Duplicate {
+				msg = i18n.T("这份反馈之前已发送过")
+			}
+			detail := i18n.Tf("报告 ID：%s", sent.ID)
+			if sent.URL != "" {
+				detail += "\n" + sent.URL
+			}
+			s.toast(toastReq{msg: msg, detail: detail})
+		})
+	}
 }
 
 // saveFeedback asks where to save the report and writes it there.

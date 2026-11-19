@@ -106,7 +106,7 @@ func (f *Form) View(c *ui.Context, e *env.Env) {
 				})
 				ui.Field(c, i18n.T("内容"), func() {
 					in := ui.TextInput(c.Key("payload"), &f.rule.Payload).Placeholder(placeholders[f.rule.Type]).
-						Font("monospace").Width(260).Invalid(f.err != "")
+						Font("monospace").FillWidth().Invalid(f.err != "")
 					if f.rule.ID == "" {
 						in.AutoFocus()
 					}

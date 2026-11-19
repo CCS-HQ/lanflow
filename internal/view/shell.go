@@ -145,6 +145,9 @@ type Shell struct {
 
 	detail     *detailReq // 「查看详情」 dialog of an error toast
 	detailOpen bool
+	// The long-text dialogs enlarged to the window (env.ExpandButton);
+	// kept across dialogs, as a user who wanted the room once will again.
+	detailBig, invalidBig, consentBig bool
 
 	// notify shows a system notification; mygo by default, replaced in tests.
 	notify func(title, body string, onClick func())

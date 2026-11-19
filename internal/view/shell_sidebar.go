@@ -98,18 +98,21 @@ func (s *Shell) statusBar(c *ui.Context, st model.Status) {
 			// HTTPS decryption on: impossible to miss (docs/capture.md §7.2)
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				k.Dot(c, "orange")
-				ui.Text(c, capture.StatusText(cs)).FontSize(11).TextColor(t.Warning).SingleLine()
+				// Paused with a reason, hosts, apps and time left run past
+				// the 200 pt sidebar (more so in English): two lines, and
+				// the whole text on hover.
+				txt := capture.StatusText(cs)
+				ui.Text(c, txt).FontSize(11).TextColor(t.Warning).MaxLines(2).Shrink(1).Tooltip(txt)
 			})
 		}
 		if st.Core == model.CoreRunning {
 			if st.SystemProxy {
 				ui.Text(c, i18n.T("系统代理已开启")).FontSize(11).TextColor(t.TextMuted).Margin(0, 0, 0, 14)
 			}
-			// The active core, only when the version fits the 200 pt sidebar
-			// on one line (release tags and Alpha hashes do; a long custom
-			// build string would be cut, so it is left out).
-			if v := st.CoreVersion; v != "" && len(v) <= 20 {
-				ui.Text(c, "Mihomo "+v).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine().Margin(0, 0, 0, 14)
+			// The active core on one line; a long custom build string is
+			// cut there, its whole text on hover.
+			if v := st.CoreVersion; v != "" {
+				ui.Text(c, "Mihomo "+v).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine().Margin(0, 0, 0, 14).Tooltip("Mihomo " + v)
 			}
 			ui.Text(c, "↑ "+env.FmtSpeed(st.Up)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Margin(0, 0, 0, 14)
 			ui.Text(c, "↓ "+env.FmtSpeed(st.Down)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Margin(0, 0, 0, 14)

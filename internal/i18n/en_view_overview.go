@@ -67,6 +67,10 @@ func init() {
 		"首次开启需安装权限组件":                  "The first time needs the helper installed",
 		"未能经物理网卡实测你的位置，地图上的「你」按系统时区推测": "Your location was not measured over the physical network interface; “You” on the map is a guess from the system time zone",
 		"你的位置：未知": "Your location: unknown",
+
+		// internal/view/overview/divider.go
+		"调整出口地图与右侧栏宽度": "Resize the exit map and the side column",
+		"拖动调整宽度，双击复位":  "Drag to resize, double-click to reset",
 	} {
 		en[k] = v
 	}

@@ -34,7 +34,16 @@ type Page struct {
 	list     ui.ListState
 	selected int
 	icons    *procicon.Cache // application icons of the 进程 dimension
+
+	// chartH is the height of the chart's pane, which the user drags
+	// (the divider between the chart and the table), remembered in the
+	// UI state.
+	chartH float32
 }
+
+// defaultChartH is the chart pane's height before the user drags it: the
+// card with a 104 DIP plot.
+const defaultChartH = 154
 
 var rangeKeys = []string{model.StatsToday, model.StatsWeek, model.StatsMonth, model.StatsAll}
 
@@ -59,7 +68,7 @@ var columns = []ui.TableColumn{
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	p := &Page{e: e, selected: -1, sort: ui.SortOrder{Column: "total", Descending: true}, icons: procicon.New(e.API)}
+	p := &Page{e: e, selected: -1, chartH: defaultChartH, sort: ui.SortOrder{Column: "total", Descending: true}, icons: procicon.New(e.API)}
 	p.list.Sort = &p.sort
 	p.list.Selected = &p.selected
 	p.list.KeepOffset = true
@@ -92,8 +101,14 @@ func (p *Page) View(c *ui.Context) {
 				e.Kit.Empty(c, "stats", i18n.T("暂无统计数据"), i18n.T("内核运行时，经过澜流的流量会按设备、域名、进程等在这里汇总。"), nil)
 				return
 			}
-			p.chart(c, t, st)
-			p.table(c, t, st)
+			// The chart and the table share the rest with a divider the
+			// user drags: a taller chart on a large window, or more rows.
+			e.PaneSize(env.SizeStatsChart, &p.chartH)
+			ui.SplitVertical(c.Key("split"), &p.chartH, func() {
+				ui.Column(c).Fill().Padding(0, 0, 6, 0).Children(func() { p.chart(c, t, st) })
+			}, func() {
+				ui.Column(c).Fill().Padding(6, 0, 0, 0).Gap(12).Children(func() { p.table(c, t, st) })
+			}).Grow(1).SplitReset(defaultChartH)
 		})
 	})
 }
@@ -138,7 +153,7 @@ func (p *Page) chart(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
 	if st.Hourly {
 		title = i18n.T("今天（按小时）")
 	}
-	ui.Column(c).Gap(6).Padding(10, 12).Radius(10).Background(t.Surface).Border(1, t.Border).Shrink(0).Children(func() {
+	ui.Column(c).Gap(6).Padding(10, 12).Radius(10).Background(t.Surface).Border(1, t.Border).Grow(1).Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, title).FontSize(12).FontWeight(600).SingleLine()
 			ui.Spacer(c)
@@ -146,7 +161,7 @@ func (p *Page) chart(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
 			legend(c, t, i18n.T("上传"), t.TextMuted.Alpha(0.55))
 			ui.Text(c, i18n.Tf("峰值 %s", env.FmtBytes(peak))).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
 		})
-		box := ui.Box(c).Height(104).FillWidth().Label(title)
+		box := ui.Box(c).Grow(1).MinHeight(40).FillWidth().Label(title)
 		px, _, hovering := box.PointerPosition()
 		box.Draw(func(pt *ui.Painter, r ui.Rect) {
 			const labels = 14
@@ -277,9 +292,15 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r row, col, q string) {
 			if withIcon {
 				p.icons.Draw(c, t, r.Detail, procicon.Size)
 			}
-			env.Highlight(c, r.name, q, t.Text).SingleLine().Shrink(1)
+			// The name keeps its room; the detail (a path, a domain)
+			// gives way first. Both show in full on hover.
+			tip := r.name
 			if r.detail != "" && r.detail != r.name {
-				env.Highlight(c, r.detail, q, t.TextMuted).FontSize(11).SingleLine().Shrink(2)
+				tip += "\n" + r.detail
+			}
+			env.Highlight(c, r.name, q, t.Text).SingleLine().Shrink(0).MaxWidthPercent(80).Tooltip(tip)
+			if r.detail != "" && r.detail != r.name {
+				env.Highlight(c, r.detail, q, t.TextMuted).FontSize(11).SingleLine().Shrink(1).MinWidth(0).Tooltip(tip)
 			}
 		})
 	case "req":

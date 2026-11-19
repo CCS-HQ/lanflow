@@ -35,7 +35,14 @@ import (
 	"lanflow/internal/view/procicon"
 )
 
-const detailWidth = 400
+// defaultDetailWidth is the detail panel's width until the user drags it:
+// about 40% of the room beside the sidebar, so that the list keeps its
+// 主机 and 路径 at the minimum window size and the panel grows on a large
+// one.
+func defaultDetailWidth(c *ui.Context) float32 {
+	w, _ := c.Size()
+	return min(max((w-200)*0.4, 360), 640)
+}
 
 // Page holds page-local UI state.
 type Page struct {
@@ -49,7 +56,13 @@ type Page struct {
 	sel      int64 // selected row: a record ID, or a connection's negative ID
 	tab      int   // detail tab
 	reveal   bool  // show masked values (never remembered)
-	icons    *procicon.Cache
+	// detailW is the detail panel's width, which the user drags its edge
+	// to change (env.DetailEdge), remembered in the UI state, 0 = default;
+	// wide shows the detail in the whole page, the list hidden.
+	detailW float32
+	wide    bool
+	panelW  float32 // the panel's width this frame, 0 with wide
+	icons   *procicon.Cache
 
 	// connections shown as rows get stable negative IDs
 	connIDs  map[string]int64
@@ -622,14 +635,19 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 	p.list.Label = func(i int) string { return rows[i].Host + redact.Path(rows[i].Path) }
 	p.list.CellMenu = func(m *ui.Menu, row, col int) { p.rowMenu(c, m, rows[row], st) }
 	cols := env.I18nColumns(columns)
+	if p.wide && p.selected < 0 {
+		p.wide = false
+	}
 	ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
-		ui.Table(c.Key("table"), &p.list, cols, len(rows), func(row, col int) {
-			p.cell(c, t, rows[row], cols[col].ID)
-		}).Grow(1).FillHeight().Label(i18n.T("请求"))
+		if !p.wide {
+			ui.Table(c.Key("table"), &p.list, cols, len(rows), func(row, col int) {
+				p.cell(c, t, rows[row], cols[col].ID)
+			}).Grow(1).FillHeight().Label(i18n.T("请求"))
+		}
 		if p.selected >= 0 && p.selected < len(rows) {
 			p.sel = rows[p.selected].ID
 		} else {
-			p.sel = 0
+			p.sel, p.wide = 0, false
 		}
 		switch {
 		case p.sel < 0:
@@ -682,6 +700,10 @@ func flowURL(f model.CaptureFlow, masked bool) string {
 
 func (p *Page) cell(c *ui.Context, t *ui.Theme, f model.CaptureFlow, col string) {
 	muted := t.TextMuted
+	if f.ID == p.sel {
+		// Muted grey is unreadable on the chosen row's accent.
+		muted = t.AccentText
+	}
 	switch col {
 	case "time":
 		ui.Text(c, f.Start.Format("15:04:05")).FontFeatures("tnum").TextColor(muted).SingleLine()
@@ -799,7 +821,7 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, f model.CaptureFlow) {
 		p.det.id = 0
 		p.det.Unlock()
 	}
-	ui.Column(c.Key("detail")).Width(detailWidth).FillHeight().BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
+	p.panel(c, t, "detail", func() {
 		ui.Row(c).Padding(12, 14, 6, 14).Gap(6).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(1).Gap(2).Children(func() {
 				title := f.Host
@@ -819,6 +841,7 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, f model.CaptureFlow) {
 			if f.Method != "" {
 				ui.Button(c, i18n.T("重新发送…")).Tooltip(i18n.T("编辑后重新发送这个请求")).OnClick(func() { p.openReplay(f.ID, false) })
 			}
+			env.ExpandButton(c, &p.wide)
 			p.closeButton(c)
 		})
 		tabs := []string{i18n.T("概要"), i18n.T("请求头"), i18n.T("请求体"), i18n.T("响应头"), i18n.T("响应体")}
@@ -829,7 +852,20 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, f model.CaptureFlow) {
 			p.tab = 0
 		}
 		ui.Row(c).Padding(0, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Segmented(c.Key("dtab"), &p.tab, tabs...).Label(i18n.T("详情页签")).Shrink(1)
+			// The tabs as a segmented control while it fits the panel (about
+			// 64 DIPs a tab), else as a drop-down.
+			if p.panelW == 0 || p.panelW >= float32(len(tabs))*64+28 {
+				ui.Segmented(c.Key("dtab"), &p.tab, tabs...).Label(i18n.T("详情页签")).Shrink(1)
+				return
+			}
+			cur := tabs[p.tab]
+			if ui.Select(c.Key("dtab-select"), &cur, tabs).Label(i18n.T("详情页签")).Changed() {
+				for i, s := range tabs {
+					if s == cur {
+						p.tab = i
+					}
+				}
+			}
 		})
 		ui.Row(c).Padding(4, 14).Children(func() {
 			ui.Checkbox(c.Key("reveal"), &p.reveal, i18n.T("显示打码的原值"))
@@ -1001,7 +1037,11 @@ func (p *Page) image(c *ui.Context, t *ui.Theme, id int64, b []byte) {
 		ui.Text(c, i18n.Tf("图片（%s），无法预览此格式", env.FmtBytes(int64(len(b))))).FontSize(12).TextColor(t.TextMuted)
 		return
 	}
-	ui.Image(c, src).Width(detailWidth - 40).Radius(4)
+	// At its own size, scaled down to the panel's width, never up.
+	img := ui.Image(c, src).MaxWidthPercent(100).Radius(4)
+	if w, h := ui.ImageSize(src); w > 0 && h > 0 {
+		img.AspectRatio(w / h)
+	}
 }
 
 func (p *Page) frames(c *ui.Context, t *ui.Theme, fs []model.CaptureWSFrame) {
@@ -1042,4 +1082,24 @@ func fmtDur(ms int64) string {
 		return fmt.Sprintf("%.1f s", float64(ms)/1000)
 	}
 	return fmt.Sprintf("%d s", ms/1000)
+}
+
+// panel is the detail column beside the list: its start edge resizes it
+// (split.go), and with wide it takes the whole page.
+func (p *Page) panel(c *ui.Context, t *ui.Theme, key string, fn func()) {
+	col := ui.Column(c.Key(key)).FillHeight().BorderColor(t.Border)
+	if p.wide {
+		col.Grow(1)
+	} else {
+		col.Shrink(0).BorderWidth(0, 0, 0, 1)
+	}
+	col.Children(func() {
+		p.panelW = 0
+		if !p.wide {
+			p.e.PaneSize(env.SizeCaptureDetail, &p.detailW)
+			p.panelW = env.DetailEdge(c, &p.detailW, defaultDetailWidth(c))
+			col.Width(p.panelW)
+		}
+		fn()
+	})
 }

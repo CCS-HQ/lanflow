@@ -13,6 +13,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/env"
 )
 
 // aTrust 兼容 › 配置…: the user's lists (model.ATrustConfig) edited one item
@@ -175,19 +176,22 @@ func (p *Page) atrustDialog(c *ui.Context, t *ui.Theme, s model.Settings) {
 	p.mu.Unlock()
 	cfg, errs := d.form.parse()
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c.Key(d.session)).Width(640).Gap(10).Children(func() {
+		ui.Column(c.Key(d.session)).Width(env.DialogWidth(c, 640)).Gap(10).Children(func() {
 			ui.Text(c, i18n.T("aTrust 兼容配置")).FontSize(15).Bold()
 			ui.Text(c, i18n.T("每行一项。这些列表叠加在自动检测的结果之上；澜流不内置任何公司的地址，留空即不生效。「复制参考配置」里有每一项的说明。")).FontSize(12).TextColor(t.TextMuted)
 			// domains and DNS on the left, ranges on the right
-			ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
-				ui.Column(c).Gap(10).Grow(1).Children(func() {
-					p.atrustField(c, t, "corp", &d.form.corp, i18n.T("内网域名"), i18n.T("内网域名后缀：直接连接、不分配 fake-ip、不嗅探，由公司 DNS 解析"), errs[fieldCorp])
-					p.atrustField(c, t, "direct", &d.form.direct, i18n.T("直连域名"), i18n.T("需要直连但不能走公司 DNS 的公网域名（如钉钉、企业微信），由公网 DNS 解析"), errs[fieldDirect])
-					p.atrustField(c, t, "dns", &d.form.dns, i18n.T("公司 DNS"), i18n.T("公司 DNS 服务器的 IP；留空则使用检测到的 aTrust 解析器"), errs[fieldDNS])
-				})
-				ui.Column(c).Gap(10).Grow(1).Children(func() {
-					p.atrustField(c, t, "exclude", &d.form.exclude, i18n.T("不进入 TUN 的网段"), i18n.T("交给系统路由（aTrust）处理并直接连接；切勿放入含 DNS 服务器的网段"), errs[fieldExclude])
-					p.atrustField(c, t, "directcidr", &d.form.directCIDR, i18n.T("仅直连的网段"), i18n.T("直接连接但仍经过 TUN，发往其中 DNS 的查询照常被接管（例如含公司 DNS 的 10.0.0.0/8）"), errs[fieldDirectCIDR])
+			// the lists grow with their text; past the window's room they scroll
+			ui.Scroll(c.Key("atrust-lists")).MaxHeight(env.DialogMaxHeight(c, 200)).Shrink(1).Children(func() {
+				ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
+					ui.Column(c).Gap(10).Grow(1).Basis(0).Children(func() {
+						p.atrustField(c, t, "corp", &d.form.corp, i18n.T("内网域名"), i18n.T("内网域名后缀：直接连接、不分配 fake-ip、不嗅探，由公司 DNS 解析"), errs[fieldCorp])
+						p.atrustField(c, t, "direct", &d.form.direct, i18n.T("直连域名"), i18n.T("需要直连但不能走公司 DNS 的公网域名（如钉钉、企业微信），由公网 DNS 解析"), errs[fieldDirect])
+						p.atrustField(c, t, "dns", &d.form.dns, i18n.T("公司 DNS"), i18n.T("公司 DNS 服务器的 IP；留空则使用检测到的 aTrust 解析器"), errs[fieldDNS])
+					})
+					ui.Column(c).Gap(10).Grow(1).Basis(0).Children(func() {
+						p.atrustField(c, t, "exclude", &d.form.exclude, i18n.T("不进入 TUN 的网段"), i18n.T("交给系统路由（aTrust）处理并直接连接；切勿放入含 DNS 服务器的网段"), errs[fieldExclude])
+						p.atrustField(c, t, "directcidr", &d.form.directCIDR, i18n.T("仅直连的网段"), i18n.T("直接连接但仍经过 TUN，发往其中 DNS 的查询照常被接管（例如含公司 DNS 的 10.0.0.0/8）"), errs[fieldDirectCIDR])
+					})
 				})
 			})
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
@@ -230,7 +234,7 @@ func (p *Page) atrustField(c *ui.Context, t *ui.Theme, key string, text *string,
 	ui.Column(c).Gap(3).Children(func() {
 		ui.Text(c, label).FontSize(13)
 		ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted)
-		ui.TextArea(c.Key(key), text).Font("monospace").FontSize(12).Height(64).Label(label)
+		ui.TextArea(c.Key(key), text).Font("monospace").FontSize(12).Lines(3, 10).Label(label)
 		if errMsg != "" {
 			ui.Text(c, errMsg).FontSize(11).TextColor(t.Danger)
 		}

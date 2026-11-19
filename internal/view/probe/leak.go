@@ -130,7 +130,7 @@ func (p *Page) leakRow(c *ui.Context, t *ui.Theme, it model.LeakItem, tun bool) 
 				e.Kit.Dot(c, dot)
 				ui.Text(c, name).Bold().FontSize(13).SingleLine().Shrink(0)
 				ui.Text(c, word).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
-				ui.Text(c, it.Summary).FontSize(12).Grow(1).Shrink(1).SingleLine()
+				ui.Text(c, it.Summary).FontSize(12).Grow(1).Shrink(1).SingleLine().Tooltip(it.Summary)
 			})
 			if key := leakFix(it, tun); key != "" {
 				place := env.SettingsPlace(key)

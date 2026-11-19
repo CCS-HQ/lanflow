@@ -178,7 +178,7 @@ func (p *Page) backupListDialog(c *ui.Context, t *ui.Theme, busy bool) {
 		return
 	}
 	ui.Modal(c, &f.davListOpen, func() {
-		ui.Column(c.Key("dav-list")).Width(520).Gap(12).Children(func() {
+		ui.Column(c.Key("dav-list")).Width(env.DialogWidth(c, 520)).Gap(12).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, i18n.T("服务器上的备份")).FontSize(15).Bold()
 				if f.davListed {
@@ -199,7 +199,7 @@ func (p *Page) backupListDialog(c *ui.Context, t *ui.Theme, busy bool) {
 			case len(f.davBackups) == 0:
 				ui.Text(c, i18n.T("服务器上还没有备份")).FontSize(12).TextColor(t.TextMuted)
 			default:
-				ui.Scroll(c.Key("dav-rows")).MaxHeight(320).Children(func() {
+				ui.Scroll(c.Key("dav-rows")).MaxHeight(env.DialogMaxHeight(c, 140)).Children(func() {
 					ui.Column(c).Radius(8).Border(1, t.Border).Clip().Dividers(1, t.Border).Children(func() {
 						for _, b := range f.davBackups {
 							p.backupRow(c, b, busy)

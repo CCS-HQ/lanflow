@@ -41,5 +41,11 @@ func copyUIState(u model.UIState) model.UIState {
 			out.OpenGroups[k] = v
 		}
 	}
+	if u.Sizes != nil {
+		out.Sizes = make(map[string]float32, len(u.Sizes))
+		for k, v := range u.Sizes {
+			out.Sizes[k] = v
+		}
+	}
 	return out
 }

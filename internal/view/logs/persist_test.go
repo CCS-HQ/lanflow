@@ -43,3 +43,21 @@ func TestLevelAndSourcePersist(t *testing.T) {
 	}
 	_ = model.UIState{}
 }
+
+// Line wrapping (⋯ › 自动换行) is remembered too.
+func TestWrapPersists(t *testing.T) {
+	api := &logAPI{Fake: fake.NewInstant()}
+	e, _ := testEnv(api)
+	p := New(e)
+	ui.NewTester(p.View, 1000, 700)
+	p.wrap = true
+	p.persist()
+	if !api.UIState().LogWrap {
+		t.Fatal("wrap not saved")
+	}
+	q := New(e)
+	ui.NewTester(q.View, 1000, 700)
+	if !q.wrap {
+		t.Fatal("wrap not restored")
+	}
+}

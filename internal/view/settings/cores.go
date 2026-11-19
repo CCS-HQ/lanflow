@@ -319,7 +319,7 @@ func (p *Page) installDialog(c *ui.Context, t *ui.Theme) {
 	}
 	dl := e.API.CoreDownload()
 	ui.Modal(c, &cu.installOpen, func() {
-		ui.Column(c.Key("install-core")).Width(560).Gap(12).Children(func() {
+		ui.Column(c.Key("install-core")).Width(env.DialogWidth(c, 560)).Gap(12).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, i18n.T("安装其他版本")).FontSize(15).Bold()
 				ui.Spacer(c)
@@ -356,7 +356,7 @@ func (p *Page) installDialog(c *ui.Context, t *ui.Theme) {
 			case len(list) == 0:
 				ui.Text(c, i18n.T("没有可用的版本")).FontSize(12).TextColor(t.TextMuted)
 			default:
-				ui.Scroll(c.Key("core-releases")).MaxHeight(360).Children(func() {
+				ui.Scroll(c.Key("core-releases")).MaxHeight(env.DialogMaxHeight(c, 200)).Children(func() {
 					ui.Column(c).Radius(8).Border(1, t.Border).Clip().Dividers(1, t.Border).Children(func() {
 						for _, r := range list {
 							p.releaseRow(c, t, r, dl.Active)

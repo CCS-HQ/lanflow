@@ -4,6 +4,7 @@ package i18n
 func init() {
 	for k, v := range map[string]string{
 		// internal/view/logs/page.go
+		"自动换行":        "Wrap Lines",
 		"级别：%s":       "Level: %s",
 		"暂无日志":        "No Logs Yet",
 		"没有匹配“%s”的日志": "No log lines match “%s”",

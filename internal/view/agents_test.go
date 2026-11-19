@@ -36,3 +36,34 @@ func TestAgentConsentDialog(t *testing.T) {
 		t.Fatalf("withdrawn request: answers %q, texts %q", answers, tt.Texts())
 	}
 }
+
+// TestLongDialogsKeepButtons: a dialog with a long text (an agent's batch
+// of changes, a validation error) scrolls the text and keeps its buttons
+// inside the window at the minimum size, and enlarges to the window.
+func TestLongDialogsKeepButtons(t *testing.T) {
+	_, s, tt := newTest(t)
+	s.notify = func(string, string, func()) {}
+	tt.SetSize(MinWidth, MinHeight)
+	s.AskAgentConsent(AgentConsent{Client: "mcp:claude", Agent: "claude", Kind: "write", Summary: longText(`rules.add {"type":"DOMAIN-SUFFIX","value":"example.com"}`, 80)},
+		func(string) {})
+	tt.Frame()
+	inWindow := func(label string) {
+		t.Helper()
+		r, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("no %q: %q", label, tt.Texts())
+		}
+		if r.Y < 0 || r.Y+r.H > MinHeight || r.X < 0 || r.X+r.W > MinWidth {
+			t.Fatalf("%q at %+v, outside the %dx%d window", label, r, MinWidth, MinHeight)
+		}
+	}
+	inWindow("始终允许")
+	inWindow("拒绝")
+	click(t, tt, "放大窗口")
+	tt.Frame()
+	if !s.consentBig {
+		t.Fatal("放大窗口 did not enlarge the dialog")
+	}
+	inWindow("始终允许")
+	inWindow("还原大小")
+}

@@ -40,6 +40,9 @@ type Page struct {
 	menuOpen bool
 	source   int  // 0 = the core's log, 1 = Lanflow's own
 	loaded   bool // level/source restored from API.UIState
+	// wrap breaks long lines over several rows instead of cutting them
+	// at the window's edge (⋯ 自动换行).
+	wrap bool
 }
 
 // isApp reports whether Lanflow's own log is shown.
@@ -63,8 +66,8 @@ func New(e *env.Env) *Page {
 // minLevel returns the lowest level shown.
 func (p *Page) minLevel() int { return p.level }
 
-// restore loads the remembered level filter and source once
-// (model.UIState.LogLevel / LogSource).
+// restore loads the remembered level filter, source and line wrapping
+// once (model.UIState.LogLevel / LogSource / LogWrap).
 func (p *Page) restore() {
 	if p.loaded {
 		return
@@ -77,17 +80,19 @@ func (p *Page) restore() {
 	if u.LogSource == "app" {
 		p.source = 1
 	}
+	p.wrap = u.LogWrap
 }
 
-// persist remembers the level filter and source off the UI thread,
-// keeping what other pages store in the UI state.
+// persist remembers the level filter, source and line wrapping off the
+// UI thread, keeping what other pages store in the UI state.
 func (p *Page) persist() {
 	level, source := levels[min(p.level, len(levels)-1)], "core"
 	if p.isApp() {
 		source = "app"
 	}
+	wrap := p.wrap
 	p.e.SaveUIState("logs", func(u *model.UIState) {
-		u.LogLevel, u.LogSource = level, source
+		u.LogLevel, u.LogSource, u.LogWrap = level, source, wrap
 	})
 }
 
@@ -209,6 +214,10 @@ func (p *Page) tools(c *ui.Context, all []model.LogEntry) {
 			c.WriteClipboard(text(all))
 			e.Toast(i18n.T("已复制"), false)
 		}
+		if m.Item(i18n.T("自动换行")).Checked(p.wrap).Chosen() {
+			p.wrap = !p.wrap
+			p.persist()
+		}
 		if m.Item(reveal).Chosen() {
 			name := logFileName
 			if p.isApp() {
@@ -313,10 +322,24 @@ func lineColors(level string, t *ui.Theme) (text, time ui.Color) {
 
 func (p *Page) line(c *ui.Context, t *ui.Theme, l model.LogEntry) {
 	color, timeColor := lineColors(l.Level, t)
-	ui.Row(c).MinHeight(22).Gap(10).PaddingX(16).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, l.Time.Format("15:04:05")).TextColor(timeColor).FontFeatures("tnum").Unselectable()
-		ui.Text(c, levelName(l.Level)).Width(28).TextColor(color).Unselectable()
-		env.Highlight(c, l.Payload, strings.TrimSpace(p.query), color).Grow(1).SingleLine()
+	row := ui.Row(c).MinHeight(22).Gap(10).PaddingX(16)
+	if p.wrap {
+		row.AlignItems(ui.Start).PaddingY(3)
+	} else {
+		row.AlignItems(ui.Center)
+	}
+	row.Children(func() {
+		ui.Text(c, l.Time.Format("15:04:05")).TextColor(timeColor).FontFeatures("tnum").Unselectable().Shrink(0)
+		ui.Text(c, levelName(l.Level)).Width(levelWidth()).TextColor(color).Unselectable().Shrink(0).SingleLine()
+		msg := env.Highlight(c, l.Payload, strings.TrimSpace(p.query), color).Grow(1).Shrink(1).MinWidth(0)
+		if !p.wrap {
+			msg.SingleLine()
+			if len(l.Payload) > 80 {
+				// The line may be cut at the window's edge: the whole of it
+				// on hover (or ⋯ 自动换行).
+				msg.Tooltip(l.Payload)
+			}
+		}
 	})
 }
 
@@ -324,4 +347,13 @@ func (p *Page) line(c *ui.Context, t *ui.Theme, l model.LogEntry) {
 // rebuilds it only for these (and its own).
 func (p *Page) Topics() []app.Topic {
 	return []app.Topic{app.TopicLogs}
+}
+
+// levelWidth is the width of the level column: two Chinese characters, or
+// "Warning" in the monospaced font.
+func levelWidth() float32 {
+	if strings.HasPrefix(i18n.Lang(), "zh") {
+		return 28
+	}
+	return 52
 }

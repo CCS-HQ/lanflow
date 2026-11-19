@@ -204,7 +204,7 @@ func (p *Page) textRow(c *ui.Context, t *ui.Theme, label, desc, key string, text
 		if desc != "" {
 			ui.Text(c, desc).FontSize(11).TextColor(t.TextMuted)
 		}
-		ui.TextArea(c.Key(key), text).Font("monospace").FontSize(12).Lines(minLines, 8).ReadOnly(ro).Label(label)
+		ui.TextArea(c.Key(key), text).Font("monospace").FontSize(12).Lines(minLines, 14).ReadOnly(ro).Label(label)
 	})
 }
 
@@ -214,9 +214,9 @@ func (p *Page) kvRows(c *ui.Context, t *ui.Theme, key string, kvs *[]model.KV, k
 	for i := range *kvs {
 		i := i
 		ui.Row(c.Key(key + "-" + itoa(i))).Gap(8).PaddingX(12).MinHeight(36).Children(func() {
-			ui.TextInput(c.Key("k"), &(*kvs)[i].Key).Placeholder(keyHint).Font("monospace").FontSize(12).Grow(1).Basis(0).ReadOnly(ro).Label(i18n.T("域名或规则集"))
+			ui.TextInput(c.Key("k"), &(*kvs)[i].Key).Placeholder(keyHint).Font("monospace").FontSize(12).Grow(2).Basis(0).ReadOnly(ro).Label(i18n.T("域名或规则集"))
 			ui.Text(c, "→").TextColor(t.TextMuted)
-			ui.TextInput(c.Key("v"), &(*kvs)[i].Value).Placeholder(valueHint).Font("monospace").FontSize(12).Grow(1).Basis(0).ReadOnly(ro).Label(i18n.T("服务器"))
+			ui.TextInput(c.Key("v"), &(*kvs)[i].Value).Placeholder(valueHint).Font("monospace").FontSize(12).Grow(3).Basis(0).ReadOnly(ro).Label(i18n.T("服务器"))
 			ui.Button(c, "").Label(i18n.T("删除")).Tooltip(i18n.T("删除")).Padding(0, 4).Disabled(ro).Children(func() {
 				ui.Text(c, "✕").FontSize(11)
 			}).OnClick(func() { remove = i })
@@ -238,10 +238,10 @@ func (p *Page) hostsDialog(c *ui.Context, t *ui.Theme) {
 		return
 	}
 	ui.Modal(c, &p.hosts.open, func() {
-		ui.Column(c.Key(p.hosts.session)).Width(460).Gap(12).Children(func() {
+		ui.Column(c.Key(p.hosts.session)).Width(env.DialogWidth(c, 460)).Gap(12).Children(func() {
 			ui.Text(c, i18n.T("自定义 hosts")).FontSize(15).Bold()
 			ui.Text(c, i18n.T("每行一条：域名，空格，IP 或另一个域名。例如 router.lan 192.168.1.1")).FontSize(12).TextColor(t.TextMuted)
-			ui.TextArea(c.Key("hosts"), &p.hosts.text).Font("monospace").FontSize(12).Height(200).Label(i18n.T("自定义 hosts"))
+			ui.TextArea(c.Key("hosts"), &p.hosts.text).Font("monospace").FontSize(12).Height(min(env.DialogMaxHeight(c, 160), 520)).Label(i18n.T("自定义 hosts"))
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, i18n.T("取消")).Clicked() {
 					p.hosts.open = false

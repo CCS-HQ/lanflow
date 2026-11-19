@@ -153,7 +153,11 @@ func (p *Page) customSection(c *ui.Context, t *ui.Theme, runtime []model.Rule) {
 		}
 	}
 	q := strings.TrimSpace(p.query)
-	e.Kit.Section(c, i18n.T("自定义规则"), i18n.T("优先于订阅规则，修改后自动重新加载配置"), func() {
+	// Alone (自定义 filter) the list takes the whole height; next to the
+	// subscription rules it takes what its rows need, up to a share of
+	// the page that grows with the window, and scrolls inside.
+	only := p.filter == 1
+	sec := section(c, t, i18n.T("自定义规则"), i18n.T("优先于订阅规则，修改后自动重新加载配置"), func() {
 		if len(list) == 0 {
 			msg := i18n.T("还没有自定义规则。可点击「添加规则」，或在连接页选中一条连接后添加。")
 			if q != "" {
@@ -162,18 +166,47 @@ func (p *Page) customSection(c *ui.Context, t *ui.Theme, runtime []model.Rule) {
 			ui.Text(c, msg).TextColor(t.TextMuted).Padding(10, 12)
 			return
 		}
+		minH := float32(min(len(list), 2) * 40)
 		if len(list) > bigCustom {
 			// Many rules: a virtual list builds only the rows in view.
 			p.customList.Key = func(i int) any { return list[i].ID }
-			ui.List(c.Key("custom"), &p.customList, len(list), func(i int) {
+			l := ui.List(c.Key("custom"), &p.customList, len(list), func(i int) {
 				p.customRow(c, t, list, i, all, hits, q)
-			}).Height(5*40 + 20).FillWidth().Label(i18n.T("自定义规则"))
+			}).Height(float32(len(list)) * 41).Shrink(1).MinHeight(minH).FillWidth().Label(i18n.T("自定义规则"))
+			if only {
+				l.Grow(1)
+			}
 			return
 		}
-		ui.Scroll(c).MaxHeight(5*40 + 20).Children(func() {
+		sc := ui.Scroll(c).Shrink(1).MinHeight(minH).Children(func() {
 			ui.Column(c).Dividers(1, t.Border).Children(func() { p.customRows(c, t, list, all, hits, q) })
 		})
+		if only {
+			sc.Grow(1)
+		}
 	})
+	if only {
+		sec.Grow(1)
+	} else {
+		sec.MaxHeightPercent(30)
+	}
+}
+
+// section is Kit.Section that gives way when the page runs out of
+// height: the group box clips and its body scrolls inside, so a long
+// list never pushes what follows it out of the window.
+func section(c *ui.Context, t *ui.Theme, title, note string, body func()) ui.Element {
+	col := ui.Column(c).Gap(6).Shrink(1)
+	col.Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Baseline).Padding(0, 4).Shrink(0).Children(func() {
+			ui.Text(c, title).FontSize(13).FontWeight(600).SingleLine().Shrink(0)
+			if note != "" {
+				ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(note)
+			}
+		})
+		ui.Column(c).Shrink(1).Grow(1).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Children(body)
+	})
+	return col
 }
 
 // customRows draws the custom rules as rows.
@@ -192,8 +225,9 @@ func (p *Page) customRow(c *ui.Context, t *ui.Theme, list []model.CustomRule, i 
 	h, hasHit := hits[r.Type+","+r.Payload]
 	ui.Row(c.Key(r.ID)).Gap(10).MinHeight(40).PaddingX(12).Children(func() {
 		e.Kit.Tag(c, env.RuleTypeName(rule.Type), "gray")
-		env.Highlight(c, rule.Payload, q, t.Text).Font("monospace").Grow(1).SingleLine()
-		ui.Text(c, "→ "+env.TargetName(rule.Target)).TextColor(t.TextMuted)
+		env.Highlight(c, rule.Payload, q, t.Text).Font("monospace").Grow(1).Shrink(1).SingleLine().Tooltip(rule.Payload)
+		target := "→ " + env.TargetName(rule.Target)
+		ui.Text(c, target).TextColor(t.TextMuted).SingleLine().Shrink(1).MaxWidth(220).Tooltip(target)
 		hitText := i18n.T("命中 0")
 		if hasHit {
 			hitText = i18n.Tf("命中 %s", env.FmtInt(h.HitCount))
@@ -311,7 +345,7 @@ func (p *Page) subSection(c *ui.Context, t *ui.Theme, rules []model.Rule) {
 		note = subName + " · " + note
 	}
 	q := strings.TrimSpace(p.query)
-	ui.Column(c).Gap(8).Grow(1).Basis(0).MinHeight(160).Children(func() {
+	ui.Column(c).Gap(8).Grow(1).Basis(0).MinHeight(200).Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Baseline).Children(func() {
 			ui.Text(c, i18n.T("订阅规则")).Bold()
 			ui.Text(c, "· "+note).FontSize(11).TextColor(t.TextMuted)
@@ -347,23 +381,23 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r model.Rule, col int, q string)
 	case "#":
 		fade(ui.Text(c, fmt.Sprint(r.Index+1)).TextColor(muted).FontFeatures("tnum"))
 	case "type":
-		fade(env.Highlight(c, r.Type, q, muted).SingleLine())
+		fade(env.Highlight(c, r.Type, q, muted).SingleLine().Tooltip(r.Type))
 	case "payload":
-		ui.Row(c).Gap(6).Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).FillWidth().Children(func() {
 			if r.Payload == "" {
 				fade(ui.Text(c, "—").TextColor(muted))
 			} else {
-				fade(env.Highlight(c, r.Payload, q, t.Text).Font("monospace").SingleLine())
+				fade(env.Highlight(c, r.Payload, q, t.Text).Font("monospace").SingleLine().Shrink(1).Tooltip(r.Payload))
 			}
 			if r.Size > 0 {
-				fade(ui.Text(c, i18n.Tf("%s 条", env.FmtInt(int64(r.Size)))).FontSize(11).TextColor(muted).FontFeatures("tnum"))
+				fade(ui.Text(c, i18n.Tf("%s 条", env.FmtInt(int64(r.Size)))).FontSize(11).TextColor(muted).FontFeatures("tnum").SingleLine().Shrink(0))
 			}
 			if r.Disabled {
-				e.Kit.Tag(c, i18n.T("已临时停用"), "orange")
+				ui.Box(c).Shrink(0).Children(func() { e.Kit.Tag(c, i18n.T("已临时停用"), "orange") })
 			}
 		})
 	case "policy":
-		fade(env.Highlight(c, env.TargetName(r.Proxy), q, t.Text).SingleLine())
+		fade(env.Highlight(c, env.TargetName(r.Proxy), q, t.Text).SingleLine().Tooltip(env.TargetName(r.Proxy)))
 	case "hits":
 		if r.HitCount == 0 {
 			fade(ui.Text(c, "0").TextColor(muted).FontFeatures("tnum"))
@@ -413,7 +447,19 @@ func (p *Page) providers(c *ui.Context, t *ui.Theme) {
 	if len(provs) == 0 {
 		return
 	}
-	e.Kit.Section(c, i18n.T("规则集"), i18n.T("订阅引用的 rule-providers，可单独更新"), func() {
+	// A long list of rule sets scrolls in its own box, up to a share of
+	// the height, rather than squeezing the subscription rules above.
+	section(c, t, i18n.T("规则集"), i18n.T("订阅引用的 rule-providers，可单独更新"), func() {
+		ui.Scroll(c.Key("providers")).Shrink(1).MinHeight(float32(min(len(provs), 2) * 42)).Children(func() {
+			ui.Column(c).Dividers(1, t.Border).Children(func() { p.providerRows(c, t, provs) })
+		})
+	}).MaxHeightPercent(24)
+}
+
+// providerRows draws the rule sets, one row each.
+func (p *Page) providerRows(c *ui.Context, t *ui.Theme, provs []model.RuleProvider) {
+	e := p.e
+	{
 		for _, pr := range provs {
 			pr := pr
 			desc := i18n.Tf("%s · %s 条 · 更新于 %s", behaviorName(pr.Behavior), env.FmtInt(int64(pr.Count)), env.FmtAgo(pr.UpdatedAt))
@@ -430,7 +476,7 @@ func (p *Page) providers(c *ui.Context, t *ui.Theme) {
 				})
 			})
 		}
-	})
+	}
 }
 
 func behaviorName(b string) string {
@@ -455,7 +501,7 @@ func (p *Page) testDialog(c *ui.Context, t *ui.Theme) {
 	res, errText, testing := p.testResult, p.testErr, p.testing
 	p.mu.Unlock()
 	ui.Modal(c, &p.testOpen, func() {
-		ui.Column(c.Key("test")).Width(440).Gap(12).Children(func() {
+		ui.Column(c.Key("test")).Width(520).MaxWidthPercent(90).Gap(12).Children(func() {
 			ui.Text(c, i18n.T("测试规则")).FontSize(15).Bold()
 			ui.Row(c).Gap(8).Children(func() {
 				in := ui.TextInput(c.Key("host"), &p.testHost).Placeholder(i18n.T("域名或 IP，例如 www.google.com")).Font("monospace").Grow(1).AutoFocus().Label(i18n.T("域名或 IP"))
@@ -496,12 +542,12 @@ func (p *Page) testResultView(c *ui.Context, t *ui.Theme, r model.RuleMatch) {
 		if r.Custom {
 			src = i18n.T("自定义")
 		}
-		ui.Row(c).Gap(6).Children(func() {
-			ui.Text(c, r.Host).Bold().Font("monospace")
-			ui.Text(c, i18n.T("命中")).TextColor(t.TextMuted)
-			e.Kit.Tag(c, src, "gray")
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, r.Host).Bold().Font("monospace").SingleLine().Shrink(1).Tooltip(r.Host)
+			ui.Text(c, i18n.T("命中")).TextColor(t.TextMuted).SingleLine().Shrink(0)
+			ui.Box(c).Shrink(0).Children(func() { e.Kit.Tag(c, src, "gray") })
 			if r.RuleIndex >= 0 {
-				ui.Text(c, i18n.Tf("规则 #%d", r.RuleIndex+1)).FontFeatures("tnum")
+				ui.Text(c, i18n.Tf("规则 #%d", r.RuleIndex+1)).FontFeatures("tnum").SingleLine().Shrink(0)
 			}
 		})
 		ui.Text(c, r.Rule).Font("monospace").FontSize(12)

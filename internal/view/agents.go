@@ -4,6 +4,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"lanflow/internal/i18n"
+	"lanflow/internal/view/env"
 )
 
 // Consent for agents (docs/service-split.md §4): when `lanflow mcp` (or
@@ -103,33 +104,30 @@ func (s *Shell) consentDialog(c *ui.Context) {
 		s.dropConsent(r)
 		r.answer(a)
 	}
-	ui.Modal(c, &s.consentOpen, func() {
-		ui.Column(c).Width(460).Gap(12).Children(func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Box(c).TextColor(t.Warning).Children(func() { k.Icon(c, "warn", 18) })
-				ui.Text(c, consentTitle(r.AgentConsent)).FontSize(15).FontWeight(600)
-			})
-			ui.Text(c, consentBody(r.AgentConsent)).FontSize(13)
-			if r.Summary != "" {
-				ui.Text(c, r.Summary).Font("monospace").FontSize(12).Padding(8, 10).Radius(6).
-					Background(t.Surface).Border(1, t.Border).Selectable()
+	env.Dialog(c, &s.consentOpen, env.DialogOptions{
+		Title: consentTitle(r.AgentConsent), Width: 460, Expanded: &s.consentBig,
+		Icon: func() { ui.Box(c).TextColor(t.Warning).Children(func() { k.Icon(c, "warn", 18) }) },
+	}, func() {
+		ui.Text(c, consentBody(r.AgentConsent)).FontSize(13).Shrink(0)
+		if r.Summary != "" {
+			// A batch of changes can be long: it scrolls, so that the
+			// answers below stay in view.
+			env.LongText(c, r.Summary, true).Grow(1)
+		}
+	}, func() {
+		if ui.Button(c, i18n.T("拒绝")).Clicked() {
+			reply("deny")
+		}
+		if r.Kind == "write" {
+			if ui.Button(c, i18n.T("仅本次")).Clicked() {
+				reply("once")
 			}
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, i18n.T("拒绝")).Clicked() {
-					reply("deny")
-				}
-				if r.Kind == "write" {
-					if ui.Button(c, i18n.T("仅本次")).Clicked() {
-						reply("once")
-					}
-					if ui.PrimaryButton(c, i18n.T("始终允许")).Clicked() {
-						reply("always")
-					}
-				} else if ui.PrimaryButton(c, i18n.T("允许")).Clicked() {
-					reply("once")
-				}
-			})
-		})
+			if ui.PrimaryButton(c, i18n.T("始终允许")).Clicked() {
+				reply("always")
+			}
+		} else if ui.PrimaryButton(c, i18n.T("允许")).Clicked() {
+			reply("once")
+		}
 	})
 	if !s.consentOpen && !r.done {
 		// Closed with Esc or a click outside: a refusal.

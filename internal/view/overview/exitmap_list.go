@@ -95,7 +95,7 @@ func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct
 				if i > 0 {
 					size = 12
 				}
-				ui.Text(c, name).FontSize(size).FontWeight(600).SingleLine().Grow(1)
+				ui.Text(c, name).FontSize(size).FontWeight(600).SingleLine().Grow(1).Shrink(1).Tooltip(rt.Node)
 				pr := px.Proxies[rt.Node]
 				k.Delay(c, pr.Delay, pr.Testing)
 			})
@@ -111,7 +111,7 @@ func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct
 				if rt.merged() {
 					sub = i18n.Tf("%s · %d 个分组", city, len(rt.Groups))
 				}
-				ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).SingleLine().Grow(1)
+				ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).SingleLine().Grow(1).Shrink(1).Tooltip(sub)
 				switch {
 				case rt.place == nil:
 				case probing:

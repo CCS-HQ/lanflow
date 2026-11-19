@@ -157,7 +157,8 @@ func (p *Page) closeButton(c *ui.Context) {
 // saw, and the way to decrypt it.
 func (p *Page) connDetail(c *ui.Context, t *ui.Theme, f model.CaptureFlow, st model.CaptureStatus) {
 	cn := p.conns[f.ID]
-	ui.Column(c.Key("cdetail")).Width(detailWidth).FillHeight().BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
+	p.wide = false // nothing here needs the room
+	p.panel(c, t, "cdetail", func() {
 		ui.Row(c).Padding(12, 14, 6, 14).Gap(6).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(1).Gap(2).Children(func() {
 				ui.Text(c, f.Host).Bold().FontSize(12).Selectable()

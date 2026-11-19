@@ -209,7 +209,7 @@ func kvGrid(c *ui.Context, body func()) {
 func (p *Page) kvCell(c *ui.Context, t *ui.Theme, k, v string, extra func()) {
 	ui.Text(c, k).FontSize(12).TextColor(t.TextMuted).SingleLine()
 	ui.Row(c).Gap(6).AlignItems(ui.Center).MarginEnd(8).Children(func() {
-		ui.Text(c, v).FontSize(12).FontFeatures("tnum").Selectable().SingleLine().Shrink(1)
+		ui.Text(c, v).FontSize(12).FontFeatures("tnum").Selectable().SingleLine().Shrink(1).Tooltip(v)
 		if extra != nil {
 			extra()
 		}
@@ -662,7 +662,9 @@ func (p *Page) dnsSection(c *ui.Context, t *ui.Theme, running bool) {
 	p.mu.Lock()
 	res, errText := p.dnsRes, p.dnsErr
 	p.mu.Unlock()
-	ui.Column(c).Gap(6).Shrink(0).Children(func() {
+	// A long answer (many records, long TXT strings) scrolls inside the
+	// box instead of running past the bottom of the window.
+	ui.Column(c).Gap(6).Shrink(1).MinHeight(0).Children(func() {
 		sectionTitle(c, t, i18n.T("DNS 查询"), i18n.T("经内核的解析器"), func() {
 			flush := func(label string, job func() error, ok string) {
 				b := env.LinkText(c, label, "")
@@ -676,7 +678,7 @@ func (p *Page) dnsSection(c *ui.Context, t *ui.Theme, running bool) {
 			ui.Text(c, "·").FontSize(12).TextColor(t.TextMuted)
 			flush(i18n.T("清除 Fake-IP 缓存"), e.API.FlushFakeIPCache, i18n.T("已清除 Fake-IP 缓存"))
 		})
-		box := ui.Column(c).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Dividers(1, t.Border)
+		box := ui.Column(c).Shrink(1).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Dividers(1, t.Border)
 		box.Children(func() { p.dnsBox(c, t, running, res, errText) })
 	})
 }
@@ -684,7 +686,7 @@ func (p *Page) dnsSection(c *ui.Context, t *ui.Theme, running bool) {
 // dnsBox is the DNS 查询 group: the query row and the last result.
 func (p *Page) dnsBox(c *ui.Context, t *ui.Theme, running bool, res *model.DNSResult, errText string) {
 	{
-		ui.Row(c).Gap(8).PaddingX(12).MinHeight(40).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(8).PaddingX(12).MinHeight(40).AlignItems(ui.Center).Shrink(0).Children(func() {
 			in := ui.TextInput(c.Key("dns"), &p.dnsName).Placeholder(i18n.T("域名")).Font("monospace").Grow(1).Label(i18n.T("域名"))
 			if in.Submitted() {
 				p.query()
@@ -701,7 +703,7 @@ func (p *Page) dnsBox(c *ui.Context, t *ui.Theme, running bool, res *model.DNSRe
 		case errText != "":
 			ui.Text(c, errText).FontSize(12).TextColor(t.Danger).Padding(6, 12)
 		case res != nil:
-			p.dnsResult(c, t, *res)
+			ui.Scroll(c.Key("dnsres")).Shrink(1).Children(func() { p.dnsResult(c, t, *res) })
 		}
 	}
 }

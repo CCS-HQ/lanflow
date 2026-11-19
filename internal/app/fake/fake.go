@@ -375,6 +375,10 @@ func (f *Fake) UIState() model.UIState {
 	for k, v := range f.set.UI.OpenGroups {
 		u.OpenGroups[k] = v
 	}
+	u.Sizes = make(map[string]float32, len(f.set.UI.Sizes))
+	for k, v := range f.set.UI.Sizes {
+		u.Sizes[k] = v
+	}
 	return u
 }
 func (f *Fake) SaveUIState(u model.UIState) error {
@@ -390,6 +394,10 @@ func (f *Fake) UpdateUIState(fn func(*model.UIState)) error {
 	u.OpenGroups = make(map[string]bool, len(f.set.UI.OpenGroups))
 	for k, v := range f.set.UI.OpenGroups {
 		u.OpenGroups[k] = v
+	}
+	u.Sizes = make(map[string]float32, len(f.set.UI.Sizes))
+	for k, v := range f.set.UI.Sizes {
+		u.Sizes[k] = v
 	}
 	fn(&u)
 	f.set.UI = u

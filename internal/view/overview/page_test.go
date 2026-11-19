@@ -112,3 +112,33 @@ func TestSubscriptionExpiryWithoutTotal(t *testing.T) {
 		t.Errorf("progress bar should not show without a total")
 	}
 }
+
+// TestSideDividerResizes: dragging the gap between the map and the side
+// column moves room between them, within bounds, and a double click puts
+// the default back.
+func TestSideDividerResizes(t *testing.T) {
+	f := fake.NewInstant()
+	e, _ := testEnv(f)
+	p := New(e)
+	tt := ui.NewTester(p.View, 1200, 720)
+	tt.Frame()
+	tt.Frame()
+	r, ok := tt.Find("调整出口地图与右侧栏宽度")
+	if !ok {
+		t.Fatalf("no divider; texts: %q", tt.Texts())
+	}
+	x, y := r.X+r.W/2, r.Y+r.H/2
+	tt.Press(x, y)
+	tt.Frame()
+	tt.Move(x-200, y)
+	tt.Frame()
+	tt.Release(x-200, y)
+	tt.Frame()
+	if p.sideShare() <= sideDefault {
+		t.Fatalf("side share %v after dragging left, want > %v", p.sideShare(), sideDefault)
+	}
+	p.setSide(1000)
+	if p.sideShare() != sideMax {
+		t.Fatalf("side share %v, want clamped to %v", p.sideShare(), sideMax)
+	}
+}

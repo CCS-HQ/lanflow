@@ -36,7 +36,8 @@ type replayState struct {
 	note    string // e.g. the recorded body was cut
 	direct  bool
 	follow  bool
-	tab     int // 0 headers, 1 body
+	tab     int  // 0 headers, 1 body
+	big     bool // the dialog enlarged to the window
 
 	busy   bool
 	res    *model.ReplayResult
@@ -203,39 +204,40 @@ func (r *replayState) curl() string {
 func (p *Page) replayModal(c *ui.Context, t *ui.Theme) {
 	r := &p.rp
 	r.mu.Lock()
-	open := r.open
-	r.mu.Unlock()
-	if !open {
+	defer r.mu.Unlock()
+	if !r.open {
 		return
 	}
 	e := p.e
-	ui.Modal(c, &r.open, func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		ui.Column(c.Key(fmt.Sprint("replay-", r.session))).Width(780).Gap(10).Children(func() {
-			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, i18n.T("重新发送请求")).FontSize(15).FontWeight(600).Grow(1)
-			})
-			if r.loading {
-				ui.Spinner(c).Size(14, 14).Label(i18n.T("加载中"))
-				return
+	// Lines of the header and body editors: more in the enlarged dialog.
+	minL, maxL := 6, 12
+	if r.big {
+		minL, maxL = 12, 40
+	}
+	env.Dialog(c.Key(fmt.Sprint("replay-", r.session)), &r.open, env.DialogOptions{Title: i18n.T("重新发送请求"), Width: 780, Expanded: &r.big}, func() {
+		if r.loading {
+			ui.Spinner(c).Size(14, 14).Label(i18n.T("加载中"))
+			return
+		}
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
+			ui.Select(c.Key("rp-method"), &r.method, replayMethods).Label(i18n.T("方法")).Width(110)
+			ui.TextInput(c.Key("rp-url"), &r.url).Font("monospace").FontSize(12).Label(i18n.T("网址")).Grow(1)
+			if ui.PrimaryButton(c, i18n.T("发送")).Disabled(r.busy || strings.TrimSpace(r.url) == "").Clicked() {
+				go p.sendReplay()
 			}
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Select(c.Key("rp-method"), &r.method, replayMethods).Label(i18n.T("方法")).Width(110)
-				ui.TextInput(c.Key("rp-url"), &r.url).Font("monospace").FontSize(12).Label(i18n.T("网址")).Grow(1)
-				if ui.PrimaryButton(c, i18n.T("发送")).Disabled(r.busy || strings.TrimSpace(r.url) == "").Clicked() {
-					go p.sendReplay()
-				}
-			})
-			ui.Row(c).Gap(14).AlignItems(ui.Center).Children(func() {
-				ui.Segmented(c.Key("rp-tab"), &r.tab, i18n.T("请求头"), i18n.T("请求体")).Label(i18n.T("请求页签"))
-				ui.Spacer(c)
-				ui.Checkbox(c.Key("rp-direct"), &r.direct, i18n.T("直接连接（不经内核）"))
-				ui.Checkbox(c.Key("rp-follow"), &r.follow, i18n.T("跟随重定向"))
-			})
+		})
+		ui.Row(c).Gap(14).AlignItems(ui.Center).Wrap().Shrink(0).Children(func() {
+			ui.Segmented(c.Key("rp-tab"), &r.tab, i18n.T("请求头"), i18n.T("请求体")).Label(i18n.T("请求页签"))
+			ui.Spacer(c)
+			ui.Checkbox(c.Key("rp-direct"), &r.direct, i18n.T("直接连接（不经内核）"))
+			ui.Checkbox(c.Key("rp-follow"), &r.follow, i18n.T("跟随重定向"))
+		})
+		// The editors and the answer scroll together when the window is
+		// too short for them, keeping the buttons in view.
+		ui.Scroll(c.Key("rp-scroll")).Grow(1).Shrink(1).MinHeight(0).Gap(10).Children(func() {
 			switch r.tab {
 			case 0:
-				ui.TextArea(c.Key("rp-headers"), &r.headers).Font("monospace").FontSize(12).Lines(6, 12).
+				ui.TextArea(c.Key("rp-headers"), &r.headers).Font("monospace").FontSize(12).Lines(minL, maxL).
 					Placeholder("Content-Type: application/json").Label(i18n.T("请求头"))
 				ui.Text(c, i18n.T("每行一个「名称: 值」；Host 会作为请求的主机名，Content-Length 等由发送时自动计算。")).FontSize(11).TextColor(t.TextMuted)
 			case 1:
@@ -247,7 +249,7 @@ func (p *Page) replayModal(c *ui.Context, t *ui.Theme) {
 						}
 					})
 				} else {
-					ui.TextArea(c.Key("rp-body"), &r.body).Font("monospace").FontSize(12).Lines(6, 12).Label(i18n.T("请求体"))
+					ui.TextArea(c.Key("rp-body"), &r.body).Font("monospace").FontSize(12).Lines(minL, maxL).Label(i18n.T("请求体"))
 				}
 			}
 			if r.note != "" {
@@ -257,17 +259,16 @@ func (p *Page) replayModal(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, r.err).FontSize(12).TextColor(t.Danger).Selectable()
 			}
 			p.replayResult(c, t)
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				if ui.Button(c, i18n.T("复制为 cURL")).Clicked() {
-					c.WriteClipboard(r.curl())
-					e.Toast(i18n.T("已复制（包含未打码的凭据）"), false)
-				}
-				ui.Spacer(c)
-				if ui.Button(c, i18n.T("关闭")).Clicked() {
-					r.open = false
-				}
-			})
 		})
+	}, func() {
+		if ui.Button(c, i18n.T("复制为 cURL")).Clicked() {
+			c.WriteClipboard(r.curl())
+			e.Toast(i18n.T("已复制（包含未打码的凭据）"), false)
+		}
+		ui.Spacer(c)
+		if ui.Button(c, i18n.T("关闭")).Clicked() {
+			r.open = false
+		}
 	})
 }
 
@@ -307,7 +308,9 @@ func (p *Page) replayResult(c *ui.Context, t *ui.Theme) {
 		if res.Truncated {
 			ui.Text(c, i18n.Tf("响应体超过 %s，只显示前面部分。", env.FmtBytes(4<<20))).FontSize(11).TextColor(t.TextMuted)
 		}
-		ui.Scroll(c).MaxHeight(260).Selectable().Children(func() {
+		// The answer takes the window's height left by the editors (about
+		// 420 DIPs), all of it in the enlarged dialog.
+		ui.Scroll(c).MaxHeight(env.DialogMaxHeight(c, 420)).Selectable().Children(func() {
 			if r.resTab == 1 {
 				p.headers(c, t, res.Header)
 				return

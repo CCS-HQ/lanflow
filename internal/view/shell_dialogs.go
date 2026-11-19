@@ -11,6 +11,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/env"
 )
 
 // confirmReq is a pending confirmation dialog.
@@ -99,26 +100,19 @@ func (s *Shell) dialogs(c *ui.Context, st model.Status) {
 	}
 	if s.detail != nil {
 		d := s.detail
-		ui.Modal(c, &s.detailOpen, func() {
-			ui.Column(c).Width(460).Gap(12).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).TextColor(t.Danger).Children(func() { k.Icon(c, "warn", 18) })
-					ui.Text(c, d.title).FontSize(15).FontWeight(600)
-				})
-				ui.Scroll(c).MaxHeight(260).Children(func() {
-					ui.Text(c, d.text).FontSize(13).Padding(8, 10).Radius(6).
-						Background(t.Surface).Border(1, t.Border).Selectable()
-				})
-				ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-					if ui.Button(c, i18n.T("复制")).Clicked() {
-						c.WriteClipboard(d.text)
-						c.Toast(i18n.T("已复制"))
-					}
-					if ui.PrimaryButton(c, i18n.T("好")).Clicked() {
-						s.detailOpen = false
-					}
-				})
-			})
+		env.Dialog(c, &s.detailOpen, env.DialogOptions{
+			Title: d.title, Width: 480, Expanded: &s.detailBig,
+			Icon: func() { ui.Box(c).TextColor(t.Danger).Children(func() { k.Icon(c, "warn", 18) }) },
+		}, func() {
+			env.LongText(c, d.text, false).Grow(1)
+		}, func() {
+			if ui.Button(c, i18n.T("复制")).Clicked() {
+				c.WriteClipboard(d.text)
+				c.Toast(i18n.T("已复制"))
+			}
+			if ui.PrimaryButton(c, i18n.T("好")).Clicked() {
+				s.detailOpen = false
+			}
 		})
 		if !s.detailOpen {
 			s.detail = nil
@@ -126,27 +120,24 @@ func (s *Shell) dialogs(c *ui.Context, st model.Status) {
 	}
 	if s.invalid != nil {
 		n := s.invalid
-		ui.Modal(c, &s.invalidOpen, func() {
-			ui.Column(c).Width(440).Gap(12).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).TextColor(t.Warning).Children(func() { k.Icon(c, "warn", 18) })
-					ui.Text(c, firstNonEmpty(n.Title, i18n.T("配置无法使用"))).FontSize(15).FontWeight(600)
-				})
-				ui.Text(c, s.invalidBody(n)).FontSize(13)
-				if n.Detail != "" {
-					ui.Text(c, n.Detail).Font("monospace").FontSize(12).Padding(8, 10).Radius(6).
-						Background(t.Surface).Border(1, t.Border).Selectable()
-				}
-				ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-					if ui.Button(c, i18n.T("复制错误")).Clicked() {
-						c.WriteClipboard(n.Detail)
-						c.Toast(i18n.T("已复制"))
-					}
-					if ui.PrimaryButton(c, i18n.T("好")).Clicked() {
-						s.invalidOpen = false
-					}
-				})
-			})
+		env.Dialog(c, &s.invalidOpen, env.DialogOptions{
+			Title: firstNonEmpty(n.Title, i18n.T("配置无法使用")), Width: 460, Expanded: &s.invalidBig,
+			Icon: func() { ui.Box(c).TextColor(t.Warning).Children(func() { k.Icon(c, "warn", 18) }) },
+		}, func() {
+			ui.Text(c, s.invalidBody(n)).FontSize(13).Shrink(0)
+			if n.Detail != "" {
+				// A validation error can run to many lines (one per bad
+				// proxy or rule): it scrolls, the buttons stay in view.
+				env.LongText(c, n.Detail, true).Grow(1)
+			}
+		}, func() {
+			if n.Detail != "" && ui.Button(c, i18n.T("复制错误")).Clicked() {
+				c.WriteClipboard(n.Detail)
+				c.Toast(i18n.T("已复制"))
+			}
+			if ui.PrimaryButton(c, i18n.T("好")).Clicked() {
+				s.invalidOpen = false
+			}
 		})
 		if !s.invalidOpen {
 			s.invalid = nil

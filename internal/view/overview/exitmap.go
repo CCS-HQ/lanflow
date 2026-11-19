@@ -162,7 +162,7 @@ func easeInOut(t float32) float32 {
 
 // ---- the card ----
 
-func (p *Page) exitCard(c *ui.Context, st model.Status, rs []route) {
+func (p *Page) exitCard(c *ui.Context, st model.Status, rs []route, grow float32) {
 	t := c.Theme()
 	run := st.Core == model.CoreRunning
 	direct := st.Mode == model.ModeDirect
@@ -177,7 +177,7 @@ func (p *Page) exitCard(c *ui.Context, st model.Status, rs []route) {
 
 	// The map card takes the left two thirds of the page and all its
 	// height (docs/design.md §5.1), so the globe grows with the window.
-	ui.Column(c).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Grow(64).Basis(0).MinHeight(cardHeight).Padding(8, 12, 8, 12).Gap(2).Children(func() {
+	ui.Column(c).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Grow(grow).Basis(0).MinWidth(mapMinWidth).MinHeight(cardHeight).Padding(8, 12, 8, 12).Gap(2).Children(func() {
 		cardTitle(c, i18n.T("出口地图"), func() {
 			if guessed {
 				p.youUnknown(c, t)

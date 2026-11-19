@@ -27,6 +27,7 @@ type Page struct {
 	pendingProxy *bool
 	pendingMode  *model.Mode
 	probing      bool
+	side         float32 // the side column's share in percent, 0 = sideDefault (divider.go), remembered in the UI state
 
 	flows     map[string]*flow // exit map animation state by route group
 	land      landCache
@@ -68,11 +69,19 @@ func (p *Page) View(c *ui.Context) {
 	// The routes are read, and their speeds eased, once per build for
 	// both the map and the list.
 	rs := p.routes(time.Now())
+	p.e.PaneSize(env.SizeOverviewSide, &p.side)
+	side := p.sideShare()
 	ui.Column(c).Grow(1).Padding(0, 24, 20, 24).Gap(16).Clip().Children(func() {
 		p.switches(c, st)
-		ui.Row(c).Grow(1).Gap(16).AlignItems(ui.Stretch).Children(func() {
-			p.exitCard(c, st, rs)
-			ui.Column(c).Grow(36).Basis(0).Gap(12).Children(func() {
+		// The divider between the map and the side column drags (or,
+		// focused, takes the arrows) to give either more room: long node
+		// names and merged groups in the route list, or a bigger globe.
+		main := ui.Row(c.Key("main")).Grow(1).AlignItems(ui.Stretch)
+		total := main.Bounds().W
+		main.Children(func() {
+			p.exitCard(c, st, rs, 100-side)
+			p.sideDivider(c, total)
+			ui.Column(c).Grow(side).Basis(0).MinWidth(sideMinWidth).Gap(12).Children(func() {
 				p.routeCard(c, st, rs)
 				p.subscriptionCard(c, st)
 				p.speedCard(c, st)
@@ -143,7 +152,7 @@ func (p *Page) coreRows(c *ui.Context, st model.Status, pc, pp *bool, busy bool)
 				if !st.StartedAt.IsZero() {
 					meta += i18n.Tf(" · 已运行 %s", env.FmtUptime(time.Since(st.StartedAt)))
 				}
-				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
+				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine().Tooltip(strings.TrimPrefix(meta, "· "))
 			case model.CoreStarting:
 				ui.Spinner(c).Size(12, 12).Label(i18n.T("启动中"))
 				ui.Text(c, i18n.T("启动中…")).FontSize(13)
@@ -409,7 +418,7 @@ func (p *Page) subscriptionCard(c *ui.Context, st model.Status) {
 		if cur != nil {
 			name = cur.Name
 		}
-		ui.Text(c, name).FontSize(17).FontWeight(600).SingleLine()
+		ui.Text(c, name).FontSize(17).FontWeight(600).SingleLine().Tooltip(name)
 		if cur == nil {
 			ui.Text(c, i18n.T("尚未选择订阅")).FontSize(12).TextColor(t.TextMuted)
 			return
@@ -417,7 +426,9 @@ func (p *Page) subscriptionCard(c *ui.Context, st model.Status) {
 		// Traffic on the left, the expiry on the right: the expiry shows
 		// even when the total traffic is unknown (docs/design.md §5.1 当前订阅).
 		used := cur.Upload + cur.Download
-		ui.Row(c).Gap(8).Children(func() {
+		// Wraps rather than truncates: in a narrow side column the expiry
+		// goes under the traffic.
+		ui.Row(c).Gap(8).Wrap().Justify(ui.SpaceBetween).Children(func() {
 			traffic := i18n.T("无流量信息")
 			switch {
 			case cur.Total > 0:
@@ -425,8 +436,7 @@ func (p *Page) subscriptionCard(c *ui.Context, st model.Status) {
 			case cur.Source == "file":
 				traffic = i18n.T("本地文件 · 无流量信息")
 			}
-			ui.Text(c, traffic).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine().Shrink(1)
-			ui.Spacer(c)
+			ui.Text(c, traffic).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine().Tooltip(traffic)
 			if !cur.Expire.IsZero() {
 				txt, col := expiryText(cur.Expire, time.Now(), t)
 				ui.Text(c, txt).FontSize(12).TextColor(col).FontFeatures("tnum").SingleLine()
@@ -489,7 +499,8 @@ func (p *Page) speedCard(c *ui.Context, st model.Status) {
 				if run {
 					foot = i18n.Tf("本次 ↑ %s ↓ %s · 连接 %d · 内存 %s", env.FmtBytes(st.TotalUp), env.FmtBytes(st.TotalDown), st.Connections, env.FmtBytes(st.Memory))
 				}
-				ui.Text(c, foot).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
+				// Wraps in a narrow side column instead of cutting off 内存.
+				ui.Text(c, foot).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Grow(1).Shrink(1)
 			})
 		})
 	})

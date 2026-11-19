@@ -10,6 +10,7 @@ import (
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/env"
 )
 
 // Import phases.
@@ -108,37 +109,46 @@ func (p *Page) rawView(c *ui.Context) {
 	p.mu.Lock()
 	d := p.raw // the loader writes it from another goroutine
 	p.mu.Unlock()
-	ui.Modal(c, &d.open, func() {
-		ui.Column(c.Key("raw")).Width(640).Gap(10).Children(func() {
-			ui.Text(c, i18n.Tf("查看配置 · %s", d.name)).FontSize(15).FontWeight(600)
-			find := "⌘F"
-			if !p.e.Mac {
-				find = "Ctrl+F"
-			}
-			ui.Text(c, i18n.Tf("订阅下载到本地的原始 YAML（只读，未应用覆写）。%s 查找。", find)).FontSize(12).TextColor(t.TextMuted)
-			switch {
-			case d.loading:
-				ui.Row(c).Gap(6).Height(380).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
-					ui.Spinner(c)
-					ui.Text(c, i18n.T("正在读取…")).TextColor(t.TextMuted)
-				})
-			case d.err != "":
-				ui.Text(c, d.err).TextColor(t.Danger).Role(ui.RoleAlert).Height(380)
-			default:
-				editor.View(c, d.state).Height(380).FillWidth().Radius(6).Border(1, t.Border).AutoFocus()
-			}
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Button(c, i18n.T("复制")).Disabled(d.text == "").OnClick(func() {
-					c.WriteClipboard(d.text)
-					p.e.Toast(i18n.T("已复制"), false)
-				})
-				ui.Spacer(c)
-				if ui.PrimaryButton(c, i18n.T("关闭")).Clicked() {
-					d.open = false
-				}
+	// The viewer grows with the window and the 放大 button in its title
+	// row fills the window with it: a subscription's YAML runs to
+	// thousands of lines (env.Dialog).
+	big := p.rawBig
+	_, winH := c.Size()
+	edH := min(env.DialogMaxHeight(c, 150), max(380, winH*0.6))
+	env.Dialog(c, &d.open, env.DialogOptions{Title: i18n.Tf("查看配置 · %s", d.name), Width: 640, Expanded: &big}, func() {
+		find := "⌘F"
+		if !p.e.Mac {
+			find = "Ctrl+F"
+		}
+		ui.Text(c, i18n.Tf("订阅下载到本地的原始 YAML（只读，未应用覆写）。%s 查找。", find)).FontSize(12).TextColor(t.TextMuted).Shrink(0)
+		var body ui.Element
+		switch {
+		case d.loading:
+			body = ui.Row(c).Gap(6).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+				ui.Spinner(c)
+				ui.Text(c, i18n.T("正在读取…")).TextColor(t.TextMuted)
 			})
+		case d.err != "":
+			body = env.LongText(c, d.err, false).TextColor(t.Danger).Role(ui.RoleAlert)
+		default:
+			body = editor.View(c.Key("raw-yaml"), d.state).FillWidth().Radius(6).Border(1, t.Border).AutoFocus()
+		}
+		if big {
+			body.Grow(1).MinHeight(0)
+		} else {
+			body.Height(edH)
+		}
+	}, func() {
+		ui.Button(c, i18n.T("复制")).Disabled(d.text == "").OnClick(func() {
+			c.WriteClipboard(d.text)
+			p.e.Toast(i18n.T("已复制"), false)
 		})
+		ui.Spacer(c)
+		if ui.PrimaryButton(c, i18n.T("关闭")).Clicked() {
+			d.open = false
+		}
 	})
+	p.rawBig = big
 	if !d.open {
 		p.mu.Lock()
 		p.raw.open = false
@@ -214,7 +224,7 @@ func (p *Page) importView(c *ui.Context) {
 	d := &p.imp
 	loading := d.phase == phaseLoading || d.phase == phaseDone
 	md := ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(420).Gap(10).Children(func() {
+		ui.Column(c).Width(env.DialogWidth(c, 420)).Gap(10).Children(func() {
 			ui.Text(c, i18n.T("从链接导入订阅")).FontSize(15).FontWeight(600)
 			field(c, i18n.T("订阅链接"), func() {
 				in := ui.TextInput(c.Key("url"), &d.url).Placeholder("https://").Label(i18n.T("订阅链接")).AutoFocus().ReadOnly(loading).Invalid(d.phase == phaseError)
@@ -354,7 +364,7 @@ func (p *Page) editView(c *ui.Context) {
 	t := c.Theme()
 	d := &p.edit
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(420).Gap(10).Children(func() {
+		ui.Column(c).Width(env.DialogWidth(c, 420)).Gap(10).Children(func() {
 			ui.Text(c, i18n.T("编辑订阅")).FontSize(15).FontWeight(600)
 			field(c, i18n.T("名称"), func() {
 				ui.TextInput(c.Key("name"), &d.name).Label(i18n.T("名称")).AutoFocus().Invalid(d.err != "" && strings.TrimSpace(d.name) == "")

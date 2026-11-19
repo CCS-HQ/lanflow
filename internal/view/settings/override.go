@@ -538,8 +538,13 @@ func (p *Page) overrideEditor(c *ui.Context, t *ui.Theme) {
 	}
 	modified := d.state.Buffer.String() != d.saved
 	dlg := ui.Modal(c, &d.open, func() {
-		ui.Column(c.Key("ov-" + d.key)).Width(580).Gap(10).Children(func() {
-			ui.Text(c, d.title).FontSize(15).Bold()
+		w, h := dialogSize(c, 580, 460, p.dlgFull)
+		ui.Column(c.Key("ov-" + d.key)).Width(w).Height(h).Gap(10).Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, d.title).FontSize(15).Bold().SingleLine().Shrink(1)
+				ui.Spacer(c)
+				env.ExpandButton(c, &p.dlgFull)
+			})
 			ui.RichText(c,
 				ui.Span{Text: "key", Font: "monospace", Size: 12},
 				ui.Span{Text: i18n.T(" 整体替换 · "), Color: t.TextMuted, Size: 12},
@@ -549,13 +554,17 @@ func (p *Page) overrideEditor(c *ui.Context, t *ui.Theme) {
 				ui.Span{Text: i18n.T(" 追加到后面"), Color: t.TextMuted, Size: 12},
 			)
 			if d.showDiff && d.diff != nil {
-				editor.DiffView(c, d.diff).Height(320).FillWidth().Radius(6).Border(1, t.Border)
+				editor.DiffView(c, d.diff).Grow(1).Basis(0).MinHeight(120).FillWidth().Radius(6).Border(1, t.Border)
 			} else {
 				d.state.ReadOnly = d.saving
-				editor.View(c, d.state).Height(320).FillWidth().Radius(6).Border(1, t.Border)
+				editor.View(c, d.state).Grow(1).Basis(0).MinHeight(120).FillWidth().Radius(6).Border(1, t.Border)
 			}
 			if d.err != "" {
-				ui.Text(c, d.err).FontSize(12).TextColor(t.Danger).Selectable()
+				// a long validation error scrolls instead of pushing the
+				// buttons out of the fixed-height dialog
+				ui.Scroll(c.Key("ov-err")).MaxHeight(120).Shrink(0).Children(func() {
+					ui.Text(c, d.err).FontSize(12).TextColor(t.Danger).Selectable()
+				})
 			}
 			ui.Row(c).Gap(8).Children(func() {
 				switch {
@@ -691,10 +700,15 @@ func (p *Page) runtimeDialog(c *ui.Context, t *ui.Theme) {
 		return
 	}
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c.Key("runtime")).Width(640).Gap(10).Children(func() {
-			ui.Text(c, i18n.T("运行时配置")).FontSize(15).Bold()
+		w, h := dialogSize(c, 620, 480, p.dlgFull)
+		ui.Column(c.Key("runtime")).Width(w).Height(h).Gap(10).Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, i18n.T("运行时配置")).FontSize(15).Bold().SingleLine().Shrink(1)
+				ui.Spacer(c)
+				env.ExpandButton(c, &p.dlgFull)
+			})
 			ui.Text(c, i18n.T("最终交给内核的配置（只读）。右侧灰字标注每段的来源。")).FontSize(12).TextColor(t.TextMuted)
-			ui.Scroll(c).Height(380).Padding(8, 10).Radius(6).Background(t.Surface).Border(1, t.Border).Selectable().KeepScrollbars(true).Children(func() {
+			ui.Scroll(c).Grow(1).Basis(0).MinHeight(120).Padding(8, 10).Radius(6).Background(t.Surface).Border(1, t.Border).Selectable().KeepScrollbars(true).Children(func() {
 				switch {
 				case d.loading:
 					ui.Row(c).Gap(6).Children(func() {

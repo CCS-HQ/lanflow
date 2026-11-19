@@ -4,6 +4,7 @@ package i18n
 func init() {
 	for k, v := range map[string]string{
 		// internal/view/conns/page.go
+		"调整详情宽度":   "Resize details panel",
 		"主机":       "Host",
 		"链路":       "Chain",
 		"↓ 速度":     "↓ Speed",

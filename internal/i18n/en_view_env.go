@@ -12,6 +12,10 @@ func init() {
 		"正在启动新内核…":        "Starting the new core…",
 		"正在处理 Mihomo %s…": "Processing Mihomo %s…",
 
+		// internal/view/env/dialog.go
+		"放大窗口": "Enlarge",
+		"还原大小": "Restore size",
+
 		// internal/view/env/format.go
 		"%d 小时 %d 分": "%d h %d min",
 		"%d 分钟":      "%d min",

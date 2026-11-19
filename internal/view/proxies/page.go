@@ -30,8 +30,28 @@ const (
 	viewGrid
 )
 
-// gridColumns is the compact grid's column count (docs/design.md §5.2: 3–4 列).
-const gridColumns = 3
+// gridColumns is the compact grid's column count before its width is
+// known (docs/design.md §5.2: 3–4 列); gridColumnsFor then fits as many
+// tiles of at least gridTileWidth as the width takes, from minGridColumns
+// to maxGridColumns, so a wide window shows more columns rather than
+// stretched tiles, and a narrow one keeps node names legible.
+const (
+	gridColumns    = 3
+	gridTileWidth  = 200
+	minGridColumns = 2
+	maxGridColumns = 8
+	// gridChrome is what the window's width loses before the grid: the
+	// sidebar, the page's and the group card's padding.
+	gridChrome = 290
+)
+
+// gridColumnsFor is the column count for a grid w DIPs wide (0: unknown).
+func gridColumnsFor(w float32) int {
+	if w <= 0 {
+		return gridColumns
+	}
+	return min(max(int(w/gridTileWidth), minGridColumns), maxGridColumns)
+}
 
 // Page holds page-local UI state.
 type Page struct {
@@ -342,9 +362,10 @@ func (p *Page) isOpen(g model.ProxyGroup, px model.ProxySnapshot) bool {
 // members in a virtual list bigGroupRows tall, which builds only the rows
 // in view.
 const (
-	bigGroup     = 60
-	bigGroupRows = 12
-	nodeRowH     = 32
+	bigGroup        = 60
+	bigGroupRows    = 12
+	maxBigGroupRows = 30
+	nodeRowH        = 32
 )
 
 // group draws one collapsible group with its header controls; nodes are
@@ -382,7 +403,7 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 			parts.Trigger.Grow(1).MinHeight(40).Padding(6, 12).Gap(8).AlignItems(ui.Center).Label(g.Name).Children(func() {
 				ui.Box(c).TextColor(t.TextMuted).Children(func() { k.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
 				p.groupIcon(c, g.Icon)
-				ui.Text(c, g.Name).FontSize(13).FontWeight(600).SingleLine()
+				ui.Text(c, g.Name).FontSize(13).FontWeight(600).SingleLine().Shrink(1).Tooltip(g.Name)
 				if g.Name == px.MainGroup {
 					k.Tag(c, i18n.T("主代理组"), "gray")
 				}
@@ -393,7 +414,7 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 				if p.query != "" {
 					meta = i18n.Tf("%s · %d 个匹配", meta, matched)
 				}
-				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(1)
+				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(meta)
 			})
 			if now != "" {
 				loc := ui.Button(c, "").Label(i18n.Tf("定位当前节点 %s", g.Name)).Tooltip(i18n.T("定位当前节点")).Children(func() {
@@ -433,7 +454,10 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 			ui.Column(c).Padding(0, 6, 6, 6).Children(func() {
 				ui.Box(c).Height(1).Background(t.Border).Margin(0, 6, 4, 6)
 				if p.view == viewGrid {
-					ui.Grid(c).Columns(gridColumns).Gap(6).Padding(4, 6, 2, 6).Children(func() {
+					// From the window's width, not the grid's last
+					// frame, so a resize refits the columns at once.
+					winW, _ := c.Size()
+					ui.Grid(c).Columns(gridColumnsFor(winW-gridChrome)).Gap(6).Padding(4, 6, 2, 6).Children(func() {
 						for _, n := range nodes {
 							p.cell(c, g, n, now, selectable, px, names)
 						}
@@ -468,7 +492,16 @@ func (p *Page) bigList(c *ui.Context, g model.ProxyGroup, nodes []string, now st
 	}
 	ui.List(c.Key("nodes"), ls, len(nodes), func(i int) {
 		p.node(c, g, nodes[i], now, selectable, px, names)
-	}).Height(bigGroupRows * nodeRowH).FillWidth().Label(g.Name)
+	}).Height(float32(bigListRows(c, len(nodes))) * nodeRowH).FillWidth().Label(g.Name)
+}
+
+// bigListRows is how many rows a large group's virtual list shows: about
+// half the window's height, from bigGroupRows up to maxBigGroupRows, so a
+// tall window shows more of a big group rather than a fixed strip.
+func bigListRows(c *ui.Context, n int) int {
+	_, h := c.Size()
+	rows := int(h * 0.55 / nodeRowH)
+	return min(max(rows, bigGroupRows), maxBigGroupRows, n)
 }
 
 // memberKind classifies a group member for display: builtin (DIRECT/REJECT),
@@ -504,7 +537,9 @@ func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 	} else {
 		tile = ui.Column(c.Key("cell:" + n))
 	}
-	tile.Padding(8, 10).Gap(4).Radius(8).Border(1, t.Border).AlignItems(ui.Start).MinHeight(56)
+	// Column(): a ButtonBase lays its children out in a row, which put
+	// the protocol and delay beside the name instead of under it.
+	tile.Column().Padding(8, 10).Gap(4).Radius(8).Border(1, t.Border).AlignItems(ui.Start).MinHeight(56)
 	if cur {
 		tile.Background(t.Accent.Alpha(0.08)).Border(1, t.Accent.Alpha(0.5))
 	}
@@ -524,7 +559,7 @@ func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 					radio.Border(1.5, t.TextMuted.Alpha(0.6))
 				}
 			}
-			ui.Text(c, n).FontSize(12).FontWeight(500).SingleLine().Shrink(1)
+			ui.Text(c, n).FontSize(12).FontWeight(500).SingleLine().Shrink(1).Tooltip(n)
 			if !selectable && cur {
 				ui.Spacer(c)
 				k.Tag(c, i18n.T("当前"), "accent")
@@ -629,8 +664,9 @@ func (p *Page) provider(c *ui.Context, pv model.ProxyProvider, px model.ProxySna
 	}
 	ui.Row(c.Key("prov:"+pv.Name)).MinHeight(44).Padding(4, 4, 4, 12).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Gap(2).Grow(1).Shrink(1).Children(func() {
-			ui.Text(c, pv.Name).FontSize(13).FontWeight(500).SingleLine()
-			ui.Text(c, providerMeta(pv)).FontSize(11).TextColor(t.TextMuted).SingleLine()
+			ui.Text(c, pv.Name).FontSize(13).FontWeight(500).SingleLine().Tooltip(pv.Name)
+			meta := providerMeta(pv)
+			ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted).SingleLine().Tooltip(meta)
 		})
 		canUpdate := pv.VehicleType == "HTTP" || pv.VehicleType == "File"
 		up := ui.Button(c, "").Label(i18n.Tf("更新 %s", pv.Name)).Tooltip(i18n.T("重新下载该代理集合")).Disabled(!canUpdate || pv.Updating).Children(func() {
@@ -695,7 +731,7 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 		} else {
 			ui.Box(c).Size(14, 14).Shrink(0)
 		}
-		ui.Text(c, n).FontSize(13).SingleLine().Shrink(1)
+		ui.Text(c, n).FontSize(13).SingleLine().Shrink(1).Tooltip(n)
 		if !selectable && cur {
 			k.Tag(c, i18n.T("当前"), "accent")
 		}

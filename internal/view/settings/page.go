@@ -79,6 +79,9 @@ type Page struct {
 	ov  overrideDialog
 	rt  runtimeDialog
 	ovl overrideListUI
+	// 铺满窗口 of the YAML editor and the runtime config, kept between
+	// openings (dialogsize.go)
+	dlgFull bool
 
 	// 延迟测试 (delay.go)
 	delayURL, delayMs       field
@@ -490,10 +493,10 @@ func (p *Page) bypassDialog(c *ui.Context, t *ui.Theme, s model.Settings) {
 		return
 	}
 	ui.Modal(c, &p.bypass.open, func() {
-		ui.Column(c.Key(p.bypass.session)).Width(460).Gap(12).Children(func() {
+		ui.Column(c.Key(p.bypass.session)).Width(env.DialogWidth(c, 460)).Gap(12).Children(func() {
 			ui.Text(c, i18n.T("不走代理的地址")).FontSize(15).Bold()
 			ui.Text(c, i18n.T("每行一个：域名、IP 或网段。系统代理开启时，这些地址直接连接。")).FontSize(12).TextColor(t.TextMuted)
-			ui.TextArea(c.Key("bypass"), &p.bypass.text).Font("monospace").FontSize(12).Height(200).Label(i18n.T("不走代理的地址"))
+			ui.TextArea(c.Key("bypass"), &p.bypass.text).Font("monospace").FontSize(12).Height(min(env.DialogMaxHeight(c, 160), 520)).Label(i18n.T("不走代理的地址"))
 			ui.Row(c).Gap(8).Children(func() {
 				if ui.Button(c, i18n.T("恢复默认")).Clicked() {
 					p.bypass.text = strings.Join(defaultBypass, "\n")
@@ -541,7 +544,7 @@ func (p *Page) kernel(c *ui.Context, t *ui.Theme, s model.Settings, st model.Sta
 					if st.Core == model.CoreMissing {
 						color = t.Danger
 					}
-					ui.Text(c, file).TextColor(color).SingleLine().MaxWidth(260)
+					ui.Text(c, file).TextColor(color).SingleLine().MaxWidth(260).Tooltip(file)
 					if st.Core == model.CoreMissing && !dl.Active {
 						ui.PrimaryButton(c, i18n.T("下载内核")).OnClick(func() { p.updateCore("") })
 					}
@@ -628,10 +631,10 @@ func (p *Page) geoSection(c *ui.Context, t *ui.Theme, s model.Settings, running 
 	e.Kit.Section(c, i18n.T("外部资源"), i18n.T("规则匹配用到的地理数据库"), func() {
 		for i, u := range urls {
 			i, u := i, u
-			e.Kit.Row(c, u.label, u.desc, func() {
+			stackedRow(c, t, u.label, u.desc, func() {
 				f := &p.geoURLs[i]
 				f.show(*u.get(&g))
-				in := ui.TextInput(c.Key("geo-"+strconv.Itoa(i)), &f.text).Font("monospace").FontSize(12).Width(300).Label(u.label)
+				in := ui.TextInput(c.Key("geo-"+strconv.Itoa(i)), &f.text).Font("monospace").FontSize(12).FillWidth().Label(u.label)
 				if f.commit(in) {
 					v := strings.TrimSpace(f.text)
 					if v != *u.get(&g) && (strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://")) {
@@ -805,4 +808,20 @@ var yaml = editor.LanguageFor("override.yaml")
 // rebuilds it only for these (and its own).
 func (p *Page) Topics() []app.Topic {
 	return []app.Topic{app.TopicStatus, app.TopicSettings, app.TopicSubs, app.TopicCoreDownload, app.TopicCores, app.TopicNet}
+}
+
+// stackedRow is a settings row whose control (a URL input, say) takes the
+// row's whole width under the label and description: beside them, a
+// fixed-width input squeezed the description into a narrow column of
+// many lines and still cut the URL off.
+func stackedRow(c *ui.Context, t *ui.Theme, label, desc string, control func()) {
+	ui.Column(c).Gap(6).Padding(8, 12).Children(func() {
+		ui.Column(c).Gap(2).Children(func() {
+			ui.Text(c, label).FontSize(13)
+			if desc != "" {
+				ui.Text(c, desc).FontSize(11).TextColor(t.TextMuted)
+			}
+		})
+		control()
+	})
 }
