@@ -107,12 +107,25 @@ func SyncDir(dir string) {
 	d.Close()
 }
 
-// retryBusy runs op again for a short while when Windows reports the file
-// busy: a rename over a file fails while a reader has it open, and opening
-// fails while it is being replaced. Elsewhere op runs once.
+// busyWait is how long retryBusy keeps trying, and busyStep the longest
+// pause between tries. Under contention (several writers and readers of
+// one file on a loaded machine) half a second was not always enough.
+const (
+	busyWait = 3 * time.Second
+	busyStep = 50 * time.Millisecond
+)
+
+// retryBusy runs op again for a while when Windows reports the file busy:
+// a rename over a file fails while a reader has it open, and opening fails
+// while it is being replaced. It backs off from 1 ms to busyStep and gives
+// up after busyWait. Elsewhere op runs once.
 func retryBusy(op func() error) error {
 	err := op()
-	for d := time.Millisecond; err != nil && busy(err) && d <= 256*time.Millisecond; d *= 2 {
+	if err == nil || !busy(err) {
+		return err
+	}
+	deadline := time.Now().Add(busyWait)
+	for d := time.Millisecond; err != nil && busy(err) && time.Now().Before(deadline); d = min(d*2, busyStep) {
 		time.Sleep(d)
 		err = op()
 	}
