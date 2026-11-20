@@ -23,19 +23,43 @@ import (
 	"lanflow/internal/view/env"
 )
 
-// backend picks the service: the in-memory fake with LANFLOW_FAKE=1, the
-// real service otherwise (main_service.go); the fake if that fails. lang
-// is the language of a first run.
+// backend picks the service: the in-memory fake only with LANFLOW_FAKE=1
+// (development), the real service otherwise (main_service.go). lang is the
+// language of a first run.
+//
+// A real service that cannot be created ends the process with a native
+// error dialog. It never falls back to the fake: that would show sample
+// nodes and traffic, switches that seem to work while nothing is proxied,
+// and serve the same made-up data to ctl and MCP clients.
 func backend(lang string) app.API {
 	if os.Getenv("LANFLOW_FAKE") == "1" {
 		return fake.New()
 	}
 	api, err := newService(lang)
 	if err != nil {
-		log.Printf("lanflow: service unavailable, using the fake backend: %v", err)
-		return fake.New()
+		backendFailed(lang, err)
 	}
 	return api
+}
+
+// backendFailed reports why Lanflow cannot start (log, stderr and a
+// dialog) and exits with status 1. tellUser and exit are variables for
+// tests.
+func backendFailed(lang string, err error) {
+	log.Printf("lanflow: cannot start the service: %v", err)
+	i18n.SetLang(lang)
+	tellUser(startFailureText(err))
+	exit(1)
+}
+
+var (
+	tellUser = showError // main_split.go: a message box without a window
+	exit     = os.Exit
+)
+
+// startFailureText is the dialog's text for err.
+func startFailureText(err error) string {
+	return i18n.Tf("澜流无法启动：%s\n\n请检查数据目录是否可以读写；问题仍然存在时，请带上这段信息反馈。", err.Error())
 }
 
 func main() {

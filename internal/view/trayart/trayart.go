@@ -63,7 +63,9 @@ const (
 	waveWidth = "1.6"
 	faint     = 0.32 // opacity of an inactive wave
 	GraphBars = 8
-	graphW    = 20.8 // the graph's width in points, after a 3-point gap
+	// graphLevels is how many heights above zero a bar of the graph takes.
+	graphLevels = 10
+	graphW      = 20.8 // the graph's width in points, after a 3-point gap
 )
 
 // The waves; the top one in full, and cut short to leave room for a badge.
@@ -188,7 +190,11 @@ func Graph(up, down []int64) []float64 {
 		peak = math.Max(peak, vals[i])
 	}
 	for i, v := range vals {
-		out[i] = math.Round(math.Sqrt(v/peak)*20) / 20 // 5% steps: fewer redraws
+		// A few levels only: every different graph is an SVG rasterized
+		// and a PNG encoded for the menu bar, once a second while there
+		// is traffic. A bar is some 14 points high at most; ten steps
+		// are as fine as it shows.
+		out[i] = math.Round(math.Sqrt(v/peak)*graphLevels) / graphLevels
 	}
 	return out
 }

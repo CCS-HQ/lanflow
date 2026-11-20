@@ -534,7 +534,11 @@ func (s *Service) corePings() bool {
 		if s.rootCtx.Err() != nil {
 			return true // shutting down: nothing to restart
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-s.rootCtx.Done():
+			return true
+		case <-time.After(time.Second):
+		}
 	}
 	return false
 }
@@ -566,7 +570,10 @@ type notingSysDNS struct {
 	note func(kind string)
 }
 
-func (d notingSysDNS) Set(servers []string) error { d.note(selfDNS); return d.sysDNS.Set(servers) }
+func (d notingSysDNS) Set(saved sysdns.Saved, servers []string) error {
+	d.note(selfDNS)
+	return d.sysDNS.Set(saved, servers)
+}
 func (d notingSysDNS) Restore(saved sysdns.Saved, ours []string) error {
 	d.note(selfDNS)
 	return d.sysDNS.Restore(saved, ours)

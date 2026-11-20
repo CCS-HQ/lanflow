@@ -42,7 +42,7 @@ func newFake() *fakeExecutor {
 	return &fakeExecutor{
 		fail: map[string]error{},
 		outputs: map[string]string{
-			"networksetup -listallnetworkservices": sampleServices,
+			"/usr/sbin/networksetup -listallnetworkservices": sampleServices,
 		},
 	}
 }
@@ -62,17 +62,17 @@ func TestDarwinSetCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"networksetup -listallnetworkservices",
+		"/usr/sbin/networksetup -listallnetworkservices",
 	}
 	for _, svc := range []string{"USB 10/100/1000 LAN", "Wi-Fi", "iPhone USB"} {
 		want = append(want,
-			"networksetup -setwebproxy "+svc+" 127.0.0.1 7890",
-			"networksetup -setwebproxystate "+svc+" on",
-			"networksetup -setsecurewebproxy "+svc+" 127.0.0.1 7890",
-			"networksetup -setsecurewebproxystate "+svc+" on",
-			"networksetup -setsocksfirewallproxy "+svc+" 127.0.0.1 7890",
-			"networksetup -setsocksfirewallproxystate "+svc+" on",
-			"networksetup -setproxybypassdomains "+svc+" localhost 127.0.0.1 *.local",
+			"/usr/sbin/networksetup -setwebproxy "+svc+" 127.0.0.1 7890",
+			"/usr/sbin/networksetup -setwebproxystate "+svc+" on",
+			"/usr/sbin/networksetup -setsecurewebproxy "+svc+" 127.0.0.1 7890",
+			"/usr/sbin/networksetup -setsecurewebproxystate "+svc+" on",
+			"/usr/sbin/networksetup -setsocksfirewallproxy "+svc+" 127.0.0.1 7890",
+			"/usr/sbin/networksetup -setsocksfirewallproxystate "+svc+" on",
+			"/usr/sbin/networksetup -setproxybypassdomains "+svc+" localhost 127.0.0.1 *.local",
 		)
 	}
 	if !reflect.DeepEqual(f.calls, want) {
@@ -107,12 +107,12 @@ func TestDarwinClearCommands(t *testing.T) {
 	if err := darwinClear(context.Background(), f.run); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"networksetup -listallnetworkservices"}
+	want := []string{"/usr/sbin/networksetup -listallnetworkservices"}
 	for _, svc := range []string{"USB 10/100/1000 LAN", "Wi-Fi", "iPhone USB"} {
 		want = append(want,
-			"networksetup -setwebproxystate "+svc+" off",
-			"networksetup -setsecurewebproxystate "+svc+" off",
-			"networksetup -setsocksfirewallproxystate "+svc+" off",
+			"/usr/sbin/networksetup -setwebproxystate "+svc+" off",
+			"/usr/sbin/networksetup -setsecurewebproxystate "+svc+" off",
+			"/usr/sbin/networksetup -setsocksfirewallproxystate "+svc+" off",
 		)
 	}
 	if !reflect.DeepEqual(f.calls, want) {
@@ -127,8 +127,8 @@ func TestDarwinClearCommands(t *testing.T) {
 
 func TestDarwinSetAggregatesErrorsAndContinues(t *testing.T) {
 	f := newFake()
-	f.fail["networksetup -setwebproxystate USB 10/100/1000 LAN"] = errors.New("boom")
-	f.fail["networksetup -setsocksfirewallproxy iPhone USB"] = errors.New("nope")
+	f.fail["/usr/sbin/networksetup -setwebproxystate USB 10/100/1000 LAN"] = errors.New("boom")
+	f.fail["/usr/sbin/networksetup -setsocksfirewallproxy iPhone USB"] = errors.New("nope")
 	err := darwinSet(context.Background(), f.run, "127.0.0.1", 7890, DefaultBypass)
 	if err == nil {
 		t.Fatal("expected aggregated error")
@@ -152,7 +152,7 @@ func TestDarwinSetAggregatesErrorsAndContinues(t *testing.T) {
 
 func TestDarwinNoServices(t *testing.T) {
 	f := newFake()
-	f.outputs["networksetup -listallnetworkservices"] = "An asterisk (*) denotes that a network service is disabled.\n*Wi-Fi\n"
+	f.outputs["/usr/sbin/networksetup -listallnetworkservices"] = "An asterisk (*) denotes that a network service is disabled.\n*Wi-Fi\n"
 	err := darwinSet(context.Background(), f.run, "127.0.0.1", 7890, nil)
 	if err == nil || !strings.Contains(err.Error(), "没有已启用的网络服务") {
 		t.Fatalf("got %v", err)
@@ -164,7 +164,7 @@ func TestDarwinNoServices(t *testing.T) {
 
 func TestDarwinListFailure(t *testing.T) {
 	f := newFake()
-	f.fail["networksetup -listallnetworkservices"] = errors.New("命令 networksetup 超过 5 秒未返回")
+	f.fail["/usr/sbin/networksetup -listallnetworkservices"] = errors.New("命令 networksetup 超过 5 秒未返回")
 	err := darwinClear(context.Background(), f.run)
 	if err == nil || !strings.Contains(err.Error(), "无法列出网络服务") || !strings.Contains(err.Error(), "5 秒") {
 		t.Fatalf("got %v", err)
@@ -239,7 +239,7 @@ func TestParseScutilProxy(t *testing.T) {
 
 func TestDarwinGet(t *testing.T) {
 	f := newFake()
-	f.outputs["scutil --proxy"] = scutilEnabled
+	f.outputs["/usr/sbin/scutil --proxy"] = scutilEnabled
 	st, err := darwinGet(context.Background(), f.run)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestDarwinGet(t *testing.T) {
 	if !st.Enabled || st.Host != "127.0.0.1" || st.Port != 7890 {
 		t.Fatalf("got %+v", st)
 	}
-	if !reflect.DeepEqual(f.calls, []string{"scutil --proxy"}) {
+	if !reflect.DeepEqual(f.calls, []string{"/usr/sbin/scutil --proxy"}) {
 		t.Fatalf("calls %q", f.calls)
 	}
 }

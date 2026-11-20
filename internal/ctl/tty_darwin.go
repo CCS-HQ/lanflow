@@ -1,0 +1,14 @@
+package ctl
+
+import (
+	"os"
+
+	"golang.org/x/sys/unix"
+)
+
+// isTerminal reports whether f is a terminal (not a pipe, a file or
+// /dev/null).
+func isTerminal(f *os.File) bool {
+	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TIOCGETA)
+	return err == nil
+}

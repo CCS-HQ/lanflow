@@ -27,6 +27,10 @@ type AuditEntry struct {
 	Method string    `json:"method"`
 	Params string    `json:"params,omitempty"`
 	Result string    `json:"result"` // "ok", or the error
+	// PID and Path are the process that connected and its executable
+	// (peer.go): Client is only what the connection says it is.
+	PID  int    `json:"pid,omitempty"`
+	Path string `json:"path,omitempty"`
 }
 
 type auditLog struct {
@@ -62,12 +66,13 @@ func (a *auditLog) open() {
 }
 
 // add records a call; args are the call's parameters (redacted here).
-func (a *auditLog) add(id Identity, method string, args []reflect.Value, err error) {
-	a.addSummary(id.String(), method, summarize(method, args), err)
+func (a *auditLog) add(ss *session, method string, args []reflect.Value, err error) {
+	a.addSummary(ss, method, summarize(method, args), err)
 }
 
-func (a *auditLog) addSummary(client, method, params string, err error) {
-	e := AuditEntry{Time: time.Now(), Client: client, Method: method, Params: params, Result: "ok"}
+func (a *auditLog) addSummary(ss *session, method, params string, err error) {
+	e := AuditEntry{Time: time.Now(), Client: ss.identity().String(), Method: method, Params: params, Result: "ok"}
+	e.PID, e.Path, _ = ss.peer()
 	if err != nil {
 		e.Result = applog.Redact(err.Error())
 	}
@@ -83,8 +88,12 @@ func (a *auditLog) addSummary(client, method, params string, err error) {
 	}
 	if a.size+int64(len(b))+1 > auditMaxSize {
 		_ = a.f.Close()
-		_ = os.Rename(a.path, a.path+".1")
 		a.f, a.size = nil, 0
+		// A file that can be neither renamed nor emptied is not written
+		// to any more: it must not grow without bound.
+		if applog.Rotate(a.path) != nil {
+			return
+		}
 		a.open()
 		if a.f == nil {
 			return

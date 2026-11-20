@@ -2,14 +2,17 @@
 // lanflow.log in the log directory, rotated at 5 MB with one old file
 // kept, plus the most recent entries in memory for the 日志 page.
 //
-// Every line is redacted before it is stored: http(s) URLs keep only their
-// scheme and host (subscription links carry tokens in the path or query),
-// and token=, password=, secret= style values are masked.
+// Every line is redacted before it is stored (Redact): URLs keep only
+// their scheme and host (subscription links carry tokens in the path or
+// query), proxy share links are masked whole, and credentials (token=,
+// "password": "…", Authorization and Cookie headers) are masked.
 package applog
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"lanflow/internal/seqring"
 	"os"
 	"path/filepath"
@@ -48,8 +51,11 @@ type Logger struct {
 	// first entry), numbered for incremental reads (Since).
 	entries seqring.Ring[model.LogEntry]
 	onWrite func()
-	now     func() time.Time
-	errs    *ErrorLog // Error entries are also recorded here (errors.go)
+	// retry is when to try the file again after a rotation that could
+	// neither move nor empty it (zero: no such failure).
+	retry time.Time
+	now   func() time.Time
+	errs  *ErrorLog // Error entries are also recorded here (errors.go)
 }
 
 // Open opens (creating) dir/lanflow.log for appending. When the file cannot
@@ -143,6 +149,9 @@ func (l *Logger) add(level, msg string, record bool) {
 		now = l.now()
 	}
 	l.pushLocked(model.LogEntry{Time: now, Level: level, Payload: oneLine})
+	if l.f == nil && !l.retry.IsZero() && !now.Before(l.retry) {
+		l.rotateLocked()
+	}
 	if l.f != nil {
 		line := fmt.Sprintf("%s %-7s %s\n", now.Format("2006-01-02 15:04:05.000"), strings.ToUpper(level), oneLine)
 		if l.size > 0 && l.size+int64(len(line)) > maxSize {
@@ -171,11 +180,45 @@ func (l *Logger) pushLocked(e model.LogEntry) {
 	l.entries.Push(e)
 }
 
+// rotateRetry is how long the file is left alone after a failed rotation.
+const rotateRetry = time.Minute
+
 func (l *Logger) rotateLocked() {
-	l.f.Close()
-	l.f = nil
-	_ = os.Rename(l.path, l.path+".1")
+	if l.f != nil {
+		l.f.Close()
+		l.f = nil
+	}
+	l.retry = time.Time{}
+	// A full file that can be neither moved nor emptied (held open by
+	// another program on Windows) is not written to: the log must not
+	// grow without bound. Entries stay in memory; the file is tried again
+	// later.
+	if err := Rotate(l.path); err != nil {
+		now := time.Now()
+		if l.now != nil {
+			now = l.now()
+		}
+		l.retry = now.Add(rotateRetry)
+		return
+	}
 	_ = l.open()
+}
+
+// Rotate makes room at path: the file becomes path+".1" (replacing the
+// old one), or, when it cannot be renamed, is emptied. An error means the
+// file is still there in full and must not be appended to.
+func Rotate(path string) error {
+	old := path + ".1"
+	err := os.Rename(path, old)
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	// The old file may be what is in the way (open elsewhere, a directory).
+	_ = os.Remove(old)
+	if os.Rename(path, old) == nil {
+		return nil
+	}
+	return os.Truncate(path, 0)
 }
 
 // Entries returns the entries in memory, oldest first.
@@ -219,6 +262,7 @@ func (l *Logger) Close() error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.retry = time.Time{}
 	if l.f == nil {
 		return nil
 	}
@@ -243,28 +287,4 @@ func (w stdWriter) Write(p []byte) (int, error) {
 	}
 	w.l.add(level, msg, true)
 	return len(p), nil
-}
-
-var (
-	urlRe    = regexp.MustCompile(`(?i)\b((?:https?|wss?)://)([^/\s"'<>?#]+)([^\s"'<>]*)`)
-	secretRe = regexp.MustCompile(`(?i)\b(token|access_token|key|secret|password|passwd|pass|auth|uuid|psk|sid)(\s*[=:]\s*)("?)([^\s&"',;]+)`)
-	// sealedRe: secrets sealed with the sync passphrase (lanflow.yaml)
-	sealedRe = regexp.MustCompile(`\benc:v1:[A-Za-z0-9+/=]+`)
-)
-
-// Redact masks what must not end up in a log or a bug report.
-func Redact(s string) string {
-	s = urlRe.ReplaceAllStringFunc(s, func(m string) string {
-		sub := urlRe.FindStringSubmatch(m)
-		host := sub[2]
-		if i := strings.LastIndex(host, "@"); i >= 0 { // user:pass@host
-			host = "***@" + host[i+1:]
-		}
-		if sub[3] == "" || sub[3] == "/" {
-			return sub[1] + host + sub[3]
-		}
-		return sub[1] + host + "/***"
-	})
-	s = sealedRe.ReplaceAllString(s, "enc:v1:***")
-	return secretRe.ReplaceAllString(s, "$1$2$3***")
 }

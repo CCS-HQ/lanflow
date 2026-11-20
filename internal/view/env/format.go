@@ -119,7 +119,7 @@ func FmtAgo(t time.Time) string {
 		return i18n.Tf("%d 分钟前", int(d.Minutes()))
 	case t.YearDay() == now.YearDay() && t.Year() == now.Year():
 		return i18n.Tf("今天 %s", t.Format("15:04"))
-	case t.Year() == now.Year() && now.YearDay()-t.YearDay() == 1:
+	case sameDay(t, now.AddDate(0, 0, -1)):
 		return i18n.T("昨天")
 	default:
 		return FmtDate(t)
@@ -155,4 +155,12 @@ func TargetName(t string) string {
 		return i18n.T("拒绝")
 	}
 	return t
+}
+
+// sameDay reports whether a and b fall on the same calendar day, so that
+// "yesterday" also holds across a year boundary.
+func sameDay(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
 }

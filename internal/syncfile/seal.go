@@ -36,6 +36,8 @@ import (
 const (
 	// SealedPrefix starts a secret sealed with the sync passphrase.
 	SealedPrefix = "enc:v1:"
+	// sealedScheme starts a sealed value of any version (Foreign).
+	sealedScheme = "enc:"
 	// KDFArgon2id is the only key derivation this version writes and reads.
 	KDFArgon2id = "argon2id"
 	// WebDAVPasswordPath is the sealed WebDAV password's field path.

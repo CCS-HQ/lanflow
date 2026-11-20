@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"lanflow/internal/fsx"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 )
@@ -139,13 +140,12 @@ func (s *Service) installVersion(channel, version string) error {
 		cleanup()
 		return fmt.Errorf(i18n.T("无法安装内核文件：%v"), err)
 	}
-	if err := os.Remove(final); err != nil && !os.IsNotExist(err) {
+	// fsx.Rename replaces final in one step (no window without a binary
+	// when the app dies in between) and waits out a virus scanner that
+	// still holds the file it just saw run.
+	if err := fsx.Rename(fresh, final); err != nil {
 		cleanup()
 		return fmt.Errorf(i18n.T("无法替换现有内核文件：%v"), err)
-	}
-	if err := os.Rename(fresh, final); err != nil {
-		cleanup()
-		return fmt.Errorf(i18n.T("无法安装内核文件：%v"), err)
 	}
 	meta := coreMeta{Version: version, Channel: channel, SHA256: sum, InstalledAt: s.d.now(), Source: src}
 	if err := writeCoreMeta(dir, meta); err != nil {

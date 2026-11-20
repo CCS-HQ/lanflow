@@ -47,9 +47,19 @@ func Start(t testing.TB, prompt rpc.PromptFunc) *Server {
 	return s
 }
 
-// Dial connects as client.
+// Dial connects as client; "ctl" as a person at a terminal runs it.
 func (s *Server) Dial(client string, reveal bool) (*remote.Client, error) {
-	c, err := remote.Dial(context.Background(), remote.Options{DataDir: s.Dir, Client: client, Version: "test", Reveal: reveal})
+	return s.dial(rpc.WithInteractive(context.Background()), client, reveal)
+}
+
+// DialScript connects as `lanflow ctl` run by a script or an agent (no
+// terminal): its writes ask the user.
+func (s *Server) DialScript() (*remote.Client, error) {
+	return s.dial(context.Background(), rpc.KindCtl, false)
+}
+
+func (s *Server) dial(ctx context.Context, client string, reveal bool) (*remote.Client, error) {
+	c, err := remote.Dial(ctx, remote.Options{DataDir: s.Dir, Client: client, Version: "test", Reveal: reveal})
 	if err != nil {
 		return nil, err
 	}

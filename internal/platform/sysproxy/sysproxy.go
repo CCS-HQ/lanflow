@@ -47,3 +47,10 @@ func Restore(s Saved) error { return restore(s) }
 
 // DefaultBypass is the default bypass list.
 var DefaultBypass = []string{"localhost", "127.0.0.1", "::1", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "*.local", "*.lan", "<local>"}
+
+// AuthenticatedServices names the network services in s whose proxy had a
+// login (macOS "Authenticated Proxy Enabled") when the snapshot was taken.
+// Restore puts their server and port back but cannot put back the login:
+// the caller should tell the user to enter it again in System Settings.
+// Always empty on other systems.
+func AuthenticatedServices(s Saved) []string { return darwinAuthServices(s) }

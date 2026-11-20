@@ -48,7 +48,13 @@ func programData() string {
 
 // Install copies the helper and core into InstallDir, records the config
 // and registers/starts the LanflowHelper service. Must run elevated.
-func Install(ctx context.Context, o InstallOptions, logf Logf) error {
+//
+// Every file is prepared under a temporary name in InstallDir first (the
+// core copy is checked against o.CoreSHA256 there); only then is the
+// running service stopped and the files moved into place. A failure before
+// that changes nothing; a failure after it puts the previous files back
+// and starts the previous service again.
+func Install(ctx context.Context, o InstallOptions, logf Logf) (err error) {
 	if err := o.check(); err != nil {
 		return err
 	}
@@ -72,38 +78,73 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) error {
 	}
 	defer m.Disconnect()
 
+	if err := os.MkdirAll(InstallDir, 0o755); err != nil {
+		return err
+	}
+	if err := PrepareLogDir(); err != nil {
+		return err
+	}
+	var files fileSwap
+	defer func() {
+		if err != nil {
+			files.rollback()
+		}
+	}()
+	if !samePath(self, HelperBin) {
+		logf("copy %s -> %s", self, HelperBin)
+		tmp, _, err := stageFile(self, InstallDir, 0o755, "")
+		if err != nil {
+			return fmt.Errorf("复制权限组件失败: %w", err)
+		}
+		files.add(tmp, HelperBin)
+	}
+	src := filepath.Clean(o.CoreBin)
+	logf("copy %s -> %s (sha256 %s)", src, CoreBin, o.CoreSHA256)
+	tmp, sum, err := stageFile(src, InstallDir, 0o755, o.CoreSHA256)
+	if err != nil {
+		return fmt.Errorf("复制 Mihomo 内核失败: %w", err)
+	}
+	files.add(tmp, CoreBin)
+	cfg, err := encodeConfig(Config{Version: ConfigVersion, Core: CoreBin, CoreSource: src, SHA256: sum, DataDir: dataDir, UID: o.UID, HelperVersion: o.Version})
+	if err != nil {
+		return fmt.Errorf("写入配置失败: %w", err)
+	}
+	if tmp, err = stageBytes(InstallDir, cfg, 0o644); err != nil {
+		return fmt.Errorf("写入配置失败: %w", err)
+	}
+	files.add(tmp, ConfigPath)
+
+	// Everything is ready: stop the previous service and switch.
 	s, err := m.OpenService(ServiceName)
+	wasRunning := false
 	if err == nil {
+		if st, qerr := s.Query(); qerr == nil && st.State != svc.Stopped {
+			wasRunning = true
+		}
 		logf("stopping existing service")
 		if err := stopService(ctx, s); err != nil {
 			s.Close()
 			return err
 		}
+	} else {
+		s = nil
 	}
-
-	if err := os.MkdirAll(InstallDir, 0o755); err != nil {
-		return err
-	}
-	if !samePath(self, HelperBin) {
-		logf("copy %s -> %s", self, HelperBin)
-		if err := copyFile(self, HelperBin, 0o755); err != nil {
-			return fmt.Errorf("复制权限组件失败: %w", err)
+	restore := func() {
+		files.rollback()
+		if s != nil && wasRunning {
+			if rerr := s.Start(); rerr != nil {
+				logf("restore the previous helper: %v", rerr)
+			} else {
+				logf("the previous helper runs again")
+			}
 		}
 	}
-	logf("copy %s -> %s", o.CoreBin, CoreBin)
-	if err := copyFile(o.CoreBin, CoreBin, 0o755); err != nil {
-		return fmt.Errorf("复制 Mihomo 内核失败: %w", err)
-	}
-	sum, err := FileSHA256(CoreBin)
-	if err != nil {
-		return err
-	}
-	cfg := Config{Version: ConfigVersion, Core: CoreBin, CoreSource: filepath.Clean(o.CoreBin), SHA256: sum, DataDir: dataDir, UID: o.UID, HelperVersion: o.Version}
-	if err := SaveConfig(ConfigPath, cfg, 0o644); err != nil {
-		return fmt.Errorf("写入配置失败: %w", err)
-	}
-	if err := PrepareLogDir(); err != nil {
-		return err
+	if err := files.commit(); err != nil {
+		restore()
+		if s != nil {
+			s.Close()
+		}
+		return fmt.Errorf("替换权限组件文件失败: %w", err)
 	}
 
 	conf := mgr.Config{
@@ -115,11 +156,14 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) error {
 	if s == nil {
 		s, err = m.CreateService(ServiceName, HelperBin, conf, "run")
 		if err != nil {
+			s = nil
+			restore()
 			return fmt.Errorf("注册服务失败: %w", err)
 		}
 	} else {
 		conf.BinaryPathName = windows.ComposeCommandLine([]string{HelperBin, "run"})
 		if err := s.UpdateConfig(conf); err != nil {
+			restore()
 			s.Close()
 			return fmt.Errorf("更新服务配置失败: %w", err)
 		}
@@ -131,8 +175,10 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) error {
 		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
 	}, 86400)
 	if err := s.Start(); err != nil {
+		restore()
 		return fmt.Errorf("启动服务失败: %w", err)
 	}
+	files.finish()
 	logf("service started")
 	return nil
 }
@@ -223,6 +269,12 @@ func Run(ctx context.Context, version string, logf Logf) error {
 }
 
 func serve(ctx context.Context, version string, logf Logf) error {
+	return serveReady(ctx, version, logf, nil)
+}
+
+// serveReady is serve; ready is closed once the pipe listens (nil = not
+// wanted), so the SCM is told "running" only when clients can connect.
+func serveReady(ctx context.Context, version string, logf Logf, ready chan<- struct{}) error {
 	cfg, err := LoadConfig(ConfigPath)
 	if err != nil {
 		return err
@@ -232,6 +284,9 @@ func serve(ctx context.Context, version string, logf Logf) error {
 	l, err := Listen(cfg.UID)
 	if err != nil {
 		return fmt.Errorf("监听 %s 失败: %w", protocol.PipeName, err)
+	}
+	if ready != nil {
+		close(ready)
 	}
 	srv := &protocol.Server{Handler: NewHandler(sup, version), Logf: logf}
 	logf("lanflow-helper %s listening on %s for %s", version, protocol.PipeName, cfg.UID)
@@ -249,7 +304,19 @@ func (h *handler) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 	changes <- svc.Status{State: svc.StartPending}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, h.version, h.logf) }()
+	ready := make(chan struct{})
+	go func() { done <- serveReady(ctx, h.version, h.logf, ready) }()
+	// Running is reported once the pipe listens: a helper that cannot load
+	// its config or listen ends as a failed start instead of a service
+	// that looks started.
+	select {
+	case <-ready:
+	case err := <-done:
+		cancel()
+		h.logf("serve: %v", err)
+		changes <- svc.Status{State: svc.Stopped}
+		return true, 1
+	}
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	for {
 		select {

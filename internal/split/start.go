@@ -86,6 +86,9 @@ type ConnectOptions struct {
 // version, or LANFLOW_SINGLE) and showed its own window.
 var ErrNotSplit = errors.New("澜流以单进程方式运行，已显示它自己的窗口")
 
+// dial is remote.Dial; tests replace it.
+var dial = remote.Dial
+
 // Connect connects the window process to the service, starting the
 // service first when it is not running, and attaches as the window. The
 // result says Forwarded when another window process exists and was asked
@@ -108,14 +111,14 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 				return err
 			},
 		}}
-	c, err := remote.Dial(ctx, ro)
+	c, err := dial(ctx, ro)
 	if errors.Is(err, rpc.ErrNotRunning) && o.Start != nil {
 		if err := o.Start(); err != nil {
 			return nil, rpc.AttachResult{}, fmt.Errorf("无法启动澜流后台服务: %w", err)
 		}
 		deadline := time.Now().Add(o.Wait)
 		for {
-			c, err = remote.Dial(ctx, ro)
+			c, err = dial(ctx, ro)
 			if err == nil || !errors.Is(err, rpc.ErrNotRunning) || time.Now().After(deadline) {
 				break
 			}
@@ -126,12 +129,16 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 			}
 		}
 	}
-	if pid, ok := protocolMismatch(err); ok && o.Start != nil {
+	if pid, ok := protocolMismatch(err); ok && o.Start != nil && !o.replaced {
 		// A service of another protocol version (an update replaced the
-		// app while it ran): end it and start ours.
+		// app while it ran): end it and start ours, once. Should the one
+		// started here not match either (the executable on disk is not
+		// the version of this window), the handshake error is returned
+		// instead of ending and starting services for ever.
 		if err := o.replace(pid, nil); err != nil {
 			return nil, rpc.AttachResult{}, err
 		}
+		o.replaced = true
 		return Connect(ctx, o)
 	}
 	if err != nil {

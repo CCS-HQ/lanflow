@@ -4,8 +4,11 @@
 package conns
 
 import (
-	"sort"
+	"cmp"
+	"net/netip"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -13,6 +16,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/colwidth"
 	"lanflow/internal/view/env"
 	"lanflow/internal/view/procicon"
 	"lanflow/internal/view/rules/ruleform"
@@ -27,11 +31,26 @@ type Page struct {
 	query  string
 	search ui.Handle // the search field, focused by ⌘F
 	paused bool
-	// frozen are the lists shown while paused, each taken when first
-	// needed after the pause.
+	// pausedFlag mirrors paused for Wants (any goroutine).
+	pausedFlag atomic.Bool
+	// frozen are the lists held: each is read when first needed after the
+	// connections changed (data), and kept as it is while paused. gen
+	// counts the reads, for what is derived from them (sorted).
 	frozen struct {
 		active, closed       []model.Connection
 		hasActive, hasClosed bool
+	}
+	data *env.Stale
+	gen  uint64
+	// sorted are the rows of the list view, filtered and in order, for
+	// the lists, tab, query and order they were made for.
+	sorted struct {
+		ok    bool
+		gen   uint64
+		tab   int
+		query string
+		sort  ui.SortOrder
+		rows  []model.Connection
 	}
 	tab      int // 0 活动, 1 已关闭
 	view     int // 0 列表, 1 拓扑 (topology.go)
@@ -64,7 +83,7 @@ type Page struct {
 // New returns the page.
 func New(e *env.Env) *Page {
 	p := &Page{e: e, selected: -1, hoverRow: -1, sort: ui.SortOrder{Column: "down", Descending: true}, icons: procicon.New(e.API),
-		colsStale: env.Watch(e.API, app.TopicSettings)}
+		colsStale: env.Watch(e.API, app.TopicSettings), data: env.Watch(e.API, app.TopicConns, app.TopicStatus)}
 	p.topo.icons = p.icons
 	p.list.Sort = &p.sort
 	p.list.Selected = &p.selected
@@ -87,9 +106,10 @@ var allColumns = []ui.TableColumn{
 	{Title: "", ID: "close", Width: 30, Fixed: true},
 }
 
-// visibleColumns returns allColumns without the hidden ones, read again
+// visibleColumns returns allColumns without the hidden ones, each wide
+// enough for its title in the language shown (colwidth.Fit); read again
 // only after a change of the settings or of the language.
-func (p *Page) visibleColumns() []ui.TableColumn {
+func (p *Page) visibleColumns(c *ui.Context) []ui.TableColumn {
 	stale := p.colsStale.Take()
 	if !stale && p.cols != nil && p.colsLang == i18n.Lang() {
 		return p.cols
@@ -107,7 +127,7 @@ func (p *Page) visibleColumns() []ui.TableColumn {
 			cols = append(cols, col)
 		}
 	}
-	return cols
+	return colwidth.Fit(c, cols)
 }
 
 // headerMenu is the header's context menu: a check item per column.
@@ -164,7 +184,7 @@ func (p *Page) View(c *ui.Context) {
 
 	subtitle := ""
 	if running {
-		subtitle = i18n.Tf("%d 个活动连接", nActive)
+		subtitle = i18n.Tn(nActive, "%d 个活动连接", nActive)
 	}
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("连接"), subtitle, func() { p.tools(c, running, nActive) })
@@ -190,19 +210,24 @@ func (p *Page) lists(st model.Status) (active, closed []model.Connection, nActiv
 	e := p.e
 	needActive := p.view == 1 || p.tab == 0
 	needClosed := (p.view == 1 && p.topo.withClosed) || (p.view != 1 && p.tab == 1)
-	if !p.paused {
+	p.pausedFlag.Store(p.paused)
+	// The lists change with TopicConns only: a build for anything else
+	// (typing, the pointer, a scroll) shows the ones held.
+	if !p.paused && p.data.Take() {
 		p.frozen.active, p.frozen.closed = nil, nil
 		p.frozen.hasActive, p.frozen.hasClosed = false, false
 	}
 	if needActive {
-		if !p.paused || !p.frozen.hasActive {
+		if !p.frozen.hasActive {
 			p.frozen.active, p.frozen.hasActive = e.API.Connections(), true
+			p.gen++
 		}
 		active = p.frozen.active
 	}
 	if needClosed {
-		if !p.paused || !p.frozen.hasClosed {
+		if !p.frozen.hasClosed {
 			p.frozen.closed, p.frozen.hasClosed = e.API.ClosedConnections(), true
+			p.gen++
 		}
 		closed = p.frozen.closed
 	}
@@ -249,7 +274,7 @@ func (p *Page) tools(c *ui.Context, running bool, n int) {
 	}
 	ui.Segmented(c.Key("view"), &p.view, i18n.T("列表"), i18n.T("拓扑")).Label(i18n.T("连接视图"))
 	ui.Button(c, i18n.T("全部断开")).Disabled(!running || n == 0).OnClick(func() {
-		e.Confirm(i18n.Tf("断开全部 %d 个连接？", n), i18n.T("应用会自动重新建立需要的连接。"), i18n.T("断开"), false, func() {
+		e.Confirm(i18n.Tn(n, "断开全部 %d 个连接？", n), i18n.T("应用会自动重新建立需要的连接。"), i18n.T("断开"), false, func() {
 			p.sel = ""
 			e.Run(e.API.CloseAllConnections, i18n.T("已断开全部连接"))
 		})
@@ -261,8 +286,7 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, active, closed []model.Connectio
 	if p.tab == 1 {
 		src = closed
 	}
-	rows := p.filter(src)
-	sortRows(rows, p.sort)
+	rows := p.rows(src)
 	if len(rows) == 0 {
 		switch {
 		case strings.TrimSpace(p.query) != "":
@@ -285,7 +309,7 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, active, closed []model.Connectio
 	p.list.Key = func(i int) any { return rows[i].ID }
 	p.list.Label = func(i int) string { return rows[i].Host }
 	p.list.CellMenu = func(m *ui.Menu, row, col int) { p.rowMenu(c, m, rows[row], p.tab == 0) }
-	p.cols = p.visibleColumns()
+	p.cols = p.visibleColumns(c)
 	ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
 		ui.Table(c.Key("table"), &p.list, p.cols, len(rows), func(row, col int) {
 			p.cell(c, t, rows[row], row, p.cols[col].ID)
@@ -499,6 +523,20 @@ func (p *Page) defaultTarget(cn model.Connection) string {
 
 // ---- helpers ----
 
+// rows returns src filtered by the search and in the table's order. The
+// result is kept until the lists, the tab, the search or the order
+// change, so a build for anything else does not filter and sort again.
+func (p *Page) rows(src []model.Connection) []model.Connection {
+	sc := &p.sorted
+	q := strings.ToLower(strings.TrimSpace(p.query))
+	if sc.ok && sc.gen == p.gen && sc.tab == p.tab && sc.query == q && sc.sort == p.sort {
+		return sc.rows
+	}
+	rows := sortRows(p.filter(src), p.sort)
+	sc.ok, sc.gen, sc.tab, sc.query, sc.sort, sc.rows = true, p.gen, p.tab, q, p.sort, rows
+	return rows
+}
+
 func (p *Page) filter(src []model.Connection) []model.Connection {
 	q := strings.ToLower(strings.TrimSpace(p.query))
 	out := make([]model.Connection, 0, len(src))
@@ -549,40 +587,55 @@ func haystack(cn model.Connection) string {
 	return cn.Host + " " + cn.Process + " " + ruleName(cn) + " " + cn.RulePayload + " " + chain(cn) + " " + cn.DstIP + " " + src
 }
 
-func sortRows(rows []model.Connection, s ui.SortOrder) {
-	less := func(a, b model.Connection) bool {
+// sortRows returns rows in the order s asks for, newest first among
+// equals. Each row's key is taken once, not per comparison (the rule's
+// name and the chain are built strings), and the rows are moved once.
+func sortRows(rows []model.Connection, s ui.SortOrder) []model.Connection {
+	type key struct {
+		i     int
+		text  string
+		num   int64
+		start time.Time
+	}
+	now := time.Now()
+	keys := make([]key, len(rows))
+	for i := range rows {
+		cn := &rows[i]
+		k := key{i: i, start: cn.Start}
 		switch s.Column {
 		case "host":
-			return a.Host < b.Host
+			k.text = cn.Host
 		case "process":
-			return a.Process < b.Process
+			k.text = cn.Process
 		case "rule":
-			return ruleName(a) < ruleName(b)
+			k.text = ruleName(*cn)
 		case "chain":
-			return chain(a) < chain(b)
+			k.text = chain(*cn)
 		case "up":
-			return a.UpSpeed < b.UpSpeed
+			k.num = cn.UpSpeed
 		case "total":
-			return a.Download < b.Download
+			k.num = cn.Download
 		case "dur":
-			return duration(a) < duration(b)
+			// One clock reading for all rows, so that two connections
+			// started together compare equal.
+			k.num = int64(durationAt(*cn, now))
 		default: // "down"
-			return a.DownSpeed < b.DownSpeed
+			k.num = cn.DownSpeed
 		}
+		keys[i] = k
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
+	slices.SortStableFunc(keys, func(a, b key) int {
+		d := cmp.Or(cmp.Compare(a.text, b.text), cmp.Compare(a.num, b.num))
 		if s.Descending {
-			a, b = b, a
+			d = -d
 		}
-		if less(a, b) {
-			return true
-		}
-		if less(b, a) {
-			return false
-		}
-		return rows[i].Start.After(rows[j].Start) // newest first on ties
+		return cmp.Or(d, b.start.Compare(a.start)) // newest first on ties
 	})
+	out := make([]model.Connection, len(rows))
+	for i, k := range keys {
+		out[i] = rows[k.i]
+	}
+	return out
 }
 
 func find(rows []model.Connection, id string) (model.Connection, bool) {
@@ -594,8 +647,11 @@ func find(rows []model.Connection, id string) (model.Connection, bool) {
 	return model.Connection{}, false
 }
 
-func duration(cn model.Connection) time.Duration {
-	end := time.Now()
+func duration(cn model.Connection) time.Duration { return durationAt(cn, time.Now()) }
+
+// durationAt is how long cn has lasted at now, or lasted if it is closed.
+func durationAt(cn model.Connection, now time.Time) time.Duration {
+	end := now
 	if !cn.ClosedAt.IsZero() {
 		end = cn.ClosedAt
 	}
@@ -645,19 +701,24 @@ func hostOnly(h string) string {
 	return h
 }
 
+// isIP reports whether h, a host without its port, is an IP address
+// (bracketed or not) rather than a name: "db.de" and "cafe.be" are names.
 func isIP(h string) bool {
-	for _, r := range h {
-		if !(r >= '0' && r <= '9') && r != '.' && r != ':' && !(r >= 'a' && r <= 'f') && !(r >= 'A' && r <= 'F') {
-			return false
-		}
-	}
-	return strings.ContainsAny(h, ".:")
+	_, err := netip.ParseAddr(strings.Trim(h, "[]"))
+	return err == nil
 }
 
 // Topics are the service topics this page's view reads; the shell
 // rebuilds it only for these (and its own).
 func (p *Page) Topics() []app.Topic {
 	return []app.Topic{app.TopicStatus, app.TopicConns, app.TopicProxies, app.TopicSettings, app.TopicProcIcons}
+}
+
+// Wants drops the connection stream while the page is paused: it shows
+// the lists it holds, so there is nothing to redraw for (the shell's
+// topic gate).
+func (p *Page) Wants(t app.Topic) bool {
+	return t != app.TopicConns || !p.pausedFlag.Load()
 }
 
 // processTip is the 进程 cell's tooltip: the name with the full path.

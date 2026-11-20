@@ -9,7 +9,7 @@ func init() {
 		"暂无日志":        "No Logs Yet",
 		"没有匹配“%s”的日志": "No log lines match “%s”",
 		"回到底部":        "Back to Bottom",
-		"（有新日志）":      " (new lines)",
+		"回到底部（有新日志）":  "Back to Bottom (new lines)",
 		"搜索日志":        "Search logs",
 		"级别":          "Level",
 		"清空":          "Clear",

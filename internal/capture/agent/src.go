@@ -69,7 +69,7 @@ func (s *sourceCheck) snapshot(maxAge time.Duration) controller.Connections {
 	wg.Add(1)
 	s.fetch = wg
 	s.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), srcFetchTimeout)
 	c, err := s.ctrl.Connections(ctx)
 	cancel()
 	s.mu.Lock()
@@ -83,21 +83,36 @@ func (s *sourceCheck) snapshot(maxAge time.Duration) controller.Connections {
 	return c
 }
 
+// The source check costs every selected connection a look at the core's
+// whole connection list, so the looks are shared and bounded: a first look
+// may use a list up to srcFirstAge old (connections arriving together
+// share one), a retry only one fetched after the wait before it
+// (srcRetryAge is under the shortest wait), and a core that does not
+// answer costs a connection srcBudget at most before it is passed through
+// as "source not confirmed".
+const (
+	srcFirstAge     = 50 * time.Millisecond
+	srcRetryAge     = 25 * time.Millisecond
+	srcRetryWait    = 30 * time.Millisecond // then 60, 90
+	srcFetchTimeout = time.Second
+	srcBudget       = time.Second
+)
+
 func (s *sourceCheck) find(outbound, host string, port int) srcResult {
 	start := time.Now()
 	for i := 0; ; i++ {
-		// the first look may be cached a few milliseconds; then fresh
-		age := 0 * time.Millisecond
+		age := srcRetryAge
 		if i == 0 {
-			age = 20 * time.Millisecond
+			age = srcFirstAge
 		}
 		if r, ok := s.match(s.snapshot(age), outbound, host, port, start); ok {
 			return r
 		}
-		if i >= 3 {
+		wait := time.Duration(i+1) * srcRetryWait
+		if i >= 3 || time.Since(start)+wait > srcBudget {
 			return srcResult{}
 		}
-		time.Sleep(time.Duration(30*(i+1)) * time.Millisecond)
+		time.Sleep(wait)
 	}
 }
 

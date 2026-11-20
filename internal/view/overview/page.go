@@ -5,6 +5,7 @@ package overview
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -41,16 +42,11 @@ type Page struct {
 // New returns the page.
 func New(e *env.Env) *Page { return &Page{e: e, flows: map[string]*flow{}} }
 
-// ProxyCommand is the shell command that points a terminal at the proxy.
-func ProxyCommand(port int, mac bool) string {
-	if port <= 0 {
-		port = 7890
-	}
-	if !mac {
-		return fmt.Sprintf(`$env:HTTPS_PROXY="http://127.0.0.1:%d"; $env:HTTP_PROXY="http://127.0.0.1:%d"; $env:ALL_PROXY="socks5://127.0.0.1:%d"`, port, port, port)
-	}
-	return fmt.Sprintf("export https_proxy=http://127.0.0.1:%d http_proxy=http://127.0.0.1:%d all_proxy=socks5://127.0.0.1:%d", port, port, port)
-}
+// ProxyCommand is the shell command that points a terminal at the proxy,
+// for the usual shell of the system goos names (a runtime.GOOS value):
+// PowerShell on Windows, bash/zsh on macOS and Linux. It is one of the
+// variants the tray's submenu offers (env.ShellCommands).
+func ProxyCommand(port int, goos string) string { return env.ShellCommandFor(port, goos).Cmd }
 
 // View draws the whole content area including the header.
 func (p *Page) View(c *ui.Context) {
@@ -378,9 +374,15 @@ func (p *Page) pickCore() {
 	if err != nil || len(paths) == 0 {
 		return
 	}
-	s := p.e.API.Settings()
-	s.CorePath = paths[0]
-	p.e.Run(func() error { return p.e.API.SaveSettings(s) }, i18n.T("已选择内核文件"))
+	// Settings are saved whole: read them in the job, right before the
+	// write, not before the dialog (which stays open as long as the user
+	// likes while other changes are saved).
+	p.e.Run(func() error {
+		s := p.e.API.Settings()
+		s.CorePath = paths[0]
+		s.CoreVersion = "" // a hand-picked file is not one of the installed versions
+		return p.e.API.SaveSettings(s)
+	}, i18n.T("已选择内核文件"))
 }
 
 // ---- cards ----
@@ -593,7 +595,11 @@ func speedChart(c *ui.Context, up, down []int64, run bool) {
 // terminalRow shows the shell command with a copy button.
 func (p *Page) terminalRow(c *ui.Context, st model.Status) {
 	t := c.Theme()
-	cmd := ProxyCommand(st.MixedPort, p.e.Mac)
+	goos := runtime.GOOS
+	if p.e.Mac {
+		goos = "darwin"
+	}
+	cmd := ProxyCommand(st.MixedPort, goos)
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
 		ui.Text(c, i18n.T("终端代理")).FontSize(12).TextColor(t.TextMuted).Shrink(0)
 		ui.Text(c, cmd).Font("monospace").FontSize(11).SingleLine().Grow(1).Shrink(1).Basis(0).Padding(4, 8).Radius(6).

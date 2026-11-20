@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,8 +24,31 @@ import (
 //
 // The system proxy then follows the port, bypass list and PAC mode
 // (followSystemProxy). A failed apply restores the previous settings.
+//
+// SaveSettings is the path of settings made on this machine (the UI, ctl,
+// an agent); settings read from a sync file or an imported file go
+// through saveSettingsFrom(in, true).
 func (s *Service) SaveSettings(in model.Settings) error {
+	return s.saveSettingsFrom(in, false)
+}
+
+// settingsWarning is an error of SaveSettings that came after the
+// settings were stored and applied to the core: they are in force, and
+// only a follow-up step (the system proxy) failed. Callers that undo
+// their own work when the settings were refused must not do so for it.
+type settingsWarning struct{ err error }
+
+func (w *settingsWarning) Error() string { return w.err.Error() }
+func (w *settingsWarning) Unwrap() error { return w.err }
+
+// saveSettingsFrom is SaveSettings; remote marks settings that were not
+// made on this machine. A WebDAV server such settings bring is not
+// confirmed for automatic backups (backup.go, confirmWebDAVOrigin).
+func (s *Service) saveSettingsFrom(in model.Settings, remote bool) error {
 	in = normalizeSettings(in)
+	if remote {
+		s.adoptWebDAVOrigin() // record what was here before it changes
+	}
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 
@@ -44,6 +68,9 @@ func (s *Service) SaveSettings(in model.Settings) error {
 	if ch := changedSettings(old, in); len(ch) > 0 {
 		s.alog.Infof("settings changed: %s", strings.Join(ch, ", "))
 	}
+	if !remote && webdavOrigin(in.WebDAV.URL) != webdavOrigin(old.WebDAV.URL) {
+		s.setWebDAVOrigin(webdavOrigin(in.WebDAV.URL)) // the user set this server here
+	}
 	if in.CorePath != old.CorePath {
 		s.mu.Lock()
 		s.resolveBinaryLocked()
@@ -62,7 +89,8 @@ func (s *Service) SaveSettings(in model.Settings) error {
 	}
 
 	needRestart := (in.CorePath != old.CorePath || in.TUN != old.TUN) && s.running()
-	needReload := needsReload(old, in) || coexistChanged || advancedNeedsReload(old.Advanced, in.Advanced)
+	needReload := needsReload(old, in) || coexistChanged || advancedNeedsReload(old.Advanced, in.Advanced) ||
+		(in.AllowLAN != old.AllowLAN && s.subscriptionListens(in.DNS.TakeOver))
 	var err error
 	switch {
 	case needRestart:
@@ -83,6 +111,37 @@ func (s *Service) SaveSettings(in model.Settings) error {
 	}
 	return nil
 }
+
+// subscriptionListens reports whether the current subscription brings
+// listeners of its own (listeners, tunnels, and dns.listen unless Lanflow
+// writes the dns section). Composition confines those to this machine
+// while 允许局域网 is off (profile/lan.go), and PATCH /configs only moves
+// the main inbound ports: with such a subscription the switch needs a
+// reload to take effect either way. The test reads keys off the raw text
+// (a line that starts with one), so the word in a node's name does not
+// count; text in flow style, where keys start no line, counts as a yes.
+func (s *Service) subscriptionListens(dnsTakenOver bool) bool {
+	cur, ok := s.d.store.Current()
+	if !ok {
+		return false
+	}
+	data, err := s.d.store.Content(cur.ID)
+	if err != nil {
+		return false
+	}
+	if t := bytes.TrimSpace(data); len(t) > 0 && t[0] == '{' {
+		return true
+	}
+	if subListenersRe.Match(data) {
+		return true
+	}
+	return !dnsTakenOver && subDNSListenRe.Match(data)
+}
+
+var (
+	subListenersRe = regexp.MustCompile(`(?m)^(?:listeners|tunnels)[ \t]*:`)
+	subDNSListenRe = regexp.MustCompile(`(?m)^[ \t]+listen[ \t]*:`)
+)
 
 // checkSettingsChange refuses changes that cannot work: TUN without the
 // helper or beside another client's TUN, and ports another program holds
@@ -202,7 +261,7 @@ func (s *Service) followSystemProxy(old, in model.Settings, ours, coexistChanged
 		return nil
 	}
 	fail := func(err error) error {
-		return fmt.Errorf(i18n.T("设置已保存，但更新系统代理失败：%v"), err)
+		return &settingsWarning{fmt.Errorf(i18n.T("设置已保存，但更新系统代理失败：%v"), err)}
 	}
 	switch {
 	case pacChanged(old.Advanced, in.Advanced):

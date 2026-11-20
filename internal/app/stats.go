@@ -72,6 +72,11 @@ type statsStore struct {
 	hist    map[string]*statsAgg // by rangeKey
 	keyBuf  [8]statsKey          // keysOf's result, reused (mu held)
 
+	// logf reports a failing flush (flushLogged); nil = not reported.
+	// flushErr is the last flush's error text, "" when it succeeded.
+	logf     func(format string, args ...any)
+	flushErr string
+
 	// flushMu serializes flush and reset, so a reset cannot slip in
 	// between a flush's snapshot and its writes (which would bring the
 	// erased data back).
@@ -497,19 +502,45 @@ func copyStats(st model.TrafficStats) model.TrafficStats {
 }
 
 // loop flushes dirty days every minute and once more when ctx ends
-// (Shutdown cancels the root context before waiting for the goroutines).
+// (Shutdown cancels the root context before waiting for the goroutines,
+// and flushes again itself once the connection stream has stopped).
 func (s *statsStore) loop(ctx context.Context) {
 	t := time.NewTicker(statsFlushInterval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			_ = s.flush()
+			_ = s.flushLogged()
 			return
 		case <-t.C:
-			_ = s.flush()
+			_ = s.flushLogged()
 		}
 	}
+}
+
+// flushLogged is flush whose failure is reported through logf: the data
+// stays in memory and is retried at the next flush, but a full disk or a
+// permission problem must not go unnoticed. The same error repeating every
+// minute is reported once, and so is the flush that works again.
+func (s *statsStore) flushLogged() error {
+	err := s.flush()
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	s.mu.Lock()
+	changed := msg != s.flushErr
+	s.flushErr = msg
+	logf := s.logf
+	s.mu.Unlock()
+	if changed && logf != nil {
+		if err != nil {
+			logf("traffic statistics: writing to disk failed, the data is kept in memory and retried: %v", err)
+		} else {
+			logf("traffic statistics: writing to disk works again")
+		}
+	}
+	return err
 }
 
 // ---- Service ----

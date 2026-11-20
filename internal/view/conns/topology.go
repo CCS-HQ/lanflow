@@ -365,20 +365,20 @@ func (tp *topology) draw(pt *ui.Painter, r ui.Rect, t *ui.Theme, g *Graph, nodeW
 // topoSub is the second line of a node: its connections and traffic.
 func topoSub(n Node, byTotal bool) string {
 	if byTotal {
-		return i18n.Tf("%d 个连接 · %s", n.Count, env.FmtBytes(n.Upload+n.Download))
+		return i18n.Tn(n.Count, "%d 个连接 · %s", n.Count, env.FmtBytes(n.Upload+n.Download))
 	}
-	return i18n.Tf("%d 个连接 · %s", n.Count, env.FmtSpeed(n.UpSpeed+n.DownSpeed))
+	return i18n.Tn(n.Count, "%d 个连接 · %s", n.Count, env.FmtSpeed(n.UpSpeed+n.DownSpeed))
 }
 
 // topoStats is the tooltip's figures.
 func topoStats(count int, up, down, total int64) string {
-	return i18n.Tf("%d 个连接 · ↓ %s ↑ %s · 共 %s", count, env.FmtSpeed(down), env.FmtSpeed(up), env.FmtBytes(total))
+	return i18n.Tn(count, "%d 个连接 · ↓ %s ↑ %s · 共 %s", count, env.FmtSpeed(down), env.FmtSpeed(up), env.FmtBytes(total))
 }
 
 // topoDescription describes the graph to assistive technology.
 func topoDescription(g *Graph) string {
 	var b strings.Builder
-	b.WriteString(i18n.Tf("%d 个连接的流向，从来源经进程、规则、代理组、节点到目标。", len(g.Paths)))
+	b.WriteString(i18n.Tn(len(g.Paths), "%d 个连接的流向，从来源经进程、规则、代理组、节点到目标。", len(g.Paths)))
 	var nodes []string
 	for _, ni := range g.Columns[ColNode] {
 		nodes = append(nodes, g.Nodes[ni].Label)

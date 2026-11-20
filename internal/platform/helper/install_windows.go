@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -33,16 +34,68 @@ func install(ctx context.Context, o InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := runElevated(ctx, o.HelperBin, []string{"install", "--core", o.CoreBin, "--data-dir", o.DataDir, "--uid", sid}); err != nil {
+	// The helper is held open against writers from before it is hashed
+	// until the elevated process has ended, so what UAC runs is what was
+	// checked here.
+	release, err := lockVerifiedHelper(o.HelperBin)
+	if err != nil {
+		return err
+	}
+	defer release()
+	coreSum, err := coreDigest(o.CoreBin, o.CoreSHA256)
+	if err != nil {
+		return err
+	}
+	if err := runElevated(ctx, o.HelperBin, []string{"install", "--core", o.CoreBin, "--core-sha256", coreSum, "--data-dir", o.DataDir, "--uid", sid}); err != nil {
 		return err
 	}
 	return waitInstalled(ctx, 10*time.Second)
+}
+
+// lockVerifiedHelper opens the helper executable so that nobody can write,
+// replace, rename or delete it (sharing allows reading only; a directory
+// above it cannot be renamed while the file is open either), hashes it
+// through that handle and checks the digest recorded at build time
+// (ExpectedHelperSHA256). The app directory may be writable by the user,
+// and ShellExecute "runas" starts the file by path: without the lock a
+// process of the same user could swap the executable between this check
+// and the UAC prompt. release closes the handle.
+func lockVerifiedHelper(bin string) (release func(), err error) {
+	p, err := windows.UTF16PtrFromString(bin)
+	if err != nil {
+		return nil, err
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil,
+		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, fmt.Errorf("无法读取权限组件程序: %w", err)
+	}
+	f := os.NewFile(uintptr(h), bin)
+	sum, err := readerSHA256(f)
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("无法读取权限组件程序: %w", err)
+	}
+	if _, err := checkHelperDigest(sum); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { f.Close() }, nil
 }
 
 func uninstall(ctx context.Context) error {
 	bin, err := helperBinary()
 	if err != nil {
 		return err
+	}
+	if !samePathFold(bin, installedHelperPath()) {
+		// Not the installed copy (which only administrators can write):
+		// verify and lock it like install does.
+		release, err := lockVerifiedHelper(bin)
+		if err != nil {
+			return err
+		}
+		defer release()
 	}
 	if err := runElevated(ctx, bin, []string{"uninstall"}); err != nil {
 		return err
@@ -65,6 +118,10 @@ func helperBinary() (string, error) {
 		return c, nil
 	}
 	return "", errors.New("找不到权限组件程序，无法移除")
+}
+
+func samePathFold(a, b string) bool {
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
 }
 
 // currentUserSID returns the SID of the user running the app, which the

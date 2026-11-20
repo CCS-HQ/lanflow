@@ -3,6 +3,10 @@
 #   resources/geo/                      geo databases (all platforms)
 #   resources/<goos>-<goarch>/mihomo     the Mihomo core (verified by fetch-core.sh)
 #   resources/<goos>-<goarch>/lanflow-helper   the TUN privileged helper
+#   resources/<goos>-<goarch>/licenses/  license texts and notices of what ships:
+#                                       Mihomo's GPL-3.0 and where its source is,
+#                                       the geo databases' origin, the Go modules
+#                                       (scripts/collect-licenses.sh)
 # and bin/<goos>-<goarch>/app-ldflags: the -X flags that pin the helper's
 # version (and on macOS its SHA-256) into the app; scripts/build-app.sh
 # passes them to mygo through MYGO_LDFLAGS.
@@ -60,6 +64,12 @@ if [ "$GOOS_T" = darwin ] && [ -z "${LANFLOW_NO_HELPER_PIN:-}" ]; then
 fi
 mkdir -p "bin/${GOOS_T}-${GOARCH_T}"
 printf '%s\n' "$LDFLAGS" > "bin/${GOOS_T}-${GOARCH_T}/app-ldflags"
+
+# Mihomo is GPL-3.0 and ships in the package: its license, the place of its
+# source and the notices of everything else bundled go in with it. In the
+# platform directory, because the linked Go modules differ per platform.
+scripts/collect-licenses.sh "$GOOS_T" "$GOARCH_T" "$PLAT/licenses"
+
 echo "app ldflags: $LDFLAGS"
 echo "resources ready for ${GOOS_T}/${GOARCH_T}:"
 ls -la "$PLAT" resources/geo

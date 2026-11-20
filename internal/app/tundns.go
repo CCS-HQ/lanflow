@@ -66,7 +66,7 @@ func (s *Service) syncDNS() {
 	if err := writeFileAtomic(s.dnsMarkerPath(), data, 0o600); err != nil {
 		return
 	}
-	if err := s.d.dns.Set(sysdns.TUNServers); err != nil {
+	if err := s.d.dns.Set(saved, sysdns.TUNServers); err != nil {
 		s.alog.Errorf("system DNS: set %v failed: %v", sysdns.TUNServers, err)
 		_ = s.d.dns.Restore(saved, sysdns.TUNServers)
 		_ = os.Remove(s.dnsMarkerPath())

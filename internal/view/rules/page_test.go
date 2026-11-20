@@ -265,24 +265,95 @@ func TestSubRowsCache(t *testing.T) {
 		{Index: 2, Type: "MATCH", Proxy: "节点选择"},
 	}
 	p.query = "B.COM"
-	rows, total := p.subRows(rules)
-	if total != 3 || len(rows) != 1 || rows[0].Payload != "b.com" {
+	show := func() []model.Rule {
+		pos, _ := p.subRows(rules)
+		rows := make([]model.Rule, len(pos))
+		for i, at := range pos {
+			rows[i] = rules[at]
+		}
+		return rows
+	}
+	rows := show()
+	if _, total := p.subRows(rules); total != 3 || len(rows) != 1 || rows[0].Payload != "b.com" {
 		t.Fatalf("rows %+v total %d", rows, total)
 	}
-	pos := p.sub.pos
+	match := p.sub.match
 	rules[1].HitCount = 7
-	rows, _ = p.subRows(rules)
-	if &p.sub.pos[0] != &pos[0] || rows[0].HitCount != 7 {
+	rows = show()
+	if &p.sub.match[0] != &match[0] || rows[0].HitCount != 7 {
 		t.Fatalf("cache not reused or hits stale: %+v", rows)
 	}
 	p.query = ""
 	p.sort = ui.SortOrder{Column: "hits", Descending: true}
-	rows, _ = p.subRows(rules)
+	rows = show()
 	if len(rows) != 3 || rows[0].Index != 1 {
 		t.Fatalf("by hits: %+v", rows)
 	}
+	// The same counts: the order is not made again.
+	p.sub.pos[0], p.sub.pos[1] = p.sub.pos[1], p.sub.pos[0]
+	if rows = show(); rows[0].Index == 1 {
+		t.Fatalf("order by hits sorted again without a change: %+v", rows)
+	}
 	rules[2].HitCount = 9
-	if rows, _ = p.subRows(rules); rows[0].Index != 2 {
+	if rows = show(); rows[0].Index != 2 || rows[1].Index != 1 {
 		t.Fatalf("by hits not re-sorted: %+v", rows)
+	}
+	// Back by position, both ways.
+	p.sort = ui.SortOrder{Column: "#", Descending: true}
+	if rows = show(); rows[0].Index != 2 || rows[2].Index != 0 {
+		t.Fatalf("by position, descending: %+v", rows)
+	}
+}
+
+// hitsAPI serves the fake's rules with hit counts the test sets.
+type hitsAPI struct {
+	*fake.Fake
+	hits map[int]int64
+}
+
+func (a *hitsAPI) Rules() []model.Rule {
+	rules := a.Fake.Rules()
+	for i := range rules {
+		rules[i].HitCount = a.hits[rules[i].Index]
+	}
+	return rules
+}
+
+// TestRefreshKeepsTop: sorted by hits and showing its top, the table stays
+// at the top when a refresh puts another rule first, rather than follow
+// the rule that was first down a row.
+func TestRefreshKeepsTop(t *testing.T) {
+	f := fake.NewInstant()
+	api := &hitsAPI{Fake: f, hits: map[int]int64{}}
+	var sub []model.Rule
+	for _, r := range f.Rules() {
+		if !r.Custom {
+			sub = append(sub, r)
+		}
+	}
+	if len(sub) < 3 {
+		t.Skip("the fake has too few subscription rules")
+	}
+	for i, r := range sub {
+		api.hits[r.Index] = int64(1000 - i)
+	}
+	e, _ := testEnv(f)
+	e.API = api
+	p := New(e)
+	p.sort = ui.SortOrder{Column: "hits", Descending: true}
+	tt := ui.NewTester(p.View, 1000, 640)
+	if first, _ := p.table.Visible(); first != 0 {
+		t.Fatalf("starts at row %d", first)
+	}
+	// Another rule overtakes the first one.
+	api.hits[sub[2].Index] = 5000
+	tt.Frame()
+	tt.Frame()
+	pos, _ := p.subRows(api.Rules())
+	if api.Rules()[pos[0]].Index != sub[2].Index {
+		t.Fatalf("not sorted again: first is #%d", api.Rules()[pos[0]].Index)
+	}
+	if first, _ := p.table.Visible(); first != 0 {
+		t.Fatalf("the table followed the old first rule to row %d", first)
 	}
 }

@@ -63,17 +63,15 @@ func (p *Page) applySniffer() {
 	}
 	s := p.snf.toSettings(p.current().Sniffer.Enable)
 	p.applying = true
-	e.Run(func() error {
-		err := e.API.ApplySniffer(s)
-		p.mu.Lock()
+	e.Then(func() error { return e.API.ApplySniffer(s) }, func(err error) {
 		p.applying = false
-		if err == nil {
-			p.snfLoaded = s
-			p.toast = i18n.T("嗅探设置已应用")
+		if err != nil {
+			e.Toast(err.Error(), true)
+			return
 		}
-		p.mu.Unlock()
-		return err
-	}, "")
+		p.snfLoaded = s
+		e.Toast(i18n.T("嗅探设置已应用"), false)
+	})
 }
 
 func (p *Page) snifferTab(c *ui.Context, t *ui.Theme, s model.Settings) {

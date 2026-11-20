@@ -354,7 +354,7 @@ func (s *store) setContent(id string, data []byte) error {
 		return fmt.Errorf("无法写入 %s：%w", filepath.Base(path), err)
 	}
 	s.mu.Lock()
-	err = os.Rename(f.Name(), path)
+	err = fsx.Rename(f.Name(), path) // retries while Windows reports the file busy
 	s.mu.Unlock()
 	if err != nil {
 		os.Remove(f.Name())

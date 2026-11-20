@@ -59,7 +59,9 @@ var TrustHooks = struct {
 	Install func(der []byte) error
 	Remove  func(der []byte) error
 	Trusted func(leaf *x509.Certificate) bool
-}{trust.Install, trust.Remove, trust.Trusted}
+	// Leftovers lists the Lanflow roots in the store other than keep.
+	Leftovers func(keep []byte) []string
+}{trust.Install, trust.Remove, trust.Trusted, trust.Leftovers}
 
 const (
 	captureDir          = "capture"
@@ -92,6 +94,10 @@ type captureState struct {
 	err       string
 	restarts  []time.Time
 	warns     []string
+	// the automatic removal of the root failed removeFails times in a row
+	// and is not tried again before removeNext
+	removeFails int
+	removeNext  time.Time
 }
 
 type captureRun struct {
@@ -501,6 +507,16 @@ func (s *Service) captureOnLocked() error {
 	if len(set.Domains) == 0 && len(set.Apps) == 0 {
 		return i18n.Error("还没有选择要解密的域名或程序。")
 	}
+	if caCert != nil && !trusted {
+		// What fails may be the stored trust-check leaf, not the root: one
+		// signed by an earlier version expired after seven days.
+		if err := s.capRefreshLeaf(); err != nil {
+			return err
+		}
+		c.mu.Lock()
+		caPEM, trusted, caCert = c.caPEM, c.trusted, c.caCert
+		c.mu.Unlock()
+	}
 	if caCert == nil || !trusted {
 		return i18n.Error("根证书尚未安装或系统尚未信任，请先在「抓包」页安装根证书。")
 	}
@@ -568,8 +584,18 @@ func (s *Service) startAgentLocked(set model.CaptureSettings, caPEM []byte, port
 		// not trusted, so nothing would decrypt
 		r.stop()
 		s.capUpdateCA([]byte(ready.CAPEM), ready.TrustLeaf)
+		if len(caPEM) > 0 {
+			// The root it replaces is still in the trust store (and its key
+			// may be: the agent also makes a new root when the old one is
+			// about to expire), and once ca.pem is overwritten nothing in
+			// the app could remove it any more.
+			s.dropOldRoot(caPEM)
+		}
+		s.em.emit(TopicCapture)
 		return i18n.Error("根证书的私钥已丢失，已生成新的根证书；请在「抓包」页重新安装后再开启。")
 	}
+	// The agent signs the trust-check leaf at every start: keep the newest.
+	s.capSetLeaf(ready.TrustLeaf)
 	r.outbound, r.upPort, r.upPass, r.sels = outbound, upPort, upPass, sels
 	c.mu.Lock()
 	c.run = r
@@ -711,6 +737,8 @@ func (s *Service) SaveCaptureSettings(set model.CaptureSettings) error {
 				return err
 			}
 		} else {
+			// the agent closes the decrypted connections the new
+			// selection no longer covers (agent.Apply)
 			doms := set.Domains
 			byp, priv := CaptureBypassSplit(set)
 			allow := captureAllowPrivate(set)
@@ -896,6 +924,64 @@ func (s *Service) capUpdateCA(pemb []byte, leafB64 string) {
 	c.mu.Unlock()
 }
 
+// capSetLeaf stores the trust-check leaf an agent signed with the current
+// root and checks the trust with it.
+func (s *Service) capSetLeaf(leafB64 string) {
+	leaf, err := agent.ParseTrustLeaf(leafB64)
+	if err != nil {
+		return
+	}
+	c := &s.capst
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.caCert == nil || leaf.CheckSignatureFrom(c.caCert) != nil {
+		return
+	}
+	fsx.WriteFile(filepath.Join(s.capDir(), captureLeafFile), leaf.Raw, 0o600)
+	c.trustLeaf = leaf
+	c.trusted = TrustHooks.Trusted(leaf)
+}
+
+// capRefreshLeaf has the agent sign a new trust-check leaf when the stored
+// one is missing or expired, so that an installed root is not reported as
+// untrusted because of the leaf. The caller holds opMu.
+func (s *Service) capRefreshLeaf() error {
+	c := &s.capst
+	c.mu.Lock()
+	leaf, pemb := c.trustLeaf, c.caPEM
+	c.mu.Unlock()
+	if len(pemb) == 0 || (leaf != nil && time.Now().Before(leaf.NotAfter)) {
+		return nil
+	}
+	host, _ := os.Hostname()
+	_, ready, err := s.agentStart(agent.Start{Op: "ca-ensure", CAPEM: string(pemb), Host: host})
+	if err != nil {
+		return err
+	}
+	s.capUpdateCA([]byte(ready.CAPEM), ready.TrustLeaf)
+	if ready.Created {
+		s.dropOldRoot(pemb)
+	}
+	s.em.emit(TopicCapture)
+	return nil
+}
+
+// CaptureLeftoverRoots lists (SHA-1, hex) the Lanflow roots in the user's
+// trust store other than the current one: roots of earlier installations
+// whose certificate file is gone, which the app can no longer remove by
+// itself (docs/capture.md §6 旧证书扫描).
+func (s *Service) CaptureLeftoverRoots() []string {
+	s.capLoad()
+	c := &s.capst
+	c.mu.Lock()
+	var keep []byte
+	if c.caCert != nil {
+		keep = c.caCert.Raw
+	}
+	c.mu.Unlock()
+	return TrustHooks.Leftovers(keep)
+}
+
 // InstallCACert creates the root when there is none (or it nears expiry)
 // and asks the system to trust it.
 func (s *Service) InstallCACert() (err error) {
@@ -917,14 +1003,18 @@ func (s *Service) InstallCACert() (err error) {
 	c.mu.Lock()
 	cert, trusted := c.caCert, c.trusted
 	c.mu.Unlock()
+	var ierr error
 	if !trusted {
-		if err := TrustHooks.Install(cert.Raw); err != nil {
-			s.em.emit(TopicCapture)
-			return fmt.Errorf(i18n.T("安装根证书失败：%v"), err)
-		}
+		ierr = TrustHooks.Install(cert.Raw)
 	}
+	// also when the new root could not be installed: the old one has been
+	// replaced either way
 	if ready.Created && old != nil {
 		s.dropOldRoot(old)
+	}
+	if ierr != nil {
+		s.em.emit(TopicCapture)
+		return fmt.Errorf(i18n.T("安装根证书失败：%v"), ierr)
 	}
 	c.mu.Lock()
 	c.trusted = TrustHooks.Trusted(c.trustLeaf)
@@ -1107,13 +1197,33 @@ func (s *Service) captureAutoRemove() {
 	c.mu.Lock()
 	due := !c.enabled && c.caCert != nil && !c.set.LastDisabled.IsZero() && time.Since(c.set.LastDisabled) > captureRemoveAfter
 	expired := !c.enabled && c.caCert != nil && time.Now().After(c.caCert.NotAfter)
+	wait := time.Now().Before(c.removeNext)
 	c.mu.Unlock()
-	if !due && !expired {
+	if (!due && !expired) || wait {
 		return
 	}
-	if err := s.RemoveCACert(); err == nil {
+	err := s.RemoveCACert()
+	c.mu.Lock()
+	c.removeFails, c.removeNext = captureRemoveBackoff(c.removeFails, err, time.Now())
+	c.mu.Unlock()
+	if err == nil {
 		s.notify(Notice{Kind: "toast", Title: i18n.T("已移除抓包根证书"), Detail: i18n.T("解密关闭超过 7 天（或根证书已过期），根证书的信任和私钥已自动移除；下次开启时会重新生成。")})
 	}
+}
+
+// captureRemoveBackoff spaces out the retries of a failed automatic
+// removal (the system may ask for authorization each time, and the user
+// may have declined): 2 h, 4 h, … up to a day.
+func captureRemoveBackoff(fails int, err error, now time.Time) (int, time.Time) {
+	if err == nil {
+		return 0, time.Time{}
+	}
+	fails++
+	d := 24 * time.Hour
+	if fails < 5 {
+		d = time.Hour << fails
+	}
+	return fails, now.Add(d)
 }
 
 func (s *Service) capturePoll(r *captureRun) {
@@ -1259,7 +1369,11 @@ func hideCaptureProxies(p *model.ProxySnapshot) {
 	}
 }
 
-// ExportHAR writes the decrypted records as HAR (har.Build).
+// ExportHAR writes the decrypted records as HAR. The records are fetched
+// from the agent and written one at a time: the bodies the agent keeps out
+// of its own memory are never all held here. Records that could not be
+// fetched (pushed out of the agent's buffer meanwhile) are reported in a
+// notice; the file holds the rest.
 func (s *Service) ExportHAR(path string, withBodies bool) error {
 	c := &s.capst
 	c.mu.Lock()
@@ -1269,24 +1383,50 @@ func (s *Service) ExportHAR(path string, withBodies bool) error {
 	if r == nil {
 		return i18n.Error("解密已关闭，没有可导出的记录。")
 	}
-	var ds []model.CaptureFlowDetail
-	for _, f := range flows {
-		if f.Method == "" || !f.Has(model.FlowDecrypted) {
-			continue
-		}
+	skipped, err := exportHAR(path, flows, withBodies, s.opt.Version, func(id int64) (model.CaptureFlowDetail, error) {
 		var d model.CaptureFlowDetail
-		if err := r.call("GET", fmt.Sprintf("/flow?id=%d", f.ID), nil, &d); err == nil {
-			if !withBodies {
-				d.ReqBody, d.RespBody = nil, nil
-			}
-			ds = append(ds, d)
-		}
-	}
-	b, err := har.Build(ds, withBodies, s.opt.Version)
+		err := r.call("GET", fmt.Sprintf("/flow?id=%d", id), nil, &d)
+		return d, err
+	})
 	if err != nil {
 		return err
 	}
-	return fsx.WriteFile(path, b, 0o600)
+	if skipped > 0 {
+		s.notify(Notice{Kind: "toast", Title: i18n.T("HAR 已导出，部分记录缺失"),
+			Detail: i18n.Tf("有 %d 条记录在导出时已不在抓包缓冲区中（被更新的记录挤出或已清空），未写入文件。", skipped)})
+	}
+	return nil
+}
+
+// exportHAR writes the decrypted requests among flows to path, fetching
+// each record's detail with get; skipped counts those get failed for.
+func exportHAR(path string, flows []model.CaptureFlow, withBodies bool, version string,
+	get func(id int64) (model.CaptureFlowDetail, error)) (skipped int, err error) {
+	err = fsx.Write(path, 0o600, func(w io.Writer) error {
+		bw := bufio.NewWriterSize(w, 256<<10)
+		hw := har.NewWriter(bw, version)
+		for _, f := range flows {
+			if f.Method == "" || !f.Has(model.FlowDecrypted) {
+				continue
+			}
+			d, err := get(f.ID)
+			if err != nil {
+				skipped++
+				continue
+			}
+			if !withBodies {
+				d.ReqBody, d.RespBody = nil, nil
+			}
+			if err := hw.Add(d, withBodies); err != nil {
+				return err
+			}
+		}
+		if err := hw.Close(); err != nil {
+			return err
+		}
+		return bw.Flush()
+	})
+	return skipped, err
 }
 
 // ---- diagnostics ----

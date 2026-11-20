@@ -94,17 +94,15 @@ func (p *Page) applyDNS() {
 	}
 	d := p.dns.toSettings()
 	p.applying = true
-	e.Run(func() error {
-		err := e.API.ApplyDNS(d)
-		p.mu.Lock()
+	e.Then(func() error { return e.API.ApplyDNS(d) }, func(err error) {
 		p.applying = false
-		if err == nil {
-			p.dnsLoaded = d
-			p.toast = i18n.T("DNS 设置已应用")
+		if err != nil {
+			e.Toast(err.Error(), true)
+			return
 		}
-		p.mu.Unlock()
-		return err
-	}, "")
+		p.dnsLoaded = d
+		e.Toast(i18n.T("DNS 设置已应用"), false)
+	})
 }
 
 func (p *Page) dnsTab(c *ui.Context, t *ui.Theme, s model.Settings) {

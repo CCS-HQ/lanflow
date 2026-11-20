@@ -371,21 +371,30 @@ func (s *Service) SetSyncPassphrase(passphrase string) (err error) {
 	if err != nil {
 		return err
 	}
+	if _, held := s.syncHeld(filepath.Join(dir, syncfile.FileName)); held {
+		// the file cannot be rewritten now (configsync.go): changing the
+		// key here would leave this machine and the file apart
+		return ErrSyncHeld
+	}
 	if data != nil && !s.sealPrimed() {
 		s.primeSeal(doc)
+	}
+	// A device that cannot open the file's secrets may neither change the
+	// passphrase nor turn sealing off: it does not have the links it would
+	// have to write back, and the file would lose every other device's
+	// sealed values together with the encryption block.
+	ss := &s.cs.seal
+	ss.mu.Lock()
+	locked := ss.header != nil && ss.key == nil
+	ss.mu.Unlock()
+	if locked {
+		return ErrSyncLocked
 	}
 	if passphrase == "" {
 		s.resetSeal()
 		s.deleteStoredKey()
 		s.markSealedPrimed()
 	} else {
-		ss := &s.cs.seal
-		ss.mu.Lock()
-		locked := ss.header != nil && ss.key == nil
-		ss.mu.Unlock()
-		if locked {
-			return ErrSyncLocked
-		}
 		enc, key, err := syncfile.NewEncryption(passphrase)
 		if err != nil {
 			return err

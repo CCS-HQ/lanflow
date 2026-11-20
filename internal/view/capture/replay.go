@@ -43,6 +43,8 @@ type replayState struct {
 	res    *model.ReplayResult
 	err    string
 	resTab int // 0 body, 1 headers
+	// bodies are the previews of res's body (body.go), dropped with it.
+	bodies previewCache
 }
 
 // openReplay loads record id and opens the editor with it; send sends it
@@ -163,6 +165,12 @@ func (p *Page) sendReplay() {
 	redraw()
 	go func() {
 		res, err := api.ReplayRequest(req)
+		// The masked preview of the answer, shown first, is made here
+		// rather than by the view (body.go).
+		var made map[bodyKey]*bodyPreview
+		if err == nil && len(res.Body) > 0 {
+			made = map[bodyKey]*bodyPreview{{resp: true}: makePreview(res.Body, dropHeader(res.Header, "content-encoding"), false)}
+		}
 		r.mu.Lock()
 		r.busy = false
 		if err != nil {
@@ -170,6 +178,7 @@ func (p *Page) sendReplay() {
 		} else {
 			r.res = &res
 		}
+		r.bodies.reset(made)
 		r.mu.Unlock()
 		redraw()
 	}()
@@ -316,7 +325,7 @@ func (p *Page) replayResult(c *ui.Context, t *ui.Theme) {
 				return
 			}
 			// already decoded by the service
-			p.bodyView(c, t, -1<<40-int64(r.session), res.Body, res.BodySize, dropHeader(res.Header, "content-encoding"))
+			p.showBody(c, t, &r.bodies, bodyKey{resp: true, reveal: p.reveal}, res.Body, res.BodySize, dropHeader(res.Header, "content-encoding"))
 		})
 	})
 }

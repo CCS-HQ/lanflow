@@ -16,7 +16,6 @@ import (
 	"net/netip"
 	"net/textproto"
 	"net/url"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -62,10 +61,7 @@ type feedbackState struct {
 	reports   []*builtReport     // newest last, at most feedbackKeep
 	lastSent  time.Time
 
-	token        string
-	tokenLoaded  bool
-	tokenFile    bool // no keychain: the obfuscated file holds it
-	tokenLoading bool // FeedbackInfo started a background read
+	token secretSlot // the upload token (configsecrets.go); its own lock
 
 	autoTimer *time.Timer
 	autoAfter time.Time // records after this are not reported yet
@@ -120,28 +116,18 @@ func clipRunes(s string, n int) string {
 	return s
 }
 
-// FeedbackInfo implements API.FeedbackInfo.
+// FeedbackInfo implements API.FeedbackInfo (cheap read: whether a token
+// is set comes from the cache, read in the background the first time).
 func (s *Service) FeedbackInfo() model.FeedbackInfo {
 	set := s.Settings().Feedback
 	count := s.elog.Count()
+	tokenSet, _ := s.peekSecret(s.tokenSlot())
 	s.fb.mu.Lock()
 	defer s.fb.mu.Unlock()
-	if !s.fb.tokenLoaded && !s.fb.tokenLoading {
-		// The token is read lazily (the keychain may ask the user); the
-		// read lands with TopicSettings and the next call sees it.
-		s.fb.tokenLoading = true
-		s.goBackground(func() {
-			_, _ = s.feedbackToken()
-			s.fb.mu.Lock()
-			s.fb.tokenLoading = false
-			s.fb.mu.Unlock()
-			s.em.emit(TopicSettings)
-		})
-	}
 	info := model.FeedbackInfo{
 		Endpoint:   set.Endpoint,
 		AutoReport: set.AutoReport,
-		TokenSet:   s.fb.token != "",
+		TokenSet:   tokenSet,
 		Errors:     count,
 		LastSentAt: s.fb.lastSent,
 	}
@@ -361,7 +347,7 @@ func (s *Service) SendFeedback(id string) (sent model.FeedbackSent, err error) {
 	if err != nil {
 		return sent, err
 	}
-	sent, err = s.postReport(s.rootCtx, r)
+	sent, err = s.postReport(s.rootCtx, r, true)
 	if err != nil {
 		return sent, err
 	}
@@ -399,7 +385,9 @@ func isLocalHost(h string) bool {
 // postReport sends a built report, retrying with backoff: network errors
 // and 5xx answers wait 1, 2, 4 s; 429 waits what Retry-After says (at
 // most feedbackMaxWait). 201 is a new report, 200 one the server had.
-func (s *Service) postReport(ctx context.Context, r *builtReport) (model.FeedbackSent, error) {
+// user says the user is sending it: the token is then read even after a
+// recent refusal of the keychain (secretRetry).
+func (s *Service) postReport(ctx context.Context, r *builtReport, user bool) (model.FeedbackSent, error) {
 	target, err := feedbackURL(r.rep.Endpoint)
 	if err != nil {
 		// the endpoint may have been set after the report was built
@@ -408,7 +396,7 @@ func (s *Service) postReport(ctx context.Context, r *builtReport) (model.Feedbac
 			return model.FeedbackSent{}, err
 		}
 	}
-	token, err := s.feedbackToken()
+	token, err := s.readSecret(s.tokenSlot(), user)
 	if err != nil {
 		return model.FeedbackSent{}, err
 	}
@@ -525,71 +513,18 @@ func (s *Service) fbSleep(ctx context.Context, d time.Duration) error {
 
 // ---- token ----
 
-func (s *Service) feedbackTokenPath() string { return filepath.Join(s.opt.DataDir, feedbackTokenFile) }
-
-// feedbackToken reads the token once: from the keychain, or the file
-// fallback where the system has none.
-func (s *Service) feedbackToken() (string, error) {
-	s.fb.mu.Lock()
-	defer s.fb.mu.Unlock()
-	if s.fb.tokenLoaded {
-		return s.fb.token, nil
-	}
-	if Secrets != nil {
-		v, err := Secrets.Get(feedbackTokenKey)
-		switch {
-		case err == nil:
-			s.fb.token, s.fb.tokenLoaded = string(v), true
-			return s.fb.token, nil
-		case errors.Is(err, ErrSecretNotFound):
-			s.fb.tokenLoaded = true
-			return "", nil
-		case errors.Is(err, errors.ErrUnsupported):
-		default:
-			return "", fmt.Errorf(i18n.T("读取钥匙串失败：%v"), err)
-		}
-	}
-	s.fb.tokenFile = true
-	data, err := os.ReadFile(s.feedbackTokenPath())
-	if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf(i18n.T("读取密码文件失败：%v"), err)
-	}
-	s.fb.token, s.fb.tokenLoaded = deobfuscate(strings.TrimSpace(string(data))), true
-	return s.fb.token, nil
+// tokenSlot is where the upload token is kept: the keychain, or the
+// obfuscated file where the system has none.
+func (s *Service) tokenSlot() *secretSlot {
+	return s.fb.token.init(feedbackTokenKey, feedbackTokenFile)
 }
 
 // SetFeedbackToken implements API.SetFeedbackToken: "" removes it.
 func (s *Service) SetFeedbackToken(token string) (err error) {
 	defer func() { s.logOp("set feedback token", err) }()
-	token = strings.TrimSpace(token)
-	if _, err := s.feedbackToken(); err != nil {
+	if err := s.writeSecret(s.tokenSlot(), strings.TrimSpace(token)); err != nil {
 		return err
 	}
-	s.fb.mu.Lock()
-	file := s.fb.tokenFile
-	s.fb.mu.Unlock()
-	if !file {
-		if token == "" {
-			err = Secrets.Delete(feedbackTokenKey)
-			if errors.Is(err, ErrSecretNotFound) {
-				err = nil
-			}
-		} else {
-			err = Secrets.Set(feedbackTokenKey, []byte(token))
-		}
-		if err != nil {
-			return fmt.Errorf(i18n.T("写入钥匙串失败：%v"), err)
-		}
-	} else if token == "" {
-		if err := os.Remove(s.feedbackTokenPath()); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf(i18n.T("删除密码文件失败：%v"), err)
-		}
-	} else if err := writeFileAtomic(s.feedbackTokenPath(), []byte(obfuscate(token)+"\n"), 0o600); err != nil {
-		return fmt.Errorf(i18n.T("保存密码文件失败：%v"), err)
-	}
-	s.fb.mu.Lock()
-	s.fb.token, s.fb.tokenLoaded = token, true
-	s.fb.mu.Unlock()
 	s.em.emit(TopicSettings)
 	return nil
 }
@@ -653,7 +588,7 @@ func (s *Service) sendAutoReport() {
 	}
 	ctx, cancel := context.WithTimeout(s.rootCtx, 3*time.Minute)
 	defer cancel()
-	if _, err := s.postReport(ctx, r); err != nil {
+	if _, err := s.postReport(ctx, r, false); err != nil {
 		s.alog.Warnf("automatic feedback report %s: %v", r.rep.ID, err)
 		return
 	}

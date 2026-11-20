@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -316,6 +317,7 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 		s.releaseDNS() // a previous run that died with TUN on; set again if TUN starts
 	}
 	s.stats = newStatsStore(filepath.Join(o.DataDir, "stats"), d.now, s.statsCountry)
+	s.stats.logf = s.alog.Errorf
 	if err := s.stats.load(); err != nil {
 		s.alog.Errorf("traffic statistics: %v", err)
 	}
@@ -925,13 +927,37 @@ func (s *Service) LogDir() string    { return s.opt.LogDir }
 
 func (s *Service) OnChange(fn func(Topic)) (off func()) { return s.em.add(fn) }
 
+// maxNotices bounds the notices waiting for TakeNotices: with no window
+// process to take them (the service runs on) a failure that repeats would
+// otherwise queue without end.
+const maxNotices = 100
+
 // notify queues a notice for the UI.
 func (s *Service) notify(n Notice) {
 	s.logNotice(n)
 	s.mu.Lock()
-	s.state.notices = append(s.state.notices, n)
+	s.state.notices = queueNotice(s.state.notices, n)
 	s.mu.Unlock()
 	s.em.emit(TopicNotice)
+}
+
+// queueNotice appends n to the waiting notices. A notice that already
+// waits with the very same content is moved to the end instead of queued
+// twice, and beyond maxNotices the oldest goes; the "recovery" notice,
+// which asks a question the user still has to answer, is never dropped.
+func queueNotice(q []Notice, n Notice) []Notice {
+	if i := slices.Index(q, n); i >= 0 {
+		q = slices.Delete(q, i, i+1)
+	}
+	q = append(q, n)
+	for i := 0; len(q) > maxNotices && i < len(q)-1; {
+		if q[i].Kind == "recovery" {
+			i++
+			continue
+		}
+		q = slices.Delete(q, i, i+1)
+	}
+	return q
 }
 
 // Shutdown restores the system proxy if Lanflow set it, stops the core and
@@ -982,6 +1008,11 @@ func (s *Service) Shutdown() {
 		s.state.st.Core = model.CoreStopped
 		s.mu.Unlock()
 		s.opMu.Unlock()
+		// The statistics loop made its last flush when rootCtx ended, but
+		// the connection stream kept recording until stopStreams above.
+		if s.stats != nil {
+			_ = s.stats.flushLogged()
+		}
 
 		s.bgMu.Lock()
 		s.closing = true

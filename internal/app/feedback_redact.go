@@ -91,8 +91,14 @@ func maskPublicIPs(s string) string {
 func redactReport(s string) string { return maskPublicIPs(applog.Redact(s)) }
 
 // privateKeys are config and settings keys whose values are lists of
-// domains, addresses, names or credentials: a report keeps only how many
-// items they had. Compared lowercased without '-' and '_'.
+// domains, addresses, names or credentials, or paths of this machine: a
+// report keeps only how many items they had. Compared lowercased without
+// '-' and '_', so one entry covers the runtime config's key
+// (nameserver-policy) and a spelling in an override; settings.json is
+// written with Go's field names (DNS.Policy, Advanced.TUNRouteAddress),
+// which are listed as well. TestFeedbackSettingsListsClassified fails for
+// a list in model.Settings that is neither dropped here nor named in
+// reportKeptLists.
 var privateKeys = map[string]bool{
 	"rules": true, "subrules": true, "ruleproviders": true, "payload": true,
 	"hosts": true, "nameserverpolicy": true, "fakeipfilter": true,
@@ -102,11 +108,49 @@ var privateKeys = map[string]bool{
 	"authentication": true, "skipsrcaddress": true, "skipdstaddress": true,
 	"routeaddress": true, "routeexcludeaddress": true, "includeuid": true,
 	"includepackage": true, "excludepackage": true,
+	// the runtime config's other domain and address lists
+	"proxyservernameserverpolicy": true, "lanallowedips": true, "landisallowedips": true,
+	"skipauthprefixes": true,
+	// settings.json (Go field names)
+	"policy":          true, // DNS.Policy: nameserver-policy, names internal domains
+	"tunrouteaddress": true, "tunrouteexcludeaddress": true,
+	"corepath": true, // a path of this machine, with the user's name
 }
 
-func privateKey(k string) bool {
-	k = strings.NewReplacer("-", "", "_", "", "+", "", "!", "").Replace(strings.ToLower(k))
-	return privateKeys[k]
+// privatePairs are keys that are private only under a certain parent
+// ("parent.key", normalised like privateKeys): their own names are too
+// plain to drop everywhere.
+var privatePairs = map[string]bool{
+	"fallbackfilter.domain": true, "fallbackfilter.ipcidr": true, // dns.fallback-filter
+	"dnsfallbackfilter.domain": true, "dnsfallbackfilter.ipcidr": true, // Advanced.DNSFallbackFilter
+	"sync.dir": true, // the sync folder: a path of this machine
+}
+
+// reportKeptLists are the lists of model.Settings (Go field paths) a
+// report keeps, with why: every other list must be dropped by
+// privateKeys or privatePairs. A new list field belongs in one of the
+// two before it ships.
+var reportKeptLists = map[string]string{
+	"DNS.Nameserver":                "resolver addresses: needed to diagnose DNS problems",
+	"DNS.ProxyServerNameserver":     "resolver addresses",
+	"DNS.DirectNameserver":          "resolver addresses",
+	"Shortcuts":                     "key bindings, nothing personal",
+	"Advanced.TUNDNSHijack":         "ports hijacked by the TUN",
+	"Advanced.TUNIncludeInterface":  "interface names (en0, utun3)",
+	"Advanced.TUNExcludeInterface":  "interface names",
+	"Advanced.DNSDefaultNameserver": "resolver addresses",
+	"Advanced.DNSFallback":          "resolver addresses",
+}
+
+func normalKey(k string) string {
+	return strings.NewReplacer("-", "", "_", "", "+", "", "!", "").Replace(strings.ToLower(k))
+}
+
+func privateKey(k string) bool { return privateKeys[normalKey(k)] }
+
+// privateUnder reports whether key k is dropped as a child of parent.
+func privateUnder(parent, k string) bool {
+	return privateKey(k) || privatePairs[normalKey(parent)+"."+normalKey(k)]
 }
 
 func omitted(n int) string { return fmt.Sprintf("<omitted: %d items>", n) }
@@ -133,25 +177,25 @@ func dropPrivateJSON(data []byte) []byte {
 	if json.Unmarshal(data, &v) != nil {
 		return data
 	}
-	var walk func(v any) any
-	walk = func(v any) any {
+	var walk func(v any, parent string) any
+	walk = func(v any, parent string) any {
 		switch x := v.(type) {
 		case map[string]any:
 			for k, c := range x {
-				if privateKey(k) {
+				if privateUnder(parent, k) {
 					x[k] = omitted(countOf(c))
 				} else {
-					x[k] = walk(c)
+					x[k] = walk(c, k)
 				}
 			}
 		case []any:
 			for i := range x {
-				x[i] = walk(x[i])
+				x[i] = walk(x[i], parent)
 			}
 		}
 		return v
 	}
-	out, err := json.MarshalIndent(walk(v), "", "  ")
+	out, err := json.MarshalIndent(walk(v, ""), "", "  ")
 	if err != nil {
 		return data
 	}
@@ -164,17 +208,17 @@ func dropPrivateYAML(data []byte) []byte {
 	if yaml.Unmarshal(data, &doc) != nil || len(doc.Content) == 0 {
 		return data
 	}
-	var walk func(n *yaml.Node)
-	walk = func(n *yaml.Node) {
+	var walk func(n *yaml.Node, parent string)
+	walk = func(n *yaml.Node, parent string) {
 		switch n.Kind {
 		case yaml.DocumentNode, yaml.SequenceNode:
 			for _, c := range n.Content {
-				walk(c)
+				walk(c, parent)
 			}
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(n.Content); i += 2 {
 				k, v := n.Content[i], n.Content[i+1]
-				if privateKey(k.Value) {
+				if privateUnder(parent, k.Value) {
 					cnt := len(v.Content)
 					if v.Kind == yaml.MappingNode {
 						cnt /= 2
@@ -184,11 +228,11 @@ func dropPrivateYAML(data []byte) []byte {
 					*v = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: omitted(cnt)}
 					continue
 				}
-				walk(v)
+				walk(v, k.Value)
 			}
 		}
 	}
-	walk(&doc)
+	walk(&doc, "")
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
 		return data

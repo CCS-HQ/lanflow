@@ -10,6 +10,7 @@ import (
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/syncfile"
+	"lanflow/internal/view/env"
 )
 
 // 用口令加密链接 (docs/config-sync.md), in 设置 › 常规 › 配置同步: the
@@ -27,25 +28,23 @@ const (
 	passUnlock                 // enter it on this device
 )
 
-// passDialog is the passphrase dialog's state (under p.mu while a job runs).
+// passDialog is the passphrase dialog's state, read and written on the
+// UI thread only (a job's outcome arrives through Env.Then).
 type passDialog struct {
 	mode          passMode
 	open          bool
 	pass, confirm string
 	err           string // shown in the dialog: a wrong passphrase keeps it open
 	busy          bool
-	session       int    // bumps the inputs' keys so they start empty
-	done          string // a toast to show on the next frame (from the job)
+	session       int // bumps the inputs' keys so they start empty
 }
 
 func (p *Page) openPassDialog(mode passMode) {
-	p.mu.Lock()
 	n := 0
 	if p.sync.pass != nil {
 		n = p.sync.pass.session + 1
 	}
 	p.sync.pass = &passDialog{mode: mode, open: true, session: n}
-	p.mu.Unlock()
 }
 
 // syncPassphraseRows draws the 用口令加密链接 row and its actions.
@@ -90,10 +89,8 @@ func (p *Page) syncPassphraseRows(c *ui.Context, st model.ConfigSyncStatus, busy
 // derivation takes a moment); errors stay in the dialog.
 func (p *Page) submitPass() {
 	e := p.e
-	p.mu.Lock()
 	d := p.sync.pass
 	if d == nil || d.busy {
-		p.mu.Unlock()
 		return
 	}
 	mode, pass, confirm := d.mode, d.pass, d.confirm
@@ -107,70 +104,57 @@ func (p *Page) submitPass() {
 	default:
 		d.err, d.busy = "", true
 	}
-	busy := d.busy
-	p.mu.Unlock()
-	if !busy {
+	if !d.busy {
 		return
 	}
-	e.Run(func() error {
-		var err error
-		ok := ""
+	ok := i18n.T("同步口令正确，已解锁订阅链接")
+	switch mode {
+	case passSet:
+		ok = i18n.T("已用口令加密同步文件中的链接")
+	case passChange:
+		ok = i18n.T("同步口令已修改；其他设备需要输入新口令")
+	}
+	e.Then(func() error {
 		if mode == passUnlock {
-			err = e.API.UnlockSync(pass)
-			ok = i18n.T("同步口令正确，已解锁订阅链接")
-		} else {
-			err = e.API.SetSyncPassphrase(pass)
-			ok = i18n.T("已用口令加密同步文件中的链接")
-			if mode == passChange {
-				ok = i18n.T("同步口令已修改；其他设备需要输入新口令")
-			}
+			return e.API.UnlockSync(pass)
 		}
-		p.mu.Lock()
-		if d := p.sync.pass; d != nil {
-			d.busy = false
-			switch {
-			case errors.Is(err, syncfile.ErrWrongPassphrase):
-				d.err = i18n.T("同步口令不正确，请重新输入。")
-				d.pass = ""
-				d.session++
-			case err != nil:
-				d.err = err.Error()
-			default:
-				d.open, d.pass, d.confirm, d.done = false, "", "", ok
+		return e.API.SetSyncPassphrase(pass)
+	}, func(err error) {
+		// d is the dialog the job started from, which Escape may have
+		// closed meanwhile: its error is then toasted instead.
+		closed := !d.open
+		defer func() {
+			if closed && err != nil {
+				e.Toast(d.err, true)
 			}
+		}()
+		d.busy = false
+		switch {
+		case errors.Is(err, syncfile.ErrWrongPassphrase):
+			d.err = i18n.T("同步口令不正确，请重新输入。")
+			d.pass = ""
+			d.session++
+		case err != nil:
+			d.err = err.Error()
+		default:
+			d.open, d.pass, d.confirm = false, "", ""
+			e.Toast(ok, false)
 		}
-		p.mu.Unlock()
-		e.Redraw()
-		return nil
-	}, "")
+	})
 }
 
 // passphraseDialog draws the dialog that sets, changes or enters the
 // sync passphrase.
 func (p *Page) passphraseDialog(c *ui.Context, t *ui.Theme) {
-	p.mu.Lock()
 	d := p.sync.pass
-	if d != nil && !d.open && d.done != "" {
-		done := d.done
-		d.done = ""
-		p.mu.Unlock()
-		p.e.Toast(done, false)
-		p.mu.Lock()
-	}
 	if d != nil && !d.open && !d.busy {
 		p.sync.pass = nil
 		d = nil
 	}
-	var busy bool
-	var errText string
-	var session int
-	if d != nil {
-		busy, errText, session = d.busy, d.err, d.session
-	}
-	p.mu.Unlock()
 	if d == nil {
 		return
 	}
+	busy, errText, session := d.busy, d.err, d.session
 	title, intro, okLabel := i18n.T("设置同步口令"), i18n.T("订阅链接和 WebDAV 密码会用这个口令加密后写进同步文件。其他设备开启同步后输入同一口令即可取回。"), i18n.T("加密")
 	switch d.mode {
 	case passChange:
@@ -179,7 +163,7 @@ func (p *Page) passphraseDialog(c *ui.Context, t *ui.Theme) {
 		title, intro, okLabel = i18n.T("输入同步口令"), i18n.T("输入在其他设备上设置的同步口令，以解锁同步文件中的订阅链接。口令正确后，链接存入本机钥匙串，之后启动无需再次输入。"), i18n.T("解锁")
 	}
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c.Key("sync-pass")).Width(440).Gap(12).Children(func() {
+		ui.Column(c.Key("sync-pass")).Width(env.DialogWidth(c, 440)).Gap(12).Children(func() {
 			ui.Text(c, title).FontSize(15).Bold()
 			ui.Text(c, intro).FontSize(12).TextColor(t.TextMuted)
 			if d.mode != passUnlock {

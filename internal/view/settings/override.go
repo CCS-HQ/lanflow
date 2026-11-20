@@ -18,6 +18,9 @@ import (
 // one override entry, keyed by its ID ("global" and a subscription's ID
 // name the legacy entries, created when first saved).
 type overrideDialog struct {
+	// session numbers this opening of the editor: a job started from one
+	// (预览差异, 保存) drops its result when another has opened since.
+	session    int
 	open       bool
 	key, title string
 	state      *editor.State
@@ -31,10 +34,12 @@ type overrideDialog struct {
 
 // runtimeDialog is the state of 运行时配置 (design §6.10).
 type runtimeDialog struct {
+	session int // numbers this opening, as overrideDialog's
 	open    bool
 	loading bool
 	lines   []model.RuntimeLine
 	err     string
+	list    ui.ListState // the lines, virtualized: a config has tens of thousands
 }
 
 // overrideListUI is the state of the override list's own dialogs: naming
@@ -341,7 +346,7 @@ func (p *Page) overrideListDialogs(c *ui.Context, t *ui.Theme) {
 	e := p.e
 	if d := &p.ovl.name; d.open {
 		ui.Modal(c, &d.open, func() {
-			ui.Column(c.Key(d.session)).Width(380).Gap(10).Children(func() {
+			ui.Column(c.Key(d.session)).Width(env.DialogWidth(c, 380)).Gap(10).Children(func() {
 				title := i18n.T("新建覆写")
 				if d.id != "" {
 					title = i18n.T("重命名覆写")
@@ -383,7 +388,7 @@ func (p *Page) overrideListDialogs(c *ui.Context, t *ui.Theme) {
 	}
 	if d := &p.ovl.link; d.open {
 		md := ui.Modal(c, &d.open, func() {
-			ui.Column(c.Key("ov-link")).Width(420).Gap(10).Children(func() {
+			ui.Column(c.Key("ov-link")).Width(env.DialogWidth(c, 420)).Gap(10).Children(func() {
 				ui.Text(c, i18n.T("从链接导入覆写")).FontSize(15).Bold()
 				ui.Text(c, i18n.T("下载链接指向的 YAML 作为一条覆写；之后可在它的菜单中「更新」。")).FontSize(12).TextColor(t.TextMuted)
 				ui.TextInput(c.Key("url"), &d.url).Placeholder("https://").Label(i18n.T("覆写链接")).AutoFocus().ReadOnly(d.busy).Invalid(d.err != "")
@@ -408,7 +413,7 @@ func (p *Page) overrideListDialogs(c *ui.Context, t *ui.Theme) {
 	if d := &p.ovl.sel; d.open {
 		list := e.API.OverrideList()
 		ui.Modal(c, &d.open, func() {
-			ui.Column(c.Key("ov-sel-" + d.subID)).Width(420).Gap(10).Children(func() {
+			ui.Column(c.Key("ov-sel-" + d.subID)).Width(env.DialogWidth(c, 420)).Gap(10).Children(func() {
 				ui.Text(c, i18n.Tf("选择覆写 · %s", d.subName)).FontSize(15).Bold()
 				ui.Text(c, i18n.T("勾选的覆写按列表顺序应用于这个订阅；全局覆写始终应用。")).FontSize(12).TextColor(t.TextMuted)
 				if len(list) == 0 {
@@ -471,19 +476,19 @@ func (p *Page) importOverrideLink() {
 		}
 	}
 	d.busy, d.err = true, ""
-	e.Run(func() error {
+	// The dialog cannot be closed while busy, so it is still this one.
+	e.Then(func() error {
 		_, err := e.API.SaveOverrideEntry(model.Override{Name: name, Enabled: true, Source: model.OverrideURL, URL: u})
-		p.mu.Lock()
-		defer p.mu.Unlock()
+		return err
+	}, func(err error) {
 		d.busy = false
 		if err != nil {
-			d.err = err.Error()
-			return nil // shown inline
+			d.err = err.Error() // shown inline
+			return
 		}
 		d.open = false
-		p.toast = i18n.Tf("已导入「%s」", name)
-		return nil
-	}, "")
+		e.Toast(i18n.Tf("已导入「%s」", name), false)
+	})
 }
 
 // openOverride opens the editor for key: an override ID, "global" (the
@@ -512,7 +517,7 @@ func (p *Page) openOverride(key string) {
 	}
 	buf := editor.NewBuffer(text)
 	buf.SetLanguage(yaml)
-	p.ov = overrideDialog{open: true, key: key, title: title, saved: text,
+	p.ov = overrideDialog{session: p.ov.session + 1, open: true, key: key, title: title, saved: text,
 		state: &editor.State{Buffer: buf, SoftWrap: true, Label: i18n.T("覆写 YAML"), Placeholder: i18n.T("# 在这里写 YAML 覆写，例如\n# log-level: warning\n# +rules:\n#   - DOMAIN-SUFFIX,example.com,DIRECT")}}
 }
 
@@ -612,21 +617,28 @@ func (p *Page) previewOverride() {
 	if d.previewing {
 		return
 	}
-	key, text := d.key, d.state.Buffer.String()
+	key, text, session := d.key, d.state.Buffer.String(), d.session
 	d.previewing, d.err = true, ""
-	e.Run(func() error {
+	var diff *editor.DiffState
+	e.Then(func() error {
 		lines, err := e.API.PreviewOverride(key, text)
-		p.mu.Lock()
-		defer p.mu.Unlock()
+		if err == nil {
+			diff = diffOf(lines)
+		}
+		return err
+	}, func(err error) {
+		// 取消 works while the preview runs: the editor may have closed,
+		// or show another override by now. p.ov is that one's state.
+		if d.session != session || !d.open {
+			return
+		}
 		d.previewing = false
 		if err != nil {
 			d.err = err.Error()
-			return nil
+			return
 		}
-		d.diff = diffOf(lines)
-		d.showDiff = true
-		return nil
-	}, "")
+		d.diff, d.showDiff = diff, true
+	})
 }
 
 // diffOf turns preview lines into a unified diff view: the old text is
@@ -656,41 +668,50 @@ func (p *Page) saveOverride() {
 	if d.saving {
 		return
 	}
-	key, text := d.key, d.state.Buffer.String()
+	key, text, session := d.key, d.state.Buffer.String(), d.session
 	d.saving, d.err = true, ""
-	e.Run(func() error {
-		err := e.API.SaveOverride(key, text)
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		d.saving = false
-		if err != nil {
-			d.err = err.Error()
-			return nil // shown inline; the current config is unchanged
+	e.Then(func() error { return e.API.SaveOverride(key, text) }, func(err error) {
+		// The editor stays open while saving; the session is compared all
+		// the same (a navigation arg can open another override).
+		same := d.session == session
+		if same {
+			d.saving = false
 		}
-		d.saved = text
-		d.open = false
-		p.toast = i18n.T("覆写已保存，配置已重新加载")
-		return nil
-	}, "")
+		switch {
+		case err == nil:
+			if same {
+				d.saved, d.open = text, false
+			}
+			e.Toast(i18n.T("覆写已保存，配置已重新加载"), false)
+		case same:
+			d.err = err.Error() // shown inline; the current config is unchanged
+		default:
+			e.Toast(err.Error(), true)
+		}
+	})
 }
 
 // ---- 运行时配置 (§6.10) ----
 
 func (p *Page) openRuntime() {
 	e := p.e
-	p.rt = runtimeDialog{open: true, loading: true}
-	e.Run(func() error {
-		lines, err := e.API.RuntimeConfig()
-		p.mu.Lock()
-		defer p.mu.Unlock()
+	session := p.rt.session + 1
+	p.rt = runtimeDialog{session: session, open: true, loading: true}
+	var lines []model.RuntimeLine
+	e.Then(func() (err error) {
+		lines, err = e.API.RuntimeConfig()
+		return err
+	}, func(err error) {
+		if p.rt.session != session {
+			return // opened again since: that opening's own job answers
+		}
 		p.rt.loading = false
 		if err != nil {
 			p.rt.err = err.Error()
-			return nil
+			return
 		}
 		p.rt.lines = lines
-		return nil
-	}, "")
+	})
 }
 
 func (p *Page) runtimeDialog(c *ui.Context, t *ui.Theme) {
@@ -708,26 +729,32 @@ func (p *Page) runtimeDialog(c *ui.Context, t *ui.Theme) {
 				env.ExpandButton(c, &p.dlgFull)
 			})
 			ui.Text(c, i18n.T("最终交给内核的配置（只读）。右侧灰字标注每段的来源。")).FontSize(12).TextColor(t.TextMuted)
-			ui.Scroll(c).Grow(1).Basis(0).MinHeight(120).Padding(8, 10).Radius(6).Background(t.Surface).Border(1, t.Border).Selectable().KeepScrollbars(true).Children(func() {
-				switch {
-				case d.loading:
-					ui.Row(c).Gap(6).Children(func() {
-						ui.Spinner(c)
-						ui.Text(c, i18n.T("正在合成…")).TextColor(t.TextMuted)
-					})
-				case d.err != "":
-					ui.Text(c, d.err).TextColor(t.Danger)
-				default:
-					for i, l := range d.lines {
-						ui.Row(c.Key(i)).Gap(12).MinHeight(20).Children(func() {
-							ui.Text(c, l.Text).Font("monospace").FontSize(12).NoWrap().Grow(1).PreserveSpaces()
-							if l.Source != "" {
-								ui.Text(c, l.Source).FontSize(11).TextColor(t.TextMuted).Unselectable()
-							}
+			if d.loading || d.err != "" {
+				ui.Scroll(c).Grow(1).Basis(0).MinHeight(120).Padding(8, 10).Radius(6).Background(t.Surface).Border(1, t.Border).Selectable().Children(func() {
+					if d.loading {
+						ui.Row(c).Gap(6).Children(func() {
+							ui.Spinner(c)
+							ui.Text(c, i18n.T("正在合成…")).TextColor(t.TextMuted)
 						})
+						return
 					}
-				}
-			})
+					ui.Text(c, d.err).TextColor(t.Danger)
+				})
+			} else {
+				// A virtual list: only the lines in view are built. A
+				// subscription with ten thousand rules made thirty thousand
+				// elements a frame as a plain scroll of rows.
+				lines := d.lines
+				ui.List(c.Key("runtime-lines"), &d.list, len(lines), func(i int) {
+					l := lines[i]
+					ui.Row(c).Gap(12).MinHeight(20).PaddingX(10).Children(func() {
+						ui.Text(c, l.Text).Font("monospace").FontSize(12).NoWrap().Grow(1).PreserveSpaces()
+						if l.Source != "" {
+							ui.Text(c, l.Source).FontSize(11).TextColor(t.TextMuted).Unselectable()
+						}
+					})
+				}).Grow(1).Basis(0).MinHeight(120).Padding(8, 0).Radius(6).Background(t.Surface).Border(1, t.Border).Selectable().KeepScrollbars(true).Label(i18n.T("运行时配置"))
+			}
 			ui.Row(c).Gap(8).Children(func() {
 				ui.Button(c, i18n.T("复制")).Disabled(len(d.lines) == 0).OnClick(func() {
 					var b strings.Builder

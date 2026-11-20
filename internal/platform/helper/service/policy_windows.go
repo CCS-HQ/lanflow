@@ -84,6 +84,39 @@ func openNoReparse(path string, dir bool) (windows.Handle, error) {
 	return h, nil
 }
 
+// verifyNoLinks opens every directory from dataDir down to path (inside
+// it, symlinks already resolved) and path itself without following a
+// reparse point, and fails on the first one that is a symbolic link,
+// junction or mount point.
+func verifyNoLinks(dataDir, path string, dir bool) error {
+	rel, err := filepath.Rel(dataDir, path)
+	if err != nil {
+		return err
+	}
+	cur := dataDir
+	parts := strings.Split(rel, string(filepath.Separator))
+	if rel == "." {
+		parts = nil
+	}
+	check := func(p string, isDir bool) error {
+		h, err := openNoReparse(p, isDir)
+		if err != nil {
+			return err
+		}
+		return windows.CloseHandle(h)
+	}
+	if err := check(cur, true); err != nil {
+		return err
+	}
+	for i, name := range parts {
+		cur = filepath.Join(cur, name)
+		if err := check(cur, dir || i < len(parts)-1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // systemDirs are locations a per-user data directory must never be in.
 func systemDirs() []string {
 	var dirs []string

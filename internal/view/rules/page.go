@@ -17,6 +17,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/colwidth"
 	"lanflow/internal/view/env"
 	"lanflow/internal/view/rules/ruleform"
 )
@@ -30,32 +31,34 @@ type Page struct {
 	filter int       // 0 全部, 1 自定义, 2 订阅
 	sort   ui.SortOrder
 	table  ui.ListState
-	// sorted is the order the table last showed: a new one scrolls it
-	// back to the first row, which would otherwise stay part hidden
-	// under the header where the old first row was.
-	sorted ui.SortOrder
 	form   ruleform.Form
 
 	// 测试… dialog
 	testOpen bool
 	testHost string
-	testing  bool
 
 	// sub caches which subscription rules match the query, in the order
-	// shown; see subRows.
-	sub subCache
+	// shown; see subRows. stale is set when the rules may have changed.
+	sub   subCache
+	stale *env.Stale
 	// customList is the virtual list of a long custom rule list.
 	customList ui.ListState
 
 	mu         sync.Mutex // guards the fields below, written by jobs
+	testing    bool
 	testResult *model.RuleMatch
 	testErr    string
 }
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	p := &Page{e: e, sort: ui.SortOrder{Column: "#"}}
+	p := &Page{e: e, sort: ui.SortOrder{Column: "#"}, stale: env.Watch(e.API, app.TopicRules, app.TopicStatus)}
 	p.table.Sort = &p.sort
+	// The rows move as hit counts change (sorted by 命中) and when the
+	// user sorts by another column: the table stays where it is scrolled
+	// rather than follow the rule at its top, which would leave the new
+	// first row part hidden under the header.
+	p.table.KeepOffset = true
 	return p
 }
 
@@ -234,7 +237,7 @@ func (p *Page) customRow(c *ui.Context, t *ui.Theme, list []model.CustomRule, i 
 		ui.Text(c, target).TextColor(t.TextMuted).SingleLine().Shrink(1).MaxWidth(220).Tooltip(target)
 		hitText := i18n.T("命中 0")
 		if hasHit {
-			hitText = i18n.Tf("命中 %s", env.FmtInt(h.HitCount))
+			hitText = i18n.Tn(int(h.HitCount), "命中 %s", env.FmtInt(h.HitCount))
 			if h.HitCount > 0 {
 				hitText += " · " + env.FmtAgo(h.HitAt)
 			}
@@ -260,18 +263,20 @@ func (p *Page) customRow(c *ui.Context, t *ui.Theme, list []model.CustomRule, i 
 // ---- subscription rules ----
 
 // subCache is which subscription rules match the query, as positions in
-// Rules() in the order shown, for the rules, query and order it was made
-// for. The hit counts change every refresh without changing which rules
-// there are, so the rows are taken fresh from Rules() at those positions;
-// only the order by hits is sorted again each build.
+// Rules(), for the rules, query and order it was made for. The hit counts
+// change every refresh without changing which rules there are, so the
+// table reads its rows fresh from Rules() at those positions; the order
+// by hits is sorted again only when the counts did change.
 type subCache struct {
 	n     int    // len(Rules())
 	sig   uint64 // of the rules' identities (rulesSig)
 	query string // lowerQuery
 	lang  string // TargetName translates 直连 / 拒绝
+	total int    // subscription rules
+	match []int  // matching positions, in the order of Rules()
 	sort  ui.SortOrder
-	total int   // subscription rules
-	pos   []int // matching positions, in order
+	hits  uint64 // hitsSig the order by hits was made for
+	pos   []int  // match in the order shown
 }
 
 var zero [1]byte
@@ -295,49 +300,59 @@ func rulesSig(rules []model.Rule) uint64 {
 	return h.Sum64()
 }
 
-// subRows returns the subscription rules shown and how many there are.
-func (p *Page) subRows(rules []model.Rule) (rows []model.Rule, total int) {
+// hitsSig folds the hit counts of the rules at pos: cheap enough for
+// every build, it tells when the order by hits may have changed.
+func hitsSig(rules []model.Rule, pos []int) uint64 {
+	h := uint64(14695981039346656037)
+	for _, at := range pos {
+		h = (h ^ uint64(rules[at].HitCount)) * 1099511628211
+	}
+	return h
+}
+
+// subRows returns the positions in rules of the subscription rules shown,
+// in order, and how many subscription rules there are. The slice is the
+// cache's own: it is valid until the next call.
+func (p *Page) subRows(rules []model.Rule) (pos []int, total int) {
 	sc := &p.sub
 	lq := p.lowerQuery()
-	sig := rulesSig(rules)
-	byHits := p.sort.Column == "hits"
-	if sc.pos == nil || sc.n != len(rules) || sc.sig != sig || sc.query != lq || sc.lang != i18n.Lang() || (!byHits && sc.sort != p.sort) {
-		*sc = subCache{n: len(rules), sig: sig, query: lq, lang: i18n.Lang(), sort: p.sort, pos: []int{}}
-		var sub []model.Rule
-		var at []int
+	// Which rules there are changes with TopicRules only (p.stale), so
+	// the fingerprint over every rule's strings is not taken per build.
+	sig := sc.sig
+	if sc.match == nil || sc.n != len(rules) || p.stale == nil || p.stale.Take() {
+		sig = rulesSig(rules)
+	}
+	fresh := false
+	if sc.match == nil || sc.n != len(rules) || sc.sig != sig || sc.query != lq || sc.lang != i18n.Lang() {
+		*sc = subCache{n: len(rules), sig: sig, query: lq, lang: i18n.Lang(), match: []int{}, pos: sc.pos[:0]}
 		for i, r := range rules {
 			if r.Custom {
 				continue
 			}
 			sc.total++
 			if matches(lq, r.Type, r.Payload, r.Proxy, env.TargetName(r.Proxy)) {
-				sub = append(sub, r)
-				at = append(at, i)
+				sc.match = append(sc.match, i)
 			}
 		}
-		// Sort positions with their rules.
-		idx := make([]int, len(sub))
-		for i := range idx {
-			idx[i] = i
-		}
-		sort.SliceStable(idx, func(i, j int) bool { return ruleLess(sub[idx[i]], sub[idx[j]], p.sort) })
-		for _, i := range idx {
-			sc.pos = append(sc.pos, at[i])
-		}
+		fresh = true
 	}
-	rows = make([]model.Rule, len(sc.pos))
-	for i, at := range sc.pos {
-		rows[i] = rules[at]
+	var hits uint64
+	if p.sort.Column == "hits" {
+		hits = hitsSig(rules, sc.match)
 	}
-	if byHits {
-		sortRules(rows, p.sort)
+	if fresh || sc.sort != p.sort || sc.hits != hits {
+		sc.sort, sc.hits = p.sort, hits
+		sc.pos = append(sc.pos[:0], sc.match...)
+		order := sc.pos
+		sort.SliceStable(order, func(i, j int) bool { return ruleLess(rules[order[i]], rules[order[j]], p.sort) })
 	}
-	return rows, sc.total
+	return sc.pos, sc.total
 }
 
 func (p *Page) subSection(c *ui.Context, t *ui.Theme, rules []model.Rule) {
 	e := p.e
 	rows, total := p.subRows(rules)
+	at := func(i int) model.Rule { return rules[rows[i]] }
 	subName := ""
 	for _, s := range e.API.Subscriptions() {
 		if s.Current {
@@ -361,14 +376,10 @@ func (p *Page) subSection(c *ui.Context, t *ui.Theme, rules []model.Rule) {
 			}
 			ui.Text(c, msg).TextColor(t.TextMuted).Padding(16).TextAlign(ui.Center)
 		} else {
-			if p.sort != p.sorted {
-				p.sorted = p.sort
-				p.table.ScrollTo(0, ui.Start)
-			}
-			p.table.Key = func(i int) any { return rows[i].Index }
-			p.table.Label = func(i int) string { return rows[i].Type + " " + rows[i].Payload }
-			ui.Table(c.Key("table"), &p.table, env.I18nColumns(columns), len(rows), func(row, col int) {
-				p.cell(c, t, rows[row], col, q)
+			p.table.Key = func(i int) any { return at(i).Index }
+			p.table.Label = func(i int) string { return at(i).Type + " " + at(i).Payload }
+			ui.Table(c.Key("table"), &p.table, colwidth.Fit(c, env.I18nColumns(columns)), len(rows), func(row, col int) {
+				p.cell(c, t, at(row), col, q)
 			}).FillWidth().Grow(1).Radius(8).Border(1, t.Border).Label(i18n.T("订阅规则"))
 		}
 		ui.Text(c, i18n.T("命中次数自本次内核启动起统计。「停用」只在本次运行有效，重新加载配置后恢复；要长期修改，请使用自定义规则或覆写。")).
@@ -398,7 +409,7 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r model.Rule, col int, q string)
 				fade(env.Highlight(c, r.Payload, q, t.Text).Font("monospace").SingleLine().Shrink(1).Tooltip(r.Payload))
 			}
 			if r.Size > 0 {
-				fade(ui.Text(c, i18n.Tf("%s 条", env.FmtInt(int64(r.Size)))).FontSize(11).TextColor(muted).FontFeatures("tnum").SingleLine().Shrink(0))
+				fade(ui.Text(c, i18n.Tn(r.Size, "%s 条", env.FmtInt(int64(r.Size)))).FontSize(11).TextColor(muted).FontFeatures("tnum").SingleLine().Shrink(0))
 			}
 			if r.Disabled {
 				ui.Box(c).Shrink(0).Children(func() { e.Kit.Tag(c, i18n.T("已临时停用"), "orange") })
@@ -428,10 +439,6 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r model.Rule, col int, q string)
 			e.Run(func() error { return e.API.SetRuleDisabled(idx, dis) }, "")
 		})
 	}
-}
-
-func sortRules(rows []model.Rule, s ui.SortOrder) {
-	sort.SliceStable(rows, func(i, j int) bool { return ruleLess(rows[i], rows[j], s) })
 }
 
 // ruleLess orders rules by s: by hits or by position.
@@ -470,7 +477,7 @@ func (p *Page) providerRows(c *ui.Context, t *ui.Theme, provs []model.RuleProvid
 	{
 		for _, pr := range provs {
 			pr := pr
-			desc := i18n.Tf("%s · %s 条 · 更新于 %s", behaviorName(pr.Behavior), env.FmtInt(int64(pr.Count)), env.FmtAgo(pr.UpdatedAt))
+			desc := i18n.Tn(pr.Count, "%s · %s 条 · 更新于 %s", behaviorName(pr.Behavior), env.FmtInt(int64(pr.Count)), env.FmtAgo(pr.UpdatedAt))
 			e.Kit.Row(c, pr.Name, desc, func() {
 				if pr.Updating {
 					ui.Row(c).Gap(6).Children(func() {
@@ -573,10 +580,11 @@ func (p *Page) testResultView(c *ui.Context, t *ui.Theme, r model.RuleMatch) {
 func (p *Page) runTest() {
 	e := p.e
 	host := strings.TrimSpace(p.testHost)
+	p.mu.Lock()
 	if host == "" || p.testing {
+		p.mu.Unlock()
 		return
 	}
-	p.mu.Lock()
 	p.testing, p.testErr, p.testResult = true, "", nil
 	p.mu.Unlock()
 	e.Run(func() error {

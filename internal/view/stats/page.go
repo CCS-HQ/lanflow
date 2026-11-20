@@ -16,6 +16,7 @@ import (
 	"lanflow/internal/geo"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/colwidth"
 	"lanflow/internal/view/env"
 	"lanflow/internal/view/procicon"
 )
@@ -199,7 +200,7 @@ func (p *Page) chart(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
 			}
 			if hover >= 0 {
 				s := series[hover]
-				tip := i18n.Tf("%s · ↓ %s ↑ %s · %d 次请求", tipTime(s.Time, st.Hourly), env.FmtBytes(s.Download), env.FmtBytes(s.Upload), s.Requests)
+				tip := i18n.Tn(int(s.Requests), "%s · ↓ %s ↑ %s · %d 次请求", tipTime(s.Time, st.Hourly), env.FmtBytes(s.Download), env.FmtBytes(s.Upload), s.Requests)
 				tw, _ := pt.MeasureText(0, ui.Span{Text: tip, Size: 11})
 				tx := min(max(r.X+px+10, r.X), r.X+r.W-tw-8)
 				pt.Fill(ui.Rect{X: tx - 6, Y: r.Y + 2, W: tw + 12, H: 20}, t.Background, 6)
@@ -222,9 +223,19 @@ func axisLabel(i, n int, at time.Time, hourly bool) string {
 		return i18n.T("今天")
 	}
 	if (n-1-i)%5 == 0 {
-		return at.Format("01-02")
+		return axisDay(at)
 	}
 	return ""
+}
+
+// axisDay is a day on the chart's axis, without its year, in the language
+// shown as env.FmtDate writes dates: "11-08" in Chinese, "Nov 8" in
+// English.
+func axisDay(at time.Time) string {
+	if i18n.Lang() == i18n.EN {
+		return at.Format("Jan 2")
+	}
+	return at.Format("01-02")
 }
 
 // tipTime names a bar in the hover tip.
@@ -271,7 +282,7 @@ func (p *Page) table(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
 			e.Toast(i18n.T("已复制"), false)
 		}
 	}
-	cols := env.I18nColumns(columns)
+	cols := colwidth.Fit(c, env.I18nColumns(columns))
 	ui.Column(c).Grow(1).Radius(10).Border(1, t.Border).Clip().Children(func() {
 		ui.Table(c.Key("table"), &p.list, cols, len(rows), func(r, col int) {
 			p.cell(c, t, rows[r], cols[col].ID, q)

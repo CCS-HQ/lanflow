@@ -7,6 +7,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"lanflow/internal/i18n"
+	"lanflow/internal/view/env"
 )
 
 // Core update (docs/design.md:519 「更新」) and settings export / import
@@ -48,7 +49,7 @@ func (p *Page) exportDialog(c *ui.Context, t *ui.Theme) {
 		return
 	}
 	ui.Modal(c, &p.export.open, func() {
-		ui.Column(c).Width(420).Gap(12).Children(func() {
+		ui.Column(c).Width(env.DialogWidth(c, 420)).Gap(12).Children(func() {
 			ui.Text(c, i18n.T("导出设置")).FontSize(15).Bold()
 			ui.Text(c, i18n.T("导出常规、代理、DNS、嗅探与内核设置，以及覆写和自定义规则。内核文件路径不会导出。")).FontSize(12).TextColor(t.TextMuted)
 			ui.Checkbox(c, &p.export.subs, i18n.T("包含订阅链接"))

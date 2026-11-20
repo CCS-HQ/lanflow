@@ -23,6 +23,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -101,6 +103,15 @@ type compiled struct {
 	upPass  string
 }
 
+// tracked is one decrypted (or recorded plaintext) connection: both of its
+// sockets and the decision that put it there, asked again when the
+// selection changes.
+type tracked struct {
+	conns []net.Conn
+	// still reports whether the connection would be decrypted under cfg.
+	still func(cfg *compiled) bool
+}
+
 // Agent is a running capture agent.
 type Agent struct {
 	cfg   atomic.Pointer[compiled]
@@ -114,7 +125,7 @@ type Agent struct {
 	roots *x509.CertPool // upstream roots; nil = the system's
 
 	mu     sync.Mutex
-	active map[net.Conn]bool // decrypted connections (closed when turned off)
+	active map[*tracked]struct{} // decrypted connections
 	closed bool
 	wg     sync.WaitGroup
 	// Accepts counts accepted connections (tests).
@@ -137,7 +148,7 @@ func New(cfg Config, root *ca.Root) (*Agent, error) {
 	if max <= 0 {
 		max = 256
 	}
-	a := &Agent{root: root, ln: ln, pins: newPinTable(), sem: make(chan struct{}, max), active: map[net.Conn]bool{},
+	a := &Agent{root: root, ln: ln, pins: newPinTable(), sem: make(chan struct{}, max), active: map[*tracked]struct{}{},
 		st: newStore(cfg.MaxFlows, cfg.BodyCap, cfg.MemLimit, cfg.SpillDir, 0)}
 	a.loop = newLoopGuard(time.Duration(cfg.LoopWindow)*time.Millisecond, cfg.LoopMax)
 	if cfg.NoLoopGuard {
@@ -169,7 +180,11 @@ func (a *Agent) Addr() string { return a.ln.Addr().String() }
 // Port is the listening port.
 func (a *Agent) Port() int { return a.ln.Addr().(*net.TCPAddr).Port }
 
-// Apply changes the selection; turning off closes decrypted connections.
+// Apply changes the selection. Turning off closes every decrypted
+// connection; any other change closes the ones the new selection would no
+// longer decrypt (a host removed or now skipped, recording paused): a
+// connection already decrypted would otherwise stay in the layer, and be
+// recorded, for as long as the client keeps it open.
 func (a *Agent) Apply(u Update) {
 	old := a.cfg.Load()
 	c := *old
@@ -201,8 +216,23 @@ func (a *Agent) Apply(u Update) {
 		c.upPass = *u.UpPass
 	}
 	a.cfg.Store(&c)
-	if old.enabled && !c.enabled {
-		a.closeActive()
+	a.closeStale(&c)
+}
+
+// closeStale closes the decrypted connections cfg would not decrypt.
+func (a *Agent) closeStale(cfg *compiled) {
+	a.mu.Lock()
+	var stale []*tracked
+	for t := range a.active {
+		if !t.still(cfg) {
+			stale = append(stale, t)
+		}
+	}
+	a.mu.Unlock()
+	for _, t := range stale {
+		for _, c := range t.conns {
+			c.Close()
+		}
 	}
 }
 
@@ -211,9 +241,9 @@ func (a *Agent) Enabled() bool { return a.cfg.Load().enabled }
 
 func (a *Agent) closeActive() {
 	a.mu.Lock()
-	cs := make([]net.Conn, 0, len(a.active))
-	for c := range a.active {
-		cs = append(cs, c)
+	var cs []net.Conn
+	for t := range a.active {
+		cs = append(cs, t.conns...)
 	}
 	a.mu.Unlock()
 	for _, c := range cs {
@@ -243,6 +273,13 @@ func (a *Agent) Serve() error {
 		a.wg.Add(1)
 		go func() {
 			defer a.wg.Done()
+			// the bytes are the peer's: a fault in handling one connection
+			// ends that connection, not every other one with the process
+			defer func() {
+				if v := recover(); v != nil {
+					reportPanic("connection", v)
+				}
+			}()
 			a.handle(c)
 		}()
 	}
@@ -451,6 +488,23 @@ func (a *Agent) selfTarget(cfg *compiled, host string, port int) bool {
 
 // decide returns "" to decrypt, or why not with the flags to record.
 func (a *Agent) decide(cfg *compiled, sel Selector, req connectReq, ch *clientHello) (string, []string) {
+	if why, flags := a.selected(cfg, sel, req, ch); why != "" {
+		return why, flags
+	}
+	sni := strings.ToLower(strings.TrimSuffix(ch.sni, "."))
+	if a.pins.skipped(sel.User + "|" + sni) {
+		return "证书固定，暂时跳过", []string{model.FlowPassthrough, model.FlowPinned}
+	}
+	return "", nil
+}
+
+// selected is the part of decide that depends on the configuration alone:
+// whether cfg selects the connection for decryption. A connection already
+// decrypted is asked this again when the configuration changes
+// (stillSelected); what was learned about the host since (a client that
+// pinned its certificate) is about new connections, not a reason to cut a
+// working one.
+func (a *Agent) selected(cfg *compiled, sel Selector, req connectReq, ch *clientHello) (string, []string) {
 	pass := model.FlowPassthrough
 	if !cfg.enabled {
 		return "解密已关闭", []string{pass}
@@ -484,9 +538,6 @@ func (a *Agent) decide(cfg *compiled, sel Selector, req connectReq, ch *clientHe
 	}
 	if cfg.privateSkip(sel, sni, req.host) {
 		return "内网地址被排除（可在选择中为该目标允许内网抓包）", []string{pass}
-	}
-	if a.pins.skipped(sel.User + "|" + sni) {
-		return "证书固定，暂时跳过", []string{pass, model.FlowPinned}
 	}
 	return "", nil
 }
@@ -652,18 +703,34 @@ func closeWrite(c net.Conn) {
 	c.Close()
 }
 
-func (a *Agent) track(cs ...net.Conn) func() {
+// track registers a decrypted connection until the returned function is
+// called. ok is false when the selection changed while the connection was
+// being set up and no longer covers it: the caller drops the connection.
+func (a *Agent) track(still func(cfg *compiled) bool, cs ...net.Conn) (done func(), ok bool) {
+	t := &tracked{conns: cs, still: still}
 	a.mu.Lock()
-	for _, c := range cs {
-		a.active[c] = true
-	}
+	a.active[t] = struct{}{}
 	a.mu.Unlock()
-	return func() {
+	done = func() {
 		a.mu.Lock()
-		for _, c := range cs {
-			delete(a.active, c)
-		}
+		delete(a.active, t)
 		a.mu.Unlock()
+	}
+	// read after registering: an Apply from here on sees the connection
+	return done, still(a.cfg.Load())
+}
+
+// stillSelected is the decision of a decrypted connection, asked again
+// for a later configuration.
+func (a *Agent) stillSelected(sel Selector, decide func(cfg *compiled) string) func(cfg *compiled) bool {
+	return func(cfg *compiled) bool {
+		if cfg.noRec {
+			return false
+		}
+		if _, ok := cfg.auth(sel.User, sel.Pass); !ok {
+			return false
+		}
+		return decide(cfg) == ""
 	}
 }
 
@@ -786,8 +853,12 @@ func (a *Agent) mitm(c net.Conn, br *bufio.Reader, cfg *compiled, sel Selector, 
 		a.st.add(base)
 		return
 	}
-	defer a.track(c, raw)()
-	if !a.cfg.Load().enabled { // turned off meanwhile
+	untrack, ok := a.track(a.stillSelected(sel, func(cfg *compiled) string {
+		why, _ := a.selected(cfg, sel, req, ch)
+		return why
+	}), c, raw)
+	defer untrack()
+	if !ok { // turned off, or the host left the selection, meanwhile
 		up.Close()
 		return
 	}
@@ -820,7 +891,15 @@ func (a *Agent) plain(c net.Conn, br *bufio.Reader, cfg *compiled, sel Selector,
 		a.st.add(base)
 		return
 	}
-	defer a.track(c, up)()
+	untrack, ok := a.track(a.stillSelected(sel, func(cfg *compiled) string {
+		why, _ := a.decidePlain(cfg, sel, req)
+		return why
+	}), c, up)
+	defer untrack()
+	if !ok {
+		up.Close()
+		return
+	}
 	if a.loop != nil {
 		up = &firstWrite{Conn: up, g: a.loop}
 	}
@@ -837,19 +916,34 @@ func (a *Agent) relay(client, up net.Conn, cr *connRec, proto, scheme, host stri
 	defer client.Close()
 	reqPipe, respPipe := newLossyPipe(pipeMax), newLossyPipe(pipeMax)
 	var pw sync.WaitGroup
+	finish := func() {}
+	// parse runs one direction's parser. When it returns (done, gave up or
+	// failed) its pipe is cut, so the copy of what is still forwarded is
+	// dropped instead of kept.
+	parse := func(pipe *lossyPipe, fail func(), fn func()) {
+		pw.Add(1)
+		go func() {
+			defer pw.Done()
+			defer pipe.Abort()
+			defer guardParser(fail, reqPipe, respPipe)
+			fn()
+		}()
+	}
 	switch proto {
 	case "h2":
 		cr.base.Proto = "h2"
 		p := newH2Parser(cr)
-		pw.Add(2)
-		go func() { defer pw.Done(); p.run(reqPipe, true) }()
-		go func() { defer pw.Done(); p.run(respPipe, false) }()
+		fail := func() { p.abort(parserFault) }
+		finish = func() { p.abort("") }
+		parse(reqPipe, fail, func() { p.run(reqPipe, true) })
+		parse(respPipe, fail, func() { p.run(respPipe, false) })
 	case "", "http/1.1", "http/1.0":
 		cr.base.Proto = "h1"
 		p := newH1Parser(cr, scheme, host)
-		pw.Add(2)
-		go func() { defer pw.Done(); p.requests(reqPipe) }()
-		go func() { defer pw.Done(); p.responses(respPipe); p.drain("") }()
+		fail := func() { p.drain(parserFault) }
+		finish = func() { p.drain("") }
+		parse(reqPipe, fail, func() { p.requests(reqPipe) })
+		parse(respPipe, fail, func() { p.responses(respPipe); p.drain("") })
 	default:
 		cr.base.Proto = proto
 		cr.base.Flags = append(cr.base.Flags, model.FlowUnknown)
@@ -867,6 +961,39 @@ func (a *Agent) relay(client, up net.Conn, cr *connRec, proto, scheme, host stri
 	reqPipe.Close()
 	respPipe.Close()
 	pw.Wait()
+	// a request parsed after the response side had ended is still open
+	finish()
+}
+
+// parserFault ends the records of a connection whose parser failed.
+const parserFault = "解析器内部错误，已停止记录此连接"
+
+// guardParser is deferred at the top of a parser goroutine. The parsers
+// read bytes the peers chose; a fault in one stops the record of that
+// connection (fail finishes what is open, the pipes are cut so the other
+// direction's parser stops too) and never the forwarding, which does not
+// wait for them (docs/capture.md §5.2).
+func guardParser(fail func(), pipes ...*lossyPipe) {
+	v := recover()
+	if v == nil {
+		return
+	}
+	for _, p := range pipes {
+		p.Abort()
+	}
+	reportPanic("parser", v)
+	defer func() { recover() }() // fail runs on a state the fault left behind
+	fail()
+}
+
+// reportPanic writes a recovered fault to stderr (the window keeps the
+// agent's stderr for its error reports).
+func reportPanic(where string, v any) {
+	stack := debug.Stack()
+	if len(stack) > 4<<10 {
+		stack = stack[:4<<10]
+	}
+	fmt.Fprintf(os.Stderr, "capture agent: %s fault: %v\n%s\n", where, v, stack)
 }
 
 // ---- reads for the control API ----

@@ -336,7 +336,7 @@ func TestRecheckSkipsLanflowsOwnDNSChange(t *testing.T) {
 	starts := n.mgr.starts
 	n.s.takeNetBaseline()
 	n.s.ClearAppLogs()
-	if err := n.s.d.dns.Set([]string{"223.5.5.5"}); err != nil {
+	if err := n.s.d.dns.Set(nil, []string{"223.5.5.5"}); err != nil {
 		t.Fatal(err)
 	}
 	n.set(func(n *netHarness) { n.info.DNS = []string{"223.5.5.5"} })

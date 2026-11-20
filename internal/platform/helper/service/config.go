@@ -75,13 +75,22 @@ func LoadConfig(path string) (Config, error) {
 	return c, nil
 }
 
+// encodeConfig validates c and returns its file content.
+func encodeConfig(c Config) ([]byte, error) {
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
+}
+
 // SaveConfig writes the config with the given mode (0644 for root-owned
 // files: world-readable, admin-writable).
 func SaveConfig(path string, c Config, mode os.FileMode) error {
-	if err := c.Validate(); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(c, "", "  ")
+	b, err := encodeConfig(c)
 	if err != nil {
 		return err
 	}
@@ -89,7 +98,7 @@ func SaveConfig(path string, c Config, mode os.FileMode) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), mode); err != nil {
+	if err := os.WriteFile(tmp, b, mode); err != nil {
 		return err
 	}
 	if err := os.Chmod(tmp, mode); err != nil {

@@ -81,7 +81,7 @@ func (p *Page) hotkeyRecorder(c *ui.Context, t *ui.Theme, s model.Settings, acti
 	e := p.e
 	acc := s.ShortcutOf(action)
 	box := ui.Row(c.Key("hotkey-"+action)).Focusable().Role(ui.RoleButton).Label(hotkey.ActionName(action)).
-		MinWidth(132).Height(28).PaddingX(10).Radius(6).AlignItems(ui.Center).Justify(ui.Center).
+		MinWidth(132).MinHeight(28).PaddingX(10).Radius(6).AlignItems(ui.Center).Justify(ui.Center).
 		Background(t.Surface).Border(1, t.Border).Cursor(ui.CursorPointer)
 	focused := box.Focused()
 	if focused {

@@ -98,7 +98,7 @@ type RouteResult struct {
 	Notes    []string         `json:"notes,omitempty"`
 }
 
-func routeDomain(_ context.Context, c *remote.Client, a map[string]json.RawMessage) (any, error) {
+func routeDomain(ctx context.Context, c *remote.Client, a map[string]json.RawMessage) (any, error) {
 	domain := ctl.CleanHost(argStr(a, "domain"))
 	target := argStr(a, "target")
 	if domain == "" || target == "" {
@@ -112,8 +112,10 @@ func routeDomain(_ context.Context, c *remote.Client, a map[string]json.RawMessa
 		return nil, fmt.Errorf("rule_type must be DOMAIN-SUFFIX, DOMAIN or DOMAIN-KEYWORD")
 	}
 	// 1. The target must exist.
-	px := c.Proxies()
-	if err := c.LastError(); err != nil {
+	// Reads go through ctl.ReadContext: the client's LastError may be the
+	// error of an earlier tool call of this session.
+	var px model.ProxySnapshot
+	if err := ctl.ReadContext(ctx, c, "Proxies", &px); err != nil {
 		return nil, err
 	}
 	up := strings.ToUpper(target)
@@ -131,8 +133,8 @@ func routeDomain(_ context.Context, c *remote.Client, a map[string]json.RawMessa
 	// 3. The rule: update an existing custom rule for the same domain
 	// rather than stacking a second one.
 	rule := model.CustomRule{Type: typ, Payload: domain, Target: target}
-	cur := c.CustomRules()
-	if err := c.LastError(); err != nil {
+	var cur []model.CustomRule
+	if err := ctl.ReadContext(ctx, c, "CustomRules", &cur); err != nil {
 		return nil, err
 	}
 	rest := cur
@@ -185,7 +187,11 @@ func routeDomain(_ context.Context, c *remote.Client, a map[string]json.RawMessa
 		if err := c.TestProxyDelay(res.Exit); err != nil {
 			res.Notes = append(res.Notes, "delay test failed: "+err.Error())
 		} else {
-			d := c.Proxies().Proxies[res.Exit].Delay
+			d := -1
+			var after model.ProxySnapshot
+			if err := ctl.ReadContext(ctx, c, "Proxies", &after); err == nil {
+				d = after.Proxies[res.Exit].Delay
+			}
 			res.Delay = &d
 			if d < 0 {
 				res.Notes = append(res.Notes, fmt.Sprintf("the exit node %q did not answer the delay test: the site may not load; consider another node", res.Exit))
@@ -205,9 +211,9 @@ type SwitchResult struct {
 	Fastest  []ctl.MemberView `json:"fastest,omitempty"`
 }
 
-func switchNode(_ context.Context, c *remote.Client, a map[string]json.RawMessage) (any, error) {
-	px := c.Proxies()
-	if err := c.LastError(); err != nil {
+func switchNode(ctx context.Context, c *remote.Client, a map[string]json.RawMessage) (any, error) {
+	var px model.ProxySnapshot
+	if err := ctl.ReadContext(ctx, c, "Proxies", &px); err != nil {
 		return nil, err
 	}
 	group := argStr(a, "group")
@@ -232,7 +238,9 @@ func switchNode(_ context.Context, c *remote.Client, a map[string]json.RawMessag
 		if err := c.TestGroupDelay(group); err != nil {
 			return nil, err
 		}
-		px = c.Proxies()
+		if err := ctl.ReadContext(ctx, c, "Proxies", &px); err != nil {
+			return nil, err
+		}
 		var ms []ctl.MemberView
 		for _, m := range g.All {
 			p := px.Proxies[m]
@@ -262,8 +270,13 @@ func switchNode(_ context.Context, c *remote.Client, a map[string]json.RawMessag
 		return nil, err
 	}
 	res.Selected = node
+	// -1 unless the node answered and its delay could be read.
+	res.Delay = -1
 	if err := c.TestProxyDelay(node); err == nil {
-		res.Delay = c.Proxies().Proxies[node].Delay
+		var after model.ProxySnapshot
+		if err := ctl.ReadContext(ctx, c, "Proxies", &after); err == nil {
+			res.Delay = after.Proxies[node].Delay
+		}
 	}
 	return res, nil
 }

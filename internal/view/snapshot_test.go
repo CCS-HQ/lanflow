@@ -17,6 +17,7 @@ import (
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
+	"lanflow/internal/view/env/envtest"
 )
 
 // snapshot is one frame to render: a page, an optional navigation arg
@@ -306,18 +307,7 @@ func clickOnly(key string) func(*testing.T, *fake.Fake, *Shell, *ui.Tester) {
 // then clicks it (settings tabs scroll at the minimum window size).
 func clickScrolled(t *testing.T, tt *ui.Tester, text string) {
 	t.Helper()
-	for i := 0; i < 8; i++ {
-		r, ok := tt.Find(text)
-		if !ok {
-			t.Fatalf("find %q: %q", text, tt.Texts())
-		}
-		if r.Y+r.H <= float32(tt.Image().Bounds().Dy())-20 && r.Y >= 0 {
-			break
-		}
-		tt.Scroll(r.X, 400, 0, 300)
-		tt.Frame()
-	}
-	click(t, tt, text)
+	envtest.ClickScrolled(t, tt, text)
 }
 
 func clickSwitch(t *testing.T, tt *ui.Tester, label string) {

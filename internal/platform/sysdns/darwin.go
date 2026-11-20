@@ -76,10 +76,36 @@ func darwinSnapshot(ctx context.Context, run executor) (Saved, error) {
 	return json.Marshal(m)
 }
 
-func darwinSet(ctx context.Context, run executor, servers []string) error {
+// snapshotServices returns the services recorded in a snapshot.
+func snapshotServices(s Saved) ([]string, error) {
+	var m map[string][]string
+	if err := json.Unmarshal(s, &m); err != nil {
+		return nil, fmt.Errorf("系统 DNS 快照损坏：%v", err)
+	}
+	svcs := make([]string, 0, len(m))
+	for svc := range m {
+		svcs = append(svcs, svc)
+	}
+	slices.Sort(svcs)
+	return svcs, nil
+}
+
+// darwinSet points the enabled services at servers. With only (the
+// services of the snapshot taken just before, see snapshotServices) it
+// leaves every other service alone: Restore puts back only what the
+// snapshot holds, so a service the snapshot could not read, or one that
+// appeared since, would otherwise keep servers for good. A nil only means
+// every enabled service (tests).
+func darwinSet(ctx context.Context, run executor, servers []string, only []string) error {
 	svcs, err := darwinServices(ctx, run)
 	if err != nil {
 		return err
+	}
+	if only != nil {
+		svcs = slices.DeleteFunc(svcs, func(svc string) bool { return !slices.Contains(only, svc) })
+		if len(svcs) == 0 {
+			return errors.New("设置系统 DNS 失败：没有可以读取并恢复的网络服务")
+		}
 	}
 	var errs []error
 	for _, svc := range svcs {

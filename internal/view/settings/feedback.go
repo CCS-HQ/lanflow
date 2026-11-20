@@ -8,6 +8,7 @@ import (
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/env"
 )
 
 // 设置 › 关于 › 反馈问题 and 反馈上报 (docs/feedback-api.md): the entry to
@@ -63,7 +64,7 @@ func (p *Page) feedbackConfigDialog(c *ui.Context, t *ui.Theme, s model.Settings
 		return
 	}
 	ui.Modal(c, &f.open, func() {
-		ui.Column(c.Key("feedback-config")).Width(520).Gap(12).Children(func() {
+		ui.Column(c.Key("feedback-config")).Width(env.DialogWidth(c, 520)).Gap(12).Children(func() {
 			ui.Text(c, i18n.T("反馈上报")).FontSize(15).Bold()
 			ui.RichText(c).FontSize(12).TextColor(t.TextMuted).Children(func() {
 				ui.Text(c, i18n.T("反馈会以 POST {上报地址}/v1/reports 发送到你自己部署的服务（例如 Cloudflare Worker）；接口约定见 "))

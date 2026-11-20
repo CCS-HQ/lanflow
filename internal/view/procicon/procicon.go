@@ -5,8 +5,6 @@
 package procicon
 
 import (
-	"bytes"
-	"image"
 	_ "image/png" // process icons are PNG
 
 	"github.com/egoist/mygo/ui"
@@ -21,11 +19,22 @@ const Size = 16
 // takes the text colour, for processes without an icon of their own.
 var Glyph = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="12" height="11" rx="2.5"/><path d="M2 6.2h12"/><circle cx="4.6" cy="4.35" r=".6" fill="currentColor" stroke="none"/><circle cx="6.8" cy="4.35" r=".6" fill="currentColor" stroke="none"/></svg>`))
 
+// iconEdge is the longer edge an icon is kept at, in pixels: three times
+// its size on screen covers every display scale, whatever size the system
+// handed out (a 512×512 icon would keep a megabyte to draw 16 DIPs).
+const iconEdge = 3 * Size
+
+// maxIcons is how many decoded icons a cache keeps: over it, the ones
+// decoded first are dropped (and decoded again if they show again), so a
+// long session with many short-lived processes does not grow it forever.
+const maxIcons = 256
+
 // Cache keeps the decoded icons of a view, by process path.
 type Cache struct {
-	api  app.API
-	src  map[string]ui.ImageSource
-	fail map[string]bool // bytes that did not decode: never asked again
+	api   app.API
+	src   map[string]ui.ImageSource
+	order []string        // the paths of src, oldest first
+	fail  map[string]bool // bytes that did not decode: never asked again
 }
 
 // New returns an empty cache reading icons from api.
@@ -46,13 +55,25 @@ func (c *Cache) Source(path string) ui.ImageSource {
 	if data == nil {
 		return nil
 	}
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, err := DecodeImage(data, iconEdge)
 	if err != nil {
+		if len(c.fail) >= 4*maxIcons {
+			clear(c.fail)
+		}
 		c.fail[path] = true
 		return nil
 	}
 	s := ui.NewBitmap(img)
+	if len(c.order) >= maxIcons {
+		// Drop the oldest quarter at once rather than one each time.
+		drop := maxIcons / 4
+		for _, p := range c.order[:drop] {
+			delete(c.src, p)
+		}
+		c.order = append(c.order[:0], c.order[drop:]...)
+	}
 	c.src[path] = s
+	c.order = append(c.order, path)
 	return s
 }
 

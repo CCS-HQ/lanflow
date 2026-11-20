@@ -25,8 +25,9 @@ import (
 // not decompressed on the wire.
 
 const (
-	replayBodyCap = 4 << 20
-	replayTimeout = 30 * time.Second
+	replayBodyCap    = 4 << 20
+	replayTimeout    = 30 * time.Second
+	replayMaxTimeout = 120 * time.Second
 )
 
 // hop-by-hop and framing headers the transport sets itself
@@ -46,11 +47,7 @@ func (s *Service) ReplayRequest(req model.ReplayRequest) (res model.ReplayResult
 	if method == "" {
 		method = http.MethodGet
 	}
-	timeout := replayTimeout
-	if req.TimeoutMs > 0 {
-		timeout = time.Duration(req.TimeoutMs) * time.Millisecond
-	}
-	ctx, cancel := context.WithTimeout(s.rootCtx, timeout)
+	ctx, cancel := context.WithTimeout(s.rootCtx, replayDeadline(req.TimeoutMs))
 	defer cancel()
 
 	var body io.Reader
@@ -69,6 +66,8 @@ func (s *Service) ReplayRequest(req model.ReplayRequest) (res model.ReplayResult
 		case name == "" || strings.HasPrefix(name, ":") || replayDrop[lower]:
 			continue
 		case lower == "host":
+			// sent as written, also when it differs from the URL's host:
+			// the editor says so (抓包 · 重新发送)
 			hr.Host = kv.Value
 			continue
 		}
@@ -114,9 +113,11 @@ func (s *Service) ReplayRequest(req model.ReplayRequest) (res model.ReplayResult
 	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, replayBodyCap+1))
 	n := int64(len(raw))
 	if n > replayBodyCap {
+		// The rest is not read: a stream without end would run until the
+		// timeout. The size is the declared one when there is one, else
+		// what was received.
 		raw, res.Truncated = raw[:replayBodyCap], true
-		rest, _ := io.Copy(io.Discard, resp.Body)
-		n += rest - 1
+		n = max(n, resp.ContentLength)
 	}
 	res.Status, res.StatusText, res.Proto = resp.StatusCode, http.StatusText(resp.StatusCode), resp.Proto
 	res.BodySize, res.TTFBMs, res.DurationMs = n, ttfb.Milliseconds(), time.Since(start).Milliseconds()
@@ -136,6 +137,15 @@ func (s *Service) ReplayRequest(req model.ReplayRequest) (res model.ReplayResult
 		res.Error = rerr.Error()
 	}
 	return res, nil
+}
+
+// replayDeadline is the time a replayed request may take: the default
+// when ms is not given, never more than replayMaxTimeout.
+func replayDeadline(ms int) time.Duration {
+	if ms <= 0 {
+		return replayTimeout
+	}
+	return min(time.Duration(ms)*time.Millisecond, replayMaxTimeout)
 }
 
 func sortKV(kv []model.KV) {

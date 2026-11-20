@@ -7,10 +7,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"lanflow/internal/i18n"
@@ -58,75 +60,26 @@ var ErrSecretNotFound = errors.New("secret not found")
 
 func (s *Service) webdavSecretPath() string { return filepath.Join(s.opt.DataDir, webdavSecretFile) }
 
-// loadPassword reads the password once: from the keychain, or the file
-// fallback when the system has no keychain. The store kind is remembered
-// for WebDAVInfo.
+// webdavSlot is where the password is kept (configsecrets.go).
+func (s *Service) webdavSlot() *secretSlot {
+	return s.cs.webdavPW.init(webdavSecretKey, webdavSecretFile)
+}
+
+// loadPassword returns the password, reading it once: from the keychain,
+// or the file fallback when the system has no keychain. It is for
+// automatic work: a read the keychain refused a moment ago is not tried
+// again (secretRetry).
 func (s *Service) loadPassword() (string, error) {
-	st := feat2(s)
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.pwLoaded {
-		return st.password, nil
-	}
-	if Secrets != nil {
-		v, err := Secrets.Get(webdavSecretKey)
-		switch {
-		case err == nil:
-			st.password, st.pwLoaded, st.storeKind = string(v), true, model.PasswordStoreKeychain
-			return st.password, nil
-		case errors.Is(err, ErrSecretNotFound):
-			st.pwLoaded, st.storeKind = true, model.PasswordStoreKeychain
-			return "", nil
-		case errors.Is(err, errors.ErrUnsupported):
-			s.alog.Warnf("webdav: no system keychain (%v); the password is kept obfuscated in %s", err, webdavSecretFile)
-		default:
-			return "", fmt.Errorf(i18n.T("读取钥匙串失败：%v"), err)
-		}
-	}
-	st.storeKind = model.PasswordStoreFile
-	data, err := os.ReadFile(s.webdavSecretPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			st.pwLoaded = true
-			return "", nil
-		}
-		return "", fmt.Errorf(i18n.T("读取密码文件失败：%v"), err)
-	}
-	st.password, st.pwLoaded = deobfuscate(strings.TrimSpace(string(data))), true
-	return st.password, nil
+	return s.readSecret(s.webdavSlot(), false)
 }
 
 // SetWebDAVPassword implements API.SetWebDAVPassword: "" removes it.
 func (s *Service) SetWebDAVPassword(pw string) (err error) {
 	defer func() { s.logOp("set webdav password", err) }()
-	if _, err := s.loadPassword(); err != nil {
+	if err := s.writeSecret(s.webdavSlot(), pw); err != nil {
 		return err
 	}
-	st := feat2(s)
-	st.mu.Lock()
-	kind := st.storeKind
-	st.mu.Unlock()
-	if kind == model.PasswordStoreKeychain {
-		if pw == "" {
-			err = Secrets.Delete(webdavSecretKey)
-		} else {
-			err = Secrets.Set(webdavSecretKey, []byte(pw))
-		}
-		if err != nil {
-			return fmt.Errorf(i18n.T("写入钥匙串失败：%v"), err)
-		}
-	} else {
-		if pw == "" {
-			if err := os.Remove(s.webdavSecretPath()); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf(i18n.T("删除密码文件失败：%v"), err)
-			}
-		} else if err := writeFileAtomic(s.webdavSecretPath(), []byte(obfuscate(pw)+"\n"), 0o600); err != nil {
-			return fmt.Errorf(i18n.T("保存密码文件失败：%v"), err)
-		}
-	}
-	st.mu.Lock()
-	st.password, st.pwLoaded = pw, true
-	st.mu.Unlock()
+	s.confirmWebDAVOrigin() // entered on this machine, for the server set here
 	s.em.emit(TopicSettings)
 	return nil
 }
@@ -163,37 +116,19 @@ func xorStream(nonce, data []byte) []byte {
 
 // ---- API ----
 
-// WebDAVInfo implements API.WebDAVInfo (cheap read).
+// WebDAVInfo implements API.WebDAVInfo (cheap read: the password comes
+// from the cache, read in the background the first time; peekSecret).
 func (s *Service) WebDAVInfo() model.WebDAVInfo {
 	s.mu.Lock()
 	last := s.state.settings.WebDAV.LastBackupAt
 	s.mu.Unlock()
+	has, kind := s.peekSecret(s.webdavSlot())
 	st := feat2(s)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if !st.pwLoaded && !st.pwLoading {
-		// The password is read lazily (the keychain may ask the user);
-		// the read lands with TopicSettings and the next call sees it.
-		st.pwLoading = true
-		s.goBackground(func() {
-			_, _ = s.loadPassword()
-			st.mu.Lock()
-			st.pwLoading = false
-			st.mu.Unlock()
-			s.em.emit(TopicSettings)
-		})
-	}
-	kind := st.storeKind
-	if kind == "" {
-		if Secrets != nil {
-			kind = model.PasswordStoreKeychain
-		} else {
-			kind = model.PasswordStoreFile
-		}
-	}
 	return model.WebDAVInfo{
 		PasswordStore: kind,
-		HasPassword:   st.password != "",
+		HasPassword:   has,
 		Busy:          st.busy,
 		LastBackupAt:  last,
 		LastError:     st.lastError,
@@ -209,8 +144,11 @@ func webdavDir(set model.WebDAVSettings) string {
 	return d
 }
 
-// client builds the client for the current settings.
-func (s *Service) webdavClient() (*webdavClient, model.WebDAVSettings, error) {
+// webdavClient builds the client for the current settings. user says the
+// user asked for the operation on this machine: the password is then read
+// even after a recent refusal (secretRetry), and the server set here
+// counts as confirmed for automatic backups (confirmWebDAVOrigin).
+func (s *Service) webdavClient(user bool) (*webdavClient, model.WebDAVSettings, error) {
 	s.mu.Lock()
 	set := s.state.settings.WebDAV
 	running := s.state.st.Core == model.CoreRunning
@@ -219,7 +157,10 @@ func (s *Service) webdavClient() (*webdavClient, model.WebDAVSettings, error) {
 	if strings.TrimSpace(set.URL) == "" {
 		return nil, set, errors.New(i18n.T("请先填写 WebDAV 服务器地址。"))
 	}
-	pw, err := s.loadPassword()
+	if _, err := newWebDAVClient(set.URL, set.User, "", nil); err != nil {
+		return nil, set, err // before the keychain is asked for anything
+	}
+	pw, err := s.readSecret(s.webdavSlot(), user)
 	if err != nil {
 		return nil, set, err
 	}
@@ -234,8 +175,116 @@ func (s *Service) webdavClient() (*webdavClient, model.WebDAVSettings, error) {
 	if err != nil {
 		return nil, set, err
 	}
+	if user {
+		s.confirmWebDAVOrigin()
+	}
 	return c, set, nil
 }
+
+// ---- the server the password belongs to ----
+
+// The WebDAV address, user and schedule travel with configuration sync
+// and with imported files; the password stays on this machine (or comes
+// sealed). Whoever can write the sync file could therefore point the
+// address at a server of their own and turn the automatic backup on, and
+// this machine would send them the password and a backup with every
+// subscription link. So the password is tied to the server it was set up
+// for: the scheme and host the user last confirmed on this machine, by
+// saving the address here, entering the password, or running a test,
+// backup, listing or restore by hand. While the address in the settings
+// names another server (it arrived through sync or an import), automatic
+// backups wait; WebDAVInfo.LastError says so.
+
+const webdavOriginFile = "webdav.origin" // the confirmed scheme://host, in the data directory
+
+// webdavOriginState caches webdavOriginFile.
+type webdavOriginState struct {
+	mu       sync.Mutex
+	loaded   bool
+	known    bool   // the file exists: an origin ("" = none) was confirmed
+	origin   string // the confirmed origin
+	notified string // the unconfirmed origin a notice was shown for
+}
+
+// webdavOrigin is the scheme://host[:port] of a WebDAV address, "" when
+// it is empty or invalid.
+func webdavOrigin(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
+func (s *Service) webdavOriginPath() string { return filepath.Join(s.opt.DataDir, webdavOriginFile) }
+
+// confirmedOriginLocked reads the confirmed origin once; o.mu held.
+func (s *Service) confirmedOriginLocked(o *webdavOriginState) {
+	if o.loaded {
+		return
+	}
+	o.loaded = true
+	if data, err := os.ReadFile(s.webdavOriginPath()); err == nil {
+		o.known, o.origin = true, strings.TrimSpace(string(data))
+	}
+}
+
+// setWebDAVOrigin records origin as confirmed on this machine.
+func (s *Service) setWebDAVOrigin(origin string) {
+	o := &s.cs.origin
+	o.mu.Lock()
+	s.confirmedOriginLocked(o)
+	same := o.known && o.origin == origin
+	o.known, o.origin, o.notified = true, origin, ""
+	o.mu.Unlock()
+	if same {
+		return
+	}
+	if err := writeFileAtomic(s.webdavOriginPath(), []byte(origin+"\n"), 0o600); err != nil {
+		s.alog.Warnf("webdav: remember the confirmed server: %v", err)
+	}
+	st := feat2(s)
+	st.mu.Lock()
+	if st.lastError == errWebDAVUnconfirmed.Error() {
+		st.lastError = ""
+	}
+	st.mu.Unlock()
+}
+
+// confirmWebDAVOrigin records the server of the current settings as the
+// one the user confirmed here.
+func (s *Service) confirmWebDAVOrigin() {
+	s.mu.Lock()
+	raw := s.state.settings.WebDAV.URL
+	s.mu.Unlock()
+	s.setWebDAVOrigin(webdavOrigin(raw))
+}
+
+// adoptWebDAVOrigin records the current server when none was recorded
+// yet: settings from before this record existed are the user's own. It
+// runs before settings from a sync file or an import are applied, so what
+// they bring is compared with what was here.
+func (s *Service) adoptWebDAVOrigin() {
+	o := &s.cs.origin
+	o.mu.Lock()
+	s.confirmedOriginLocked(o)
+	known := o.known
+	o.mu.Unlock()
+	if !known {
+		s.confirmWebDAVOrigin()
+	}
+}
+
+// webdavOriginConfirmed reports whether set's server is the confirmed one.
+func (s *Service) webdavOriginConfirmed(set model.WebDAVSettings) bool {
+	s.adoptWebDAVOrigin()
+	o := &s.cs.origin
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.origin == webdavOrigin(set.URL)
+}
+
+var errWebDAVUnconfirmed = i18n.Error("WebDAV 服务器地址是通过配置同步或导入更改的，自动备份已暂停。请在「设置 › 备份」中确认地址无误后，点一次「测试连接」或「立即备份」，自动备份即恢复。")
 
 // begin marks the backup state busy; it returns false when another
 // operation runs.
@@ -262,7 +311,7 @@ var errWebDAVBusy = i18n.Error("正在进行其他备份操作，请稍候。")
 // the remote directory exists (creating it).
 func (s *Service) TestWebDAV() (err error) {
 	defer func() { s.logOp("test webdav", err) }()
-	c, set, err := s.webdavClient()
+	c, set, err := s.webdavClient(true)
 	if err != nil {
 		return err
 	}
@@ -307,10 +356,23 @@ func isBackupName(name string) bool {
 }
 
 // backupStem returns the time part of a backup name, "" for other names.
+// The time part must be a time: RestoreBackup and DeleteBackup take the
+// name from the caller (ctl and MCP reach them too) and build a local
+// path and a server path from it, so nothing like "../" may pass.
 func backupStem(name string) string {
+	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		return ""
+	}
 	for _, suf := range []string{backupSuffix, backupSuffixJSON} {
-		if strings.HasPrefix(name, backupPrefix) && strings.HasSuffix(name, suf) && len(name) == len(backupPrefix)+len(backupTimeLayout)+len(suf) {
-			return strings.TrimSuffix(strings.TrimPrefix(name, backupPrefix), suf)
+		stem, ok := strings.CutSuffix(name, suf)
+		if !ok {
+			continue
+		}
+		if stem, ok = strings.CutPrefix(stem, backupPrefix); !ok || len(stem) != len(backupTimeLayout) {
+			continue
+		}
+		if _, err := time.Parse(backupTimeLayout, stem); err == nil {
+			return stem
 		}
 	}
 	return ""
@@ -338,7 +400,7 @@ func (s *Service) backup(auto bool) (err error) {
 			st.mu.Unlock()
 		}
 	}()
-	c, set, err := s.webdavClient()
+	c, set, err := s.webdavClient(!auto)
 	if err != nil {
 		return err
 	}
@@ -405,7 +467,7 @@ func (s *Service) prune(ctx context.Context, c *webdavClient, dir string, keep i
 // ListBackups implements API.ListBackups: newest first.
 func (s *Service) ListBackups() (out []model.WebDAVBackup, err error) {
 	defer func() { s.logOp("list backups", err) }()
-	c, set, err := s.webdavClient()
+	c, set, err := s.webdavClient(true)
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +506,7 @@ func (s *Service) RestoreBackup(name string) (summary string, err error) {
 	if !isBackupName(name) {
 		return "", errors.New(i18n.T("不是澜流的备份文件名。"))
 	}
-	c, set, err := s.webdavClient()
+	c, set, err := s.webdavClient(true)
 	if err != nil {
 		return "", err
 	}
@@ -477,7 +539,7 @@ func (s *Service) DeleteBackup(name string) (err error) {
 	if !isBackupName(name) {
 		return errors.New(i18n.T("不是澜流的备份文件名。"))
 	}
-	c, set, err := s.webdavClient()
+	c, set, err := s.webdavClient(true)
 	if err != nil {
 		return err
 	}
@@ -512,19 +574,39 @@ func autoBackupDue(set model.WebDAVSettings, lastAttempt, now time.Time) bool {
 }
 
 // webdavTick runs from the system watcher (watch.go): it starts an
-// automatic backup in the background when one is due.
+// automatic backup in the background when one is due. A server that
+// arrived through sync or an import waits for the user's confirmation
+// first (errWebDAVUnconfirmed).
 func (s *Service) webdavTick() {
 	s.mu.Lock()
 	set := s.state.settings.WebDAV
 	s.mu.Unlock()
+	confirmed := s.webdavOriginConfirmed(set)
 	st := feat2(s)
 	st.mu.Lock()
 	due := !st.busy && autoBackupDue(set, st.lastAttempt, s.d.now())
-	if due {
+	if due && confirmed {
 		st.lastAttempt = s.d.now()
+	}
+	if due && !confirmed {
+		st.lastError = errWebDAVUnconfirmed.Error()
 	}
 	st.mu.Unlock()
 	if !due {
+		return
+	}
+	if !confirmed {
+		origin := webdavOrigin(set.URL)
+		o := &s.cs.origin
+		o.mu.Lock()
+		first := o.notified != origin
+		o.notified = origin
+		o.mu.Unlock()
+		if first {
+			s.alog.Warnf("webdav: the server changed to %s through sync or an import; automatic backups wait for a confirmation on this machine", origin)
+			s.notify(Notice{Kind: "error", Title: i18n.T("自动备份已暂停"), Detail: errWebDAVUnconfirmed.Error()})
+			s.em.emit(TopicSettings)
+		}
 		return
 	}
 	s.alog.Infof("webdav: automatic %s backup due", set.AutoBackup)

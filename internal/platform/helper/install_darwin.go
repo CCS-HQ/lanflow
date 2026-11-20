@@ -4,11 +4,8 @@ package helper
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,7 +42,18 @@ func install(ctx context.Context, o InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"install", "--core", o.CoreBin, "--data-dir", o.DataDir, "--uid", strconv.Itoa(currentUID())}
+	// The installer does not follow a link in the last component of
+	// --core, so a linked core (Homebrew's bin/mihomo) is named by its
+	// target; that path is also the one the helper records.
+	core := o.CoreBin
+	if real, err := filepath.EvalSymlinks(core); err == nil {
+		core = real
+	}
+	coreSum, err := coreDigest(core, o.CoreSHA256)
+	if err != nil {
+		return err
+	}
+	args := []string{"install", "--core", core, "--core-sha256", coreSum, "--data-dir", o.DataDir, "--uid", strconv.Itoa(currentUID())}
 	if err := runPrivilegedShell(ctx, verifiedExec(o.HelperBin, sum, args), installPrompt); err != nil {
 		return err
 	}
@@ -114,45 +122,6 @@ func helperBinary() (string, error) {
 
 // installedHelperBin is the root-owned copy the LaunchDaemon runs.
 const installedHelperBin = "/Library/PrivilegedHelperTools/com.lanflow.helper"
-
-// ExpectedHelperSHA256 is the hex SHA-256 of the lanflow-helper binary
-// shipped with the app, set at build time:
-//
-//	-ldflags "-X lanflow/internal/platform/helper.ExpectedHelperSHA256=<hex>"
-//
-// When set, a helper binary with another digest is never run as root.
-// When empty (development builds) the digest is taken from the binary just
-// before the authorization prompt, which still guarantees that root runs
-// exactly the bytes the app saw.
-var ExpectedHelperSHA256 string
-
-// helperDigest returns the digest the privileged command must verify.
-func helperDigest(bin string) (string, error) {
-	sum, err := fileSHA256(bin)
-	if err != nil {
-		return "", fmt.Errorf("无法读取权限组件程序: %w", err)
-	}
-	if want := strings.ToLower(strings.TrimSpace(ExpectedHelperSHA256)); want != "" {
-		if sum != want {
-			return "", errors.New("权限组件程序校验失败，与应用构建时记录的不一致，请重新下载安装澜流")
-		}
-		return want, nil
-	}
-	return sum, nil
-}
-
-func fileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
 
 // verifyFailed is printed by verifiedExec when the copied helper does not
 // match; it becomes the error message.

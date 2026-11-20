@@ -133,6 +133,13 @@ func compose(in Input) (Output, error) {
 		c.keySrc[root.Content[i].Value] = layerSub
 	}
 
+	// 允许局域网 off: what the subscription itself listens on stays on
+	// this machine (lan.go); the override layers below are the user's own.
+	var lanWarns []string
+	if !in.Managed.AllowLAN {
+		lanWarns = confineSubscription(root, in.DNS.TakeOver)
+	}
+
 	if err := c.applyOverrideLayer(in.SubOverride, layerSubOverride); err != nil {
 		return Output{}, err
 	}
@@ -254,7 +261,8 @@ func compose(in Input) (Output, error) {
 	applyAdvanced(c, in.Advanced)
 	applyCoexist(c, in.Coexist, m.TUN)
 	hoistCaptureRules(c)
-	warns := append(scrubCaptureRefs(c), captureFindProcess(c, in.Capture)...)
+	warns := append(lanWarns, scrubCaptureRefs(c)...)
+	warns = append(warns, captureFindProcess(c, in.Capture)...)
 	c.layer = layerLanflow
 
 	for _, k := range strippedKeys {
@@ -262,7 +270,9 @@ func compose(in Input) (Output, error) {
 		delete(c.keySrc, k)
 	}
 	applyAdvancedPorts(c, in.Advanced, port)
-	resolveDanglingAliases(root)
+	if err := resolveDanglingAliases(root); err != nil {
+		return Output{}, err
+	}
 
 	out := Output{Groups: groupNames(root, true), Warnings: warns}
 	out.YAML, out.Lines, err = c.render()
@@ -493,38 +503,65 @@ func removeNamed(seq *yaml.Node, name string) {
 }
 
 // resolveDanglingAliases replaces alias nodes whose anchor is no longer in
-// the tree (because an override replaced it) by a copy of the target.
-func resolveDanglingAliases(root *yaml.Node) {
+// the tree (because an override replaced it, or its key was stripped) by a
+// copy of the target. The copies are counted: nested aliases multiply, and
+// a document made for that is refused (errAliasBomb) before it is expanded.
+func resolveDanglingAliases(root *yaml.Node) error {
 	anchors := map[*yaml.Node]bool{}
 	walk(root, func(n *yaml.Node) {
 		if n.Anchor != "" {
 			anchors[n] = true
 		}
 	})
-	var fix func(n *yaml.Node)
-	fix = func(n *yaml.Node) {
+	budget := maxAliasNodes
+	var fix func(n *yaml.Node) error
+	fix = func(n *yaml.Node) error {
 		for i, ch := range n.Content {
 			if ch.Kind == yaml.AliasNode && ch.Alias != nil && !anchors[ch.Alias] {
-				cp := cloneNode(ch.Alias)
+				cp := cloneBudget(ch.Alias, &budget)
+				if cp == nil {
+					return errAliasBomb
+				}
 				cp.Anchor = ""
 				n.Content[i] = cp
-				fix(cp)
+				if err := fix(cp); err != nil {
+					return err
+				}
 				continue
 			}
-			fix(ch)
+			if err := fix(ch); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
-	fix(root)
+	return fix(root)
 }
 
+// cloneNode copies n and its descendants.
 func cloneNode(n *yaml.Node) *yaml.Node {
+	budget := int(^uint(0) >> 1)
+	return cloneBudget(n, &budget)
+}
+
+// cloneBudget is cloneNode taking one from budget per node; nil when the
+// budget runs out.
+func cloneBudget(n *yaml.Node, budget *int) *yaml.Node {
 	if n == nil {
+		return nil
+	}
+	if *budget--; *budget < 0 {
 		return nil
 	}
 	cp := *n
 	cp.Content = make([]*yaml.Node, len(n.Content))
 	for i, ch := range n.Content {
-		cp.Content[i] = cloneNode(ch)
+		if ch == nil {
+			continue
+		}
+		if cp.Content[i] = cloneBudget(ch, budget); cp.Content[i] == nil {
+			return nil
+		}
 	}
 	return &cp
 }

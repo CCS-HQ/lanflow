@@ -41,6 +41,7 @@ type globeBuffers struct {
 	clip   ui.Rect
 	line   [][2]float32
 	labels []ui.Rect
+	cands  []ui.Rect // labelBeside's candidate boxes
 	dest   arc
 
 	// What drawMap gathers each frame, emptied and refilled.
@@ -341,13 +342,16 @@ func placeLabel(pt *ui.Painter, b *globeBuffers, r ui.Rect, x, y, gap float32, s
 func labelBeside(pt *ui.Painter, b *globeBuffers, r ui.Rect, x, y, nx, ny, gap float32, s string, col, back ui.Color, size float32, bold bool) bool {
 	span := labelSpan(s, col, back, size, bold)
 	w, h := pt.MeasureText(0, span)
-	var cands []ui.Rect
-	for _, d := range []float32{gap + 8, gap + 16, gap + 26} {
-		for _, sign := range []float32{1, -1} {
+	// The candidates go in the frame's buffer: one slice per label per
+	// frame added up at 60 frames a second.
+	cands := b.cands[:0]
+	for _, d := range [...]float32{gap + 8, gap + 16, gap + 26} {
+		for _, sign := range [...]float32{1, -1} {
 			cx, cy := x+nx*sign*(d+w/2), y+ny*sign*(d+h/2)
 			cands = append(cands, ui.Rect{X: cx - w/2, Y: cy - h/2, W: w, H: h})
 		}
 	}
+	b.cands = cands
 	return tryLabel(pt, b, r, span, cands)
 }
 

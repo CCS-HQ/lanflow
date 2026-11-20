@@ -83,11 +83,16 @@ func isOwnTUN(iface string) bool {
 // detectCoexist looks for aTrust (when the setting is on) and stores the
 // result; it reports whether anything changed. Never call with mu held.
 func (s *Service) detectCoexist() bool {
+	return s.storeCoexist(s.scanCoexist())
+}
+
+// scanCoexist looks for aTrust when the setting is on (the zero Info
+// otherwise). It runs the detector, which may take seconds, and touches no
+// state: the poller calls it without opMu. Never call with mu held.
+func (s *Service) scanCoexist() atrust.Info {
 	s.mu.Lock()
-	set := s.state.settings
-	on := set.ATrustCompat
+	on := s.state.settings.ATrustCompat
 	detect := s.d.vpnDetect
-	prev := s.state.coexist
 	s.mu.Unlock()
 	var info atrust.Info
 	if on && detect != nil && s.rootCtx.Err() == nil {
@@ -95,19 +100,33 @@ func (s *Service) detectCoexist() bool {
 		info = detect(ctx, isOwnTUN)
 		cancel()
 	}
+	return info
+}
+
+// storeCoexist records a detection result and tells the user when aTrust
+// came or went; it reports whether anything changed. A result found while
+// the setting was on is dropped when it has been turned off since. Never
+// call with mu held.
+func (s *Service) storeCoexist(info atrust.Info) bool {
+	s.mu.Lock()
+	on := s.state.settings.ATrustCompat
+	if !on {
+		info = atrust.Info{}
+	}
+	prev := s.state.coexist
 	if info.Key() == prev.Key() {
+		s.mu.Unlock()
 		return false
 	}
+	s.state.coexist = info
+	co := coexistInput(info, s.state.settings, s.state.net.DNS)
+	s.state.st.ATrust = coexistStatus(info, co)
+	s.mu.Unlock()
 	if info.Running() {
 		s.alog.Infof("aTrust: processes %v, interfaces %v, ranges %v, domains %v, DNS %v, gateways %v", info.Processes, info.Ifaces, info.CIDRs, info.Domains, info.DNS, info.Gateways)
 	} else {
 		s.alog.Infof("aTrust: not running (compatibility setting %s)", onOff(on))
 	}
-	s.mu.Lock()
-	s.state.coexist = info
-	co := coexistInput(info, s.state.settings, s.state.net.DNS)
-	s.state.st.ATrust = coexistStatus(info, co)
-	s.mu.Unlock()
 	s.em.emit(TopicStatus)
 	switch {
 	case info.Running() && !prev.Running():
@@ -292,11 +311,24 @@ func (s *Service) coexistSettingsChanged(old, in model.Settings) bool {
 }
 
 // recheckCoexist detects aTrust again and, when that changed, re-applies the
-// config, the system proxy bypass and the system DNS.
+// config, the system proxy bypass and the system DNS. The detection (an
+// external probe of up to 8 s) runs without opMu, so a start, stop or
+// subscription switch never waits for it; opMu is only taken when the
+// result differs from the stored one.
 func (s *Service) recheckCoexist() {
+	info := s.scanCoexist()
+	s.mu.Lock()
+	same := info.Key() == s.state.coexist.Key()
+	s.mu.Unlock()
+	if same {
+		return
+	}
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
-	if s.detectCoexist() {
+	if s.rootCtx.Err() != nil {
+		return
+	}
+	if s.storeCoexist(info) {
 		s.applyCoexist()
 	}
 }
@@ -310,26 +342,37 @@ func (s *Service) applyCoexist() {
 	}
 	s.mu.Lock()
 	ours := s.state.weSetProxy
-	port := s.state.settings.MixedPort
 	s.mu.Unlock()
 	if ours {
-		if err := s.d.sys.Set("127.0.0.1", port, s.bypassList()); err != nil {
+		// applySystemProxy knows the PAC mode: the PAC file takes the new
+		// bypass list by itself and the marker keeps saying what was set,
+		// where a plain Set would replace the PAC URL behind the marker.
+		if err := s.applySystemProxy(); err != nil {
 			s.notify(Notice{Kind: "error", Title: i18n.T("更新系统代理例外列表失败"), Detail: err.Error()})
 		}
 	}
 	s.syncDNS()
 }
 
+// coexistTicksHidden is how many ticks of the poll make one detection while
+// the window is out of sight (SetBackground): every 30 s instead of 10 s.
+const coexistTicksHidden = 3
+
 // watchCoexist polls for aTrust until shutdown.
 func (s *Service) watchCoexist() {
 	s.recheckCoexist()
 	t := time.NewTicker(coexistInterval)
 	defer t.Stop()
+	ticks := 0
 	for {
 		select {
 		case <-s.rootCtx.Done():
 			return
 		case <-t.C:
+			ticks++
+			if s.background.Load() && ticks%coexistTicksHidden != 0 {
+				continue
+			}
 			s.recheckCoexist()
 		}
 	}

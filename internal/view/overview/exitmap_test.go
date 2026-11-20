@@ -43,11 +43,16 @@ func TestFlowTimings(t *testing.T) {
 	}
 }
 
+// TestProxyCommand: bash/zsh on macOS and Linux (a Linux user got the
+// PowerShell line before), PowerShell on Windows.
 func TestProxyCommand(t *testing.T) {
-	if got := ProxyCommand(7890, true); got != "export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=socks5://127.0.0.1:7890" {
-		t.Errorf("mac command %q", got)
+	const posix = "export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=socks5://127.0.0.1:7890"
+	for _, goos := range []string{"darwin", "linux", "freebsd"} {
+		if got := ProxyCommand(7890, goos); got != posix {
+			t.Errorf("%s command %q", goos, got)
+		}
 	}
-	if got := ProxyCommand(0, false); got == "" || got[0] != '$' {
+	if got := ProxyCommand(0, "windows"); got != `$env:HTTPS_PROXY="http://127.0.0.1:7890"; $env:HTTP_PROXY="http://127.0.0.1:7890"; $env:ALL_PROXY="socks5://127.0.0.1:7890"` {
 		t.Errorf("windows command %q", got)
 	}
 }

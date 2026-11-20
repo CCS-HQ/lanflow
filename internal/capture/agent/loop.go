@@ -20,6 +20,7 @@ import (
 type loopGuard struct {
 	mu     sync.Mutex
 	own    map[string]*ownEntry
+	short  int // entries of own shorter than loopPrefix
 	rate   map[string][]time.Time
 	window time.Duration
 	max    int
@@ -66,10 +67,16 @@ func (g *loopGuard) markOwn(b []byte) {
 		e.at = now
 		return
 	}
+	if _, ok := g.own[k]; !ok && len(k) < loopPrefix {
+		g.short++
+	}
 	g.own[k] = &ownEntry{at: now}
 	if len(g.own) > 4096 {
 		for k, e := range g.own {
 			if now.Sub(e.at) > g.ttl {
+				if len(k) < loopPrefix {
+					g.short--
+				}
 				delete(g.own, k)
 			}
 		}
@@ -87,8 +94,26 @@ func (g *loopGuard) isOwn(br *bufio.Reader, tls bool) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
+	hit := func(e *ownEntry, m int) bool {
+		if tls {
+			return len(b) >= 44 && m >= 44 // header + version + random compared
+		}
+		e.hits++
+		return e.hits >= 2
+	}
+	// A full prefix on both sides is the key itself: no need to walk the
+	// table on every accept. Only flights or arrivals shorter than the
+	// prefix are compared entry by entry.
+	if len(b) == loopPrefix {
+		if e, ok := g.own[string(b)]; ok && now.Sub(e.at) <= g.ttl {
+			return hit(e, loopPrefix)
+		}
+		if g.short == 0 {
+			return false
+		}
+	}
 	for k, e := range g.own {
-		if now.Sub(e.at) > g.ttl {
+		if now.Sub(e.at) > g.ttl || (len(b) == loopPrefix && len(k) == loopPrefix) {
 			continue
 		}
 		kb := []byte(k)
@@ -96,11 +121,7 @@ func (g *loopGuard) isOwn(br *bufio.Reader, tls bool) bool {
 		if m < loopMinLen || !bytes.Equal(kb[:m], b[:m]) {
 			continue
 		}
-		if tls {
-			return len(b) >= 44 && m >= 44 // header + version + random compared
-		}
-		e.hits++
-		return e.hits >= 2
+		return hit(e, m)
 	}
 	return false
 }

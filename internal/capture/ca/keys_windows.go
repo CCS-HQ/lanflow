@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -125,15 +126,33 @@ type cngSigner struct {
 	pub *ecdsa.PublicKey
 }
 
+// newCNGSigner reads the public key of key and takes the handle over: it
+// is freed when the signer cannot be made.
 func newCNGSigner(key uintptr) (*cngSigner, error) {
+	s, err := cngPublic(key)
+	if err != nil {
+		procFreeObject.Call(key)
+		return nil, err
+	}
+	return s, nil
+}
+
+func cngPublic(key uintptr) (*cngSigner, error) {
 	var n uint32
-	blobType := uintptr(unsafe.Pointer(u16("ECCPUBLICBLOB")))
-	r, _, _ := procExportKey.Call(key, 0, blobType, 0, 0, 0, uintptr(unsafe.Pointer(&n)), 0)
+	// The name stays a *uint16 and is converted in each call's argument
+	// list: a uintptr kept in a variable does not keep the string alive
+	// across the calls (unsafe.Pointer rule 4).
+	blobType := u16("ECCPUBLICBLOB")
+	r, _, _ := procExportKey.Call(key, 0, uintptr(unsafe.Pointer(blobType)), 0, 0, 0, uintptr(unsafe.Pointer(&n)), 0)
 	if err := status(r); err != nil {
 		return nil, err
 	}
+	if n == 0 {
+		return nil, errors.New("ncrypt: empty public key blob")
+	}
 	buf := make([]byte, n)
-	r, _, _ = procExportKey.Call(key, 0, blobType, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(n), uintptr(unsafe.Pointer(&n)), 0)
+	r, _, _ = procExportKey.Call(key, 0, uintptr(unsafe.Pointer(blobType)), 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(n), uintptr(unsafe.Pointer(&n)), 0)
+	runtime.KeepAlive(blobType)
 	if err := status(r); err != nil {
 		return nil, err
 	}
@@ -152,10 +171,16 @@ func (s *cngSigner) Public() crypto.PublicKey { return s.pub }
 
 // Sign signs a digest; CNG returns r||s, Go wants ASN.1.
 func (s *cngSigner) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
+	if len(digest) == 0 {
+		return nil, errors.New("ncrypt: empty digest")
+	}
 	var n uint32
 	r, _, _ := procSignHash.Call(s.key, 0, uintptr(unsafe.Pointer(&digest[0])), uintptr(len(digest)), 0, 0, uintptr(unsafe.Pointer(&n)), 0)
 	if err := status(r); err != nil {
 		return nil, err
+	}
+	if n == 0 {
+		return nil, errors.New("ncrypt: empty signature")
 	}
 	sig := make([]byte, n)
 	r, _, _ = procSignHash.Call(s.key, 0, uintptr(unsafe.Pointer(&digest[0])), uintptr(len(digest)), uintptr(unsafe.Pointer(&sig[0])), uintptr(n), uintptr(unsafe.Pointer(&n)), 0)

@@ -18,6 +18,7 @@ import (
 	"lanflow/internal/geo"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/colwidth"
 	"lanflow/internal/view/env"
 )
 
@@ -425,11 +426,13 @@ func (p *Page) unlockTab(c *ui.Context, t *ui.Theme, target string) {
 		}
 		rows := rep.Results
 		p.unlockList.Key = func(i int) any { return rows[i].Service }
-		ui.Table(c.Key("unlock"), &p.unlockList, env.I18nColumns(unlockCols), len(rows), func(row, col int) {
+		ui.Table(c.Key("unlock"), &p.unlockList, colwidth.Fit(c, env.I18nColumns(unlockCols)), len(rows), func(row, col int) {
 			r := rows[row]
 			switch unlockCols[col].ID {
 			case "service":
-				ui.Text(c, r.Service).SingleLine().Tooltip(r.Service)
+				// The checks' names are the app's own (app.unlockChecks):
+				// most are brand names, the others have an English entry.
+				ui.Text(c, i18n.T(r.Service)).SingleLine().Tooltip(i18n.T(r.Service))
 			case "status":
 				p.statusCell(c, t, r)
 			case "region":
@@ -573,7 +576,9 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 		mainGroup := snap.MainGroup
 		cur := mainNode(snap, st)
 		p.regionList.Key = func(i int) any { return rows[i].Node }
-		ui.Table(c.Key("region"), &p.regionList, env.I18nColumns(regionCols), len(rows), func(row, col int) {
+		// The rows move as delays arrive: the table stays where it is scrolled.
+		p.regionList.KeepOffset = true
+		ui.Table(c.Key("region"), &p.regionList, colwidth.Fit(c, env.I18nColumns(regionCols)), len(rows), func(row, col int) {
 			r := rows[row]
 			switch regionCols[col].ID {
 			case "node":
@@ -612,7 +617,7 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 					// Which services: the tag only counts them.
 					var lines []string
 					for _, u := range r.Unlock {
-						line := u.Service + " · " + unlockText(u.Status)
+						line := i18n.T(u.Service) + " · " + unlockText(u.Status)
 						if u.Region != "" {
 							line += " · " + countryText(u.Region)
 						}

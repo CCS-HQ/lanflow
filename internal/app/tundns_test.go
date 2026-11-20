@@ -88,7 +88,7 @@ func TestTUNSetDNSOffLeavesDNS(t *testing.T) {
 func TestUserChangedDNSIsLeftAlone(t *testing.T) {
 	h := tunHarness(t, []string{"192.168.1.1"})
 	h.s.SetTUN(true)
-	h.dns.Set([]string{"9.9.9.9"}) // the user edits DNS while TUN runs
+	h.dns.Set(nil, []string{"9.9.9.9"}) // the user edits DNS while TUN runs
 	h.s.SetTUN(false)
 	if !slices.Equal(h.dns.get(), []string{"9.9.9.9"}) {
 		t.Fatalf("user's DNS overwritten: %v", h.dns.get())
@@ -101,7 +101,7 @@ func TestLeftoverDNSRestoredAtLaunch(t *testing.T) {
 	// Simulate a crash: the marker stays, a new service starts on the same dir.
 	marker, _ := os.ReadFile(h.s.dnsMarkerPath())
 	h.s.Shutdown()
-	h.dns.Set(sysdns.TUNServers)
+	h.dns.Set(nil, sysdns.TUNServers)
 	os.WriteFile(h.s.dnsMarkerPath(), marker, 0o600)
 	s2, err := newServiceWith(h.s.opt, h.s.d)
 	if err != nil {

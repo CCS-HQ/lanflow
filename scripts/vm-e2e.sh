@@ -123,7 +123,7 @@ restore_user() {
     core="$(printf '%s' "$HELPER_CFG" | python3 -I -c 'import json,sys;print(json.load(sys.stdin)["coreSource"])')"
     data="$(printf '%s' "$HELPER_CFG" | python3 -I -c 'import json,sys;print(json.load(sys.stdin)["dataDir"])')"
     uid="$(printf '%s' "$HELPER_CFG" | python3 -I -c 'import json,sys;print(json.load(sys.stdin)["uid"])')"
-    as_root "'/Applications/Lanflow.app/Contents/Resources/lanflow-helper' install --core '$core' --data-dir '$data' --uid $uid" >/dev/null 2>&1 || log "helper reinstall failed"
+    as_root "h='/Applications/Lanflow.app/Contents/Resources/lanflow-helper'; \"\$h\" install --core '$core' --core-sha256 \"\$(/usr/bin/shasum -a 256 '$core' | cut -d' ' -f1)\" --data-dir '$data' --uid $uid || \"\$h\" install --core '$core' --data-dir '$data' --uid $uid" >/dev/null 2>&1 || log "helper reinstall failed"
     HELPER_CFG=""
   fi
   [ -n "$T" ] && as_root "rm -rf '$T'" >/dev/null 2>&1
@@ -211,7 +211,7 @@ as_root "/usr/sbin/networksetup -setdnsservers '$SVC' $TEST_DNS; dscacheutil -fl
 # which lets IPv6 slip past a v4-only TUN (reported separately).
 as_root "/usr/sbin/networksetup -setv6off '$SVC'" >/dev/null && V6_SET=1
 log "installing the helper for $T/run/data (uid 0)"
-if as_root "'$RES/lanflow-helper' install --core '$RES/mihomo' --data-dir '$T/run/data' --uid 0" | cr; then
+if as_root "'$RES/lanflow-helper' install --core '$RES/mihomo' --core-sha256 \"\$(/usr/bin/shasum -a 256 '$RES/mihomo' | cut -d' ' -f1)\" --data-dir '$T/run/data' --uid 0" | cr; then
   HELPER_TEST=1; TUN=1
   item "helper/install" PASS "$(as_root "ls -l /var/run/lanflow-helper.sock /Library/PrivilegedHelperTools/ | grep -i lanflow" | cr | tr '\n' ' ')"
 else
@@ -285,7 +285,7 @@ done
 # ---- resource baseline with the real app (TUN on: helper-run core) -------
 log "helper for the user's data dir, seeding it, launching the real app"
 as_user "mkdir -p '$UD'; chmod 700 '$UD'" >/dev/null && UD_SEEDED=1
-if as_root "'$RES/lanflow-helper' install --core '$RES/mihomo' --data-dir '$UD' --uid $guest_uid" >/dev/null 2>&1; then HELPER_TEST=1; else item "real-app/helper" FAIL "helper install for $UD failed"; fail "real-app helper"; fi
+if as_root "'$RES/lanflow-helper' install --core '$RES/mihomo' --core-sha256 \"\$(/usr/bin/shasum -a 256 '$RES/mihomo' | cut -d' ' -f1)\" --data-dir '$UD' --uid $guest_uid" >/dev/null 2>&1; then HELPER_TEST=1; else item "real-app/helper" FAIL "helper install for $UD failed"; fail "real-app helper"; fi
 SEED_ENV="LANFLOW_LIVE_E2E=1 LANFLOW_E2E_DATA='$T/run' LANFLOW_E2E_RES='$RES' LANFLOW_E2E_FLEET='$T/fleet' LANFLOW_E2E_HOST=$HOST_IP LANFLOW_E2E_OUT='$T/out' LANFLOW_E2E_SEED=1 LANFLOW_E2E_SEED_TUN=$HELPER_TEST LANFLOW_E2E_SEED_OPENATLOGIN=$USER_OPEN_AT_LOGIN"
 if as_user "cd '$T' && $SEED_ENV '$T/app.test' -test.run LiveSeedRealApp -test.v -test.count=1" | cr | tee "$OUT/seed.log" | grep -qE '^PASS'; then
   grep '^E2E|' "$OUT/seed.log" >>"$ITEMS" || true

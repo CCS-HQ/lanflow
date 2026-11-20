@@ -163,7 +163,7 @@ func BuildGraph(conns []model.Connection, o Options) *Graph {
 		}
 		chosen = orderNodes(chosen, c, o.Prev)
 		if other != nil {
-			other.Label = i18n.Tf("其他 %d 项", len(ks)-len(chosen))
+			other.Label = i18n.Tn(len(ks)-len(chosen), "其他 %d 项", len(ks)-len(chosen))
 			chosen = append(chosen, *other)
 		}
 		index := map[string]int{}

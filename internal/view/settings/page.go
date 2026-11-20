@@ -6,6 +6,8 @@
 package settings
 
 import (
+	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,8 +106,19 @@ type Page struct {
 	upd      Updater
 	relaunch func()
 
-	mu     sync.Mutex // guards the fields below, written by jobs
-	draft  *model.Settings
+	// Settings saves run one at a time, in order (save): saveQ holds the
+	// ones not finished, oldest first, saveBusy says the first is running,
+	// and draft is the newest of them, shown in place of the API's
+	// settings until the queue is empty. UI thread only.
+	saveQ    []saveReq
+	saveBusy bool
+	draft    *model.Settings
+
+	// State that jobs change is written on the UI thread, in the done
+	// function of Env.Then, and read by the view without a lock. mu guards
+	// the few fields below (and those their own comments name), which
+	// other goroutines still write and every reader locks for.
+	mu     sync.Mutex
 	toast  string
 	latest string // newer core version found by 检查更新, "" = none
 	update updateState
@@ -138,11 +151,12 @@ func (p *Page) View(c *ui.Context) {
 		p.handleArg(a)
 	}
 	s := p.current()
-	p.mu.Lock()
 	p.saving = p.draft != nil
-	p.mu.Unlock()
 	st := e.API.Status()
 	p.loadForms(s)
+	if p.tab != tabGeneral {
+		p.caches.loaded = false // 缓存 row out of view (caches.go)
+	}
 
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("设置"), "", func() {
@@ -247,36 +261,108 @@ func (p *Page) flushToast() {
 
 // current returns the settings to show: the draft being saved, else the API's.
 func (p *Page) current() model.Settings {
-	p.mu.Lock()
-	d := p.draft
-	p.mu.Unlock()
-	if d != nil {
+	if d := p.draft; d != nil {
 		return *d
 	}
 	return p.e.API.Settings()
 }
 
-// save applies s at once. The error is toasted unless onErr takes it.
+// saveReq is one queued SaveSettings; done runs on the UI thread.
+type saveReq struct {
+	s    model.Settings
+	base model.Settings // what s was built on: the difference is this request's change
+	done func(err error)
+}
+
+// save applies s at once. The error is toasted unless onErr takes it;
+// onErr runs on the UI thread.
 func (p *Page) save(s model.Settings, ok string, onErr func(error)) {
-	e := p.e
-	cp := s
-	p.mu.Lock()
-	p.draft = &cp
-	p.mu.Unlock()
-	e.Run(func() error {
-		err := e.API.SaveSettings(cp)
-		p.mu.Lock()
-		p.draft = nil
-		if err == nil && ok != "" {
-			p.toast = ok
-		}
-		p.mu.Unlock()
-		if err != nil && onErr != nil {
+	p.saveThen(s, func(err error) {
+		switch {
+		case err == nil:
+			if ok != "" {
+				p.e.Toast(ok, false)
+			}
+		case onErr != nil:
 			onErr(err)
-			return nil
+		default:
+			p.e.Toast(err.Error(), true)
 		}
-		return err
-	}, "")
+	})
+}
+
+// saveThen queues a save of s, a whole Settings value, and calls done on
+// the UI thread with its outcome. Saves are whole snapshots, so they run
+// one at a time and in the order made: two at once could land in either
+// order and the older would undo the newer. s becomes the draft, which
+// the controls show and build their next snapshot on (current), so a
+// change made while another is being saved contains it; the draft goes
+// only when no save is left, as the API's settings then hold all of them.
+// When a save fails, its change is taken out of the snapshots queued
+// behind it (dropFailed), which would otherwise carry it along and fail
+// the same way, losing their own change with it.
+func (p *Page) saveThen(s model.Settings, done func(err error)) {
+	cp := s
+	base := p.current()
+	p.draft = &cp
+	p.saveQ = append(p.saveQ, saveReq{s: cp, base: base, done: done})
+	p.pumpSaves()
+}
+
+// dropFailed takes the change of the failed request out of the requests
+// still queued: every value failed changed (against what it was built on)
+// that a later snapshot still has goes back to the stored settings' value.
+func (p *Page) dropFailed(failed saveReq) {
+	if len(p.saveQ) == 0 {
+		return
+	}
+	stored := p.e.API.Settings()
+	for i := range p.saveQ {
+		q := &p.saveQ[i]
+		revertChange(reflect.ValueOf(&q.s).Elem(), reflect.ValueOf(failed.s), reflect.ValueOf(failed.base), reflect.ValueOf(stored))
+		revertChange(reflect.ValueOf(&q.base).Elem(), reflect.ValueOf(failed.s), reflect.ValueOf(failed.base), reflect.ValueOf(stored))
+	}
+	last := p.saveQ[len(p.saveQ)-1].s
+	p.draft = &last
+}
+
+// revertChange sets q, wherever failed differs from base and q still has
+// failed's value, to stored's. Structs are gone through field by field,
+// so one changed option of a section does not take back the others.
+func revertChange(q, failed, base, stored reflect.Value) {
+	if q.Kind() == reflect.Struct && q.Type() != reflect.TypeOf(time.Time{}) {
+		for i := 0; i < q.NumField(); i++ {
+			if q.Field(i).CanSet() {
+				revertChange(q.Field(i), failed.Field(i), base.Field(i), stored.Field(i))
+			}
+		}
+		return
+	}
+	if !reflect.DeepEqual(failed.Interface(), base.Interface()) && reflect.DeepEqual(q.Interface(), failed.Interface()) {
+		q.Set(stored)
+	}
+}
+
+// pumpSaves starts the oldest queued save unless one is running.
+func (p *Page) pumpSaves() {
+	if p.saveBusy || len(p.saveQ) == 0 {
+		return
+	}
+	p.saveBusy = true
+	req := p.saveQ[0]
+	p.e.Then(func() error { return p.e.API.SaveSettings(req.s) }, func(err error) {
+		p.saveBusy = false
+		p.saveQ = p.saveQ[1:]
+		if len(p.saveQ) == 0 {
+			p.saveQ, p.draft = nil, nil
+		} else if err != nil {
+			p.dropFailed(req)
+		}
+		if req.done != nil {
+			req.done(err)
+		}
+		p.pumpSaves()
+	})
 }
 
 // loadForms fills the DNS and sniffer forms from the saved settings when
@@ -371,9 +457,9 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 					})
 					ui.RichText(c).FontSize(12).TextColor(t.TextMuted).Children(func() {
 						ui.Text(c, i18n.T("基于 Mihomo（GPL-3.0）· "))
-						ui.Link(c, i18n.T("Mihomo 源代码"), "https://github.com/MetaCubeX/mihomo")
+						ui.Link(c, i18n.T("Mihomo 源代码"), "https://github.com/MetaCubeX/mihomo/tree/"+app.PinnedCoreVersion)
 						ui.Text(c, " · ")
-						ui.Link(c, i18n.T("许可证"), "https://www.gnu.org/licenses/gpl-3.0.html")
+						ui.Link(c, i18n.T("许可证"), "https://github.com/MetaCubeX/mihomo/blob/"+app.PinnedCoreVersion+"/LICENSE")
 					})
 				})
 			})
@@ -479,11 +565,7 @@ func (p *Page) commitPort(s model.Settings) {
 		return
 	}
 	s.MixedPort = n
-	p.save(s, i18n.Tf("代理端口已改为 %d", n), func(err error) {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		p.portErr = err.Error()
-	})
+	p.save(s, i18n.Tf("代理端口已改为 %d", n), func(err error) { p.portErr = err.Error() })
 }
 
 func (p *Page) setTUN(on bool) { env.SetTUN(p.e, on) }
@@ -578,30 +660,31 @@ func (p *Page) kernel(c *ui.Context, t *ui.Theme, s model.Settings, st model.Sta
 func (p *Page) checkUpdate(current string) {
 	e := p.e
 	p.checking = true
-	e.Run(func() error {
-		info, err := e.API.CheckCoreUpdate()
-		p.mu.Lock()
-		defer p.mu.Unlock()
+	var info model.CoreUpdateInfo
+	e.Then(func() (err error) {
+		info, err = e.API.CheckCoreUpdate()
+		return err
+	}, func(err error) {
 		p.checking = false
 		if err != nil {
-			return err
+			e.Toast(err.Error(), true)
+			return
 		}
 		if current == "" {
 			current = info.Current
 		}
+		latest, msg := "", i18n.T("已是最新版本")
 		switch {
 		case info.Available:
-			p.latest = info.Latest
-			p.toast = i18n.Tf("有新版本 %s，当前为 %s。点击「更新」安装", info.Latest, current)
+			latest, msg = info.Latest, i18n.Tf("有新版本 %s，当前为 %s。点击「更新」安装", info.Latest, current)
 		case info.Installed && info.Latest != current:
-			p.latest = ""
-			p.toast = i18n.Tf("最新版本 %s 已安装，可在列表中点「使用」切换", info.Latest)
-		default:
-			p.latest = ""
-			p.toast = i18n.T("已是最新版本")
+			msg = i18n.Tf("最新版本 %s 已安装，可在列表中点「使用」切换", info.Latest)
 		}
-		return nil
-	}, "")
+		p.mu.Lock()
+		p.latest = latest
+		p.mu.Unlock()
+		e.Toast(msg, false)
+	})
 }
 
 // chooseCore opens the system's file dialog for a Mihomo binary. The
@@ -763,11 +846,18 @@ func (f *field) commit(in ui.Element) bool {
 	return false
 }
 
-func revealLabel(e *env.Env) string {
-	if e.Mac {
+// revealLabel names the button that shows a file in the system's file
+// manager: 访达 on macOS, 资源管理器 on Windows, 文件管理器 elsewhere.
+func revealLabel(e *env.Env) string { return revealLabelFor(e.Mac, runtime.GOOS) }
+
+func revealLabelFor(mac bool, goos string) string {
+	switch {
+	case mac:
 		return i18n.T("在访达中显示")
+	case goos == "windows":
+		return i18n.T("在资源管理器中显示")
 	}
-	return i18n.T("在资源管理器中显示")
+	return i18n.T("在文件管理器中显示")
 }
 
 func mapName(value string, values, names []string) string {

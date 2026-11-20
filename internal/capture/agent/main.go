@@ -80,7 +80,7 @@ func Main(stdin io.Reader, stdout io.Writer, keys ca.KeyStore) int {
 	case "ca-ensure", "ca-regenerate":
 		root, pemb, created, err := loadRoot(keys, st, st.Op == "ca-regenerate")
 		if err != nil {
-			writeReady(stdout, Ready{Error: err.Error()})
+			writeReady(stdout, Ready{Error: err.Error(), KeyLocked: errors.Is(err, errKeyLocked)})
 			return 1
 		}
 		writeReady(stdout, rootReady(root, pemb, created))

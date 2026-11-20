@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -30,6 +31,29 @@ type tray struct {
 	node  string                    // the main group's current node, for the title
 	title string                    // text beside the icon (macOS)
 	icons map[string]*mygo.MenuIcon // group icons by reference (traycmd.go)
+
+	// The node delays the menu shows: a change of them alone rebuilds the
+	// menu at most every trayDelayGap (refresh).
+	delaySig   string
+	delayAt    time.Time   // when the menu was last built
+	delayTimer *time.Timer // the rebuild waiting for the gap to pass
+	closed     bool
+}
+
+// trayDelayGap is the least time between two rebuilds of the menu that
+// only node delays ask for. A delay test of a group reports its nodes one
+// by one: each report used to rebuild the whole menu (hundreds of items)
+// and install it on the main thread, which the reporting goroutine waits
+// for.
+const trayDelayGap = 2 * time.Second
+
+// delayRebuildWait is how long a rebuild for changed delays still has to
+// wait at now when the menu was last built at built; 0 = rebuild now.
+func delayRebuildWait(built, now time.Time) time.Duration {
+	if wait := trayDelayGap - now.Sub(built); wait > 0 && wait <= trayDelayGap {
+		return wait
+	}
+	return 0
 }
 
 // StartTray creates the tray icon; call it once the app is ready.
@@ -70,6 +94,13 @@ func startTray(h host) (*tray, error) {
 }
 
 func (tr *tray) destroy() {
+	tr.mu.Lock()
+	tr.closed = true
+	if tr.delayTimer != nil {
+		tr.delayTimer.Stop()
+		tr.delayTimer = nil
+	}
+	tr.mu.Unlock()
 	if tr.t != nil {
 		tr.t.Destroy()
 	}
@@ -116,18 +147,42 @@ func (tr *tray) refresh(force bool) {
 	for _, it := range extra {
 		sig.WriteString(it.Label + ";")
 	}
+	// The delays beside the node names are kept out of the signature:
+	// they change one node at a time while a group is tested.
+	var delays strings.Builder
 	if ok {
-		fmt.Fprintf(&sig, "%s=%s;%v;", g.Name, g.Now, tr.menuIcon(g.Icon) != nil)
+		fmt.Fprintf(&sig, "%s=%s;%v;%s;", g.Name, g.Now, tr.menuIcon(g.Icon) != nil, g.Type)
 		for _, n := range g.All {
-			fmt.Fprintf(&sig, "%s:%d,", n, px.Proxies[n].Delay)
+			sig.WriteString(n + ",")
+			fmt.Fprintf(&delays, "%d,", px.Proxies[n].Delay)
 		}
 	}
 	for _, s := range subs {
 		fmt.Fprintf(&sig, "%s=%s,", s.ID, s.Name)
 	}
+	now := time.Now()
 	tr.mu.Lock()
 	rebuild := force || sig.String() != tr.sig || tr.menu == nil
-	tr.sig = sig.String()
+	if !rebuild && delays.String() != tr.delaySig && !tr.closed {
+		if wait := delayRebuildWait(tr.delayAt, now); wait == 0 {
+			rebuild = true
+		} else if tr.delayTimer == nil {
+			// Reads the delays as they are then; the ones in between
+			// were never shown.
+			tr.delayTimer = time.AfterFunc(wait, func() {
+				tr.mu.Lock()
+				tr.delayTimer = nil
+				closed := tr.closed
+				tr.mu.Unlock()
+				if !closed {
+					tr.refresh(false)
+				}
+			})
+		}
+	}
+	if rebuild {
+		tr.sig, tr.delaySig, tr.delayAt = sig.String(), delays.String(), now
+	}
 	menu := tr.menu
 	tr.mu.Unlock()
 	if rebuild {

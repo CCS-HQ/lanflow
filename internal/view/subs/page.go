@@ -17,6 +17,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/colwidth"
 	"lanflow/internal/view/env"
 )
 
@@ -34,9 +35,14 @@ type Page struct {
 	// rawBig: 查看配置 fills the window (its 放大 button), kept for the next one.
 	rawBig bool
 
+	// impSeq numbers the imports started (importDialog.session).
+	impSeq int
+
 	mu        sync.Mutex
 	switching string // subscription being switched to
 	updating  bool   // 全部更新 running
+	// impResults are set by the import goroutines, taken by the view.
+	impResults []*importResult
 
 	// async runs fn off the UI thread; tests make it synchronous.
 	async func(fn func())
@@ -154,7 +160,7 @@ func (p *Page) View(c *ui.Context) {
 			}
 			return ""
 		}
-		tbl := ui.Table(c, &p.list, env.I18nColumns(columns), len(subs), func(row, col int) {
+		tbl := ui.Table(c, &p.list, colwidth.Fit(c, env.I18nColumns(columns)), len(subs), func(row, col int) {
 			if row >= len(subs) {
 				return
 			}

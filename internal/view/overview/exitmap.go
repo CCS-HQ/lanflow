@@ -336,7 +336,9 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 	// another app's window it would cost frames nobody watches, and over
 	// a still map it would keep the window drawing 30 frames a second for
 	// decoration alone (the request animation already draws them then).
-	// The request animation itself goes on in an inactive window, slower.
+	// The request animation stops in an inactive window too (drawFlows
+	// skips it when not focused): there the routes, their widths and
+	// their speeds show what moves, redrawn with each data frame.
 	focused := c.WindowActive()
 	ambient := focused && !reduce && live && p.anyLive(rs)
 	p.view.paused = !ambient

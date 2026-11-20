@@ -29,8 +29,11 @@ func Supported() bool { return supported }
 // Snapshot captures the current DNS servers of every enabled network service.
 func Snapshot() (Saved, error) { return snapshot() }
 
-// Set points every enabled network service at servers.
-func Set(servers []string) error { return set(servers) }
+// Set points the network services recorded in saved (the Snapshot taken
+// just before) at servers. Only those: a service the snapshot could not
+// read, or one that appeared since, is left alone, because Restore could
+// not put it back.
+func Set(saved Saved, servers []string) error { return set(saved, servers) }
 
 // Restore puts back the servers saved in s, but only on services that still
 // use ours (a service someone changed in the meantime is left alone).

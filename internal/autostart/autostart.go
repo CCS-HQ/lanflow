@@ -1,13 +1,15 @@
 // Package autostart starts Lanflow's service process when the user logs
 // in (docs/service-split.md S3): `<exe> --service --login`, from a launch
-// agent on macOS and a Run entry of the user on Windows. It replaces
+// agent on macOS, a Run entry of the user on Windows and an XDG autostart
+// entry elsewhere. It replaces
 // MyGo's login item, which opens the app (the window) instead.
 package autostart
 
 // Args are what the login starts exe with.
 var Args = []string{"--service", "--login"}
 
-// Label names the launch agent (macOS) and the Run value (Windows).
+// Label names the launch agent (macOS), the Run value (Windows) and the
+// desktop entry (XDG).
 const Label = "lanflow.service"
 
 // Apply makes the login start exe (on) or nothing (off); it only writes

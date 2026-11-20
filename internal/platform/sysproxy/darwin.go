@@ -13,6 +13,13 @@ import (
 	"strings"
 )
 
+// The system tools by absolute path: a PATH lookup would run whatever
+// "networksetup" comes first in the environment the app was started with.
+const (
+	networksetup = "/usr/sbin/networksetup"
+	scutil       = "/usr/sbin/scutil"
+)
+
 // command is one networksetup invocation (arguments only; the binary is
 // always networksetup).
 type command []string
@@ -116,7 +123,7 @@ func darwinSetPAC(ctx context.Context, run executor, url string) error {
 
 // listServices runs networksetup -listallnetworkservices through run.
 func listServices(ctx context.Context, run executor) ([]string, error) {
-	out, err := run(ctx, "networksetup", "-listallnetworkservices")
+	out, err := run(ctx, networksetup, "-listallnetworkservices")
 	if err != nil {
 		return nil, fmt.Errorf("无法列出网络服务：%w", err)
 	}
@@ -135,7 +142,7 @@ func applyToServices(ctx context.Context, run executor, services []string, what 
 	var failures []string
 	for _, svc := range services {
 		for _, c := range plan(svc) {
-			if _, err := run(ctx, "networksetup", c...); err != nil {
+			if _, err := run(ctx, networksetup, c...); err != nil {
 				failures = append(failures, fmt.Sprintf("%s：%v", svc, err))
 				break
 			}
@@ -172,7 +179,7 @@ func darwinClear(ctx context.Context, run executor) error {
 
 // darwinGet implements Get by parsing `scutil --proxy`.
 func darwinGet(ctx context.Context, run executor) (State, error) {
-	out, err := run(ctx, "scutil", "--proxy")
+	out, err := run(ctx, scutil, "--proxy")
 	if err != nil {
 		return State{}, fmt.Errorf("无法读取系统代理设置：%w", err)
 	}

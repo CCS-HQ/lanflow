@@ -152,7 +152,9 @@ func (p *Page) installAppUpdate() {
 			p.mu.Lock()
 			p.update.done, p.update.total = done, total
 			p.mu.Unlock()
-			e.Redraw()
+			// The download reports every read (hundreds a second):
+			// frames for it are rate limited like the service's data.
+			e.Progress()
 		})
 		p.mu.Lock()
 		p.update.installing = false

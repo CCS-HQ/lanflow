@@ -15,6 +15,9 @@
 //   - The helper runs only the Mihomo binary recorded at install time
 //     (path + SHA-256 in a root/SYSTEM-owned config next to the helper);
 //     StartCore with any other binary or a changed hash is refused.
+//   - The binary recorded is the one the app hashed before the prompt:
+//     install passes its SHA-256 (--core-sha256) and the elevated
+//     installer refuses a copy with another digest, or no digest at all.
 //   - Work dir, config and log paths must be inside the installing user's
 //     Lanflow data directory recorded at install time.
 //   - Install/uninstall prompt for administrator rights: osascript
@@ -33,7 +36,12 @@ import (
 type InstallOptions struct {
 	HelperBin string // path of the lanflow-helper binary shipped with the app
 	CoreBin   string // the Mihomo binary the helper is allowed to run
-	DataDir   string // the user's Lanflow data dir (work dir/config/log must be inside)
+	// CoreSHA256, when set, is the hex SHA-256 CoreBin must have (a pinned
+	// release). Install always hashes CoreBin before the administrator
+	// prompt and the elevated installer only accepts that content; this
+	// additionally refuses a file that is not the expected one.
+	CoreSHA256 string
+	DataDir    string // the user's Lanflow data dir (work dir/config/log must be inside)
 }
 
 // Installed reports whether the helper is installed and answers a ping

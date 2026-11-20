@@ -9,14 +9,12 @@
 package capture
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +29,7 @@ import (
 	"lanflow/internal/capture/redact"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/colwidth"
 	"lanflow/internal/view/env"
 	"lanflow/internal/view/procicon"
 )
@@ -69,17 +68,35 @@ type Page struct {
 	nextConn int64
 	conns    map[int64]model.Connection
 
+	// data is set when the records or the connections changed; shown are
+	// the rows, filtered and in order, for the data, search, filter and
+	// order they were made for, so a build for anything else (typing in
+	// a dialog, the pointer, a scroll) makes none of it again.
+	data  *env.Stale
+	shown struct {
+		ok      bool
+		query   string
+		onlyDec bool
+		paused  bool
+		sort    ui.SortOrder
+		all     []model.CaptureFlow // records, then connections
+		rows    []model.CaptureFlow
+	}
+
 	det struct {
 		sync.Mutex
 		id      int64
 		d       model.CaptureFlowDetail
 		err     string
 		loading bool
-		img     ui.ImageSource
-		imgFor  int64
 	}
+	// bodies are the body previews of the detail held (body.go).
+	bodies previewCache
 
 	rp replayState // 重新发送 (replay.go)
+
+	// async, when set, runs what spawn would start a goroutine for (tests).
+	async func(fn func())
 
 	// paused mirrors CaptureSettings.NoRecord for Wants (any goroutine)
 	paused atomic.Bool
@@ -106,7 +123,8 @@ type Page struct {
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	p := &Page{e: e, selected: -1, sort: ui.SortOrder{Column: "time", Descending: true}, icons: procicon.New(e.API)}
+	p := &Page{e: e, selected: -1, sort: ui.SortOrder{Column: "time", Descending: true}, icons: procicon.New(e.API),
+		data: env.Watch(e.API, app.TopicCapture, app.TopicConns, app.TopicStatus)}
 	p.list.Sort = &p.sort
 	p.list.Selected = &p.selected
 	p.list.KeepOffset = true
@@ -163,10 +181,10 @@ func StatusText(st model.CaptureStatus) string {
 		parts[0] = i18n.Tf("已暂停（%s）", st.PauseReason)
 	}
 	if st.Domains > 0 {
-		parts = append(parts, i18n.Tf("%d 个主机", st.Domains))
+		parts = append(parts, i18n.Tn(st.Domains, "%d 个主机", st.Domains))
 	}
 	if st.Apps > 0 {
-		parts = append(parts, i18n.Tf("%d 个程序", st.Apps))
+		parts = append(parts, i18n.Tn(st.Apps, "%d 个程序", st.Apps))
 	}
 	if r := Remaining(st.Until); r != "" {
 		parts = append(parts, i18n.Tf("剩余 %s", r))
@@ -224,10 +242,18 @@ func (p *Page) tools(c *ui.Context, st model.CaptureStatus) {
 		label = i18n.T("完成")
 	}
 	ui.Button(c, label).OnClick(func() {
-		if !p.editing {
+		switch {
+		case !p.editing:
 			p.loadEditor(st.Settings)
+			p.editing = true
+		case !st.Settings.Acknowledged:
+			// Only the first-run explanation shows: nothing to save.
+			p.editing = false
+		default:
+			// 完成 saves what was edited; an invalid value keeps the
+			// editor open with its message (save).
+			p.save(st.Settings)
 		}
-		p.editing = !p.editing
 	})
 	ui.Button(c, "").Label(i18n.T("更多")).Tooltip(i18n.T("更多")).Children(func() { e.Kit.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
 		if m.Item(i18n.T("只看已解密")).Checked(p.onlyDec).Chosen() {
@@ -325,12 +351,7 @@ func (p *Page) loadEditor(set model.CaptureSettings) {
 	p.apps = append([]model.CaptureApp(nil), set.Apps...)
 	p.off = append([]string(nil), set.DisabledBuiltin...)
 	p.ports = set.Ports
-	switch {
-	case set.AutoOffMin < 0:
-		p.autoOff = strconv.Itoa(model.CaptureDefaultAutoOff)
-	default:
-		p.autoOff = strconv.Itoa(set.AutoOffMin)
-	}
+	p.autoOff = strconv.Itoa(autoOffShown(set))
 }
 
 func lines(s string) []string {
@@ -348,10 +369,6 @@ func (p *Page) editor(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 	e := p.e
 	if !st.Settings.Acknowledged {
 		return
-	}
-	if !p.editing {
-		p.loadEditor(st.Settings)
-		p.editing = true
 	}
 	e.Kit.Section(c, i18n.T("要解密的域名"), i18n.T("每行一个：example.com 只匹配它自己，*.example.com 只匹配子域名，+.example.com 匹配它和全部子域名"), func() {
 		ui.Column(c).Padding(10).Children(func() {
@@ -494,6 +511,12 @@ func (p *Page) save(prev model.CaptureSettings) {
 		e.Toast(i18n.T("自动关闭时间应为不小于 0 的分钟数"), true)
 		return
 	}
+	if sameSelection(set, prev) && n == autoOffShown(prev) {
+		// Nothing was edited: leave without saving again (a save makes a
+		// running capture follow the selection anew).
+		p.editing = false
+		return
+	}
 	save := func() {
 		set.AutoOffMin = n
 		e.Run(func() error { return e.API.SaveCaptureSettings(set) }, i18n.T("已保存"))
@@ -504,6 +527,21 @@ func (p *Page) save(prev model.CaptureSettings) {
 		return
 	}
 	save()
+}
+
+// autoOffShown is the automatic turn-off the editor shows for set.
+func autoOffShown(set model.CaptureSettings) int {
+	if set.AutoOffMin < 0 {
+		return model.CaptureDefaultAutoOff
+	}
+	return set.AutoOffMin
+}
+
+// sameSelection reports whether a and b hold the same of what the editor
+// edits, the automatic turn-off aside.
+func sameSelection(a, b model.CaptureSettings) bool {
+	return slices.Equal(a.Domains, b.Domains) && slices.Equal(a.Bypass, b.Bypass) && slices.Equal(a.AllowPrivate, b.AllowPrivate) &&
+		slices.Equal(a.Apps, b.Apps) && slices.Equal(a.DisabledBuiltin, b.DisabledBuiltin) && a.Ports == b.Ports
 }
 
 // handleArg: "add-host:<host>" or "add-app:<path>\n<name>", from the 连接
@@ -537,37 +575,70 @@ func (p *Page) handleArg(a string, st model.CaptureStatus) {
 	}
 }
 
+// saveDialog asks where to save a file; tests replace it.
+var saveDialog = func(o mygo.SaveDialogOptions) (string, error) { return mygo.Dialog.Save(o) }
+
+// exportHAR and exportCA ask where to save, then export. They are called
+// from a menu item or a confirmation, while the view builds: the system
+// dialog blocks, so it runs on its own goroutine (as the 日志 page's
+// ExportDiagnostics), not inside the build.
 func (p *Page) exportHAR(bodies bool) {
-	e := p.e
-	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Title: i18n.T("导出 HAR"), DefaultPath: "lanflow-capture.har"})
-	if err != nil || path == "" {
-		return
-	}
-	if filepath.Ext(path) == "" {
-		path += ".har"
-	}
-	e.Run(func() error { return e.API.ExportHAR(path, bodies) }, i18n.Tf("已导出到 %s", filepath.Base(path)))
+	e, title := p.e, i18n.T("导出 HAR")
+	p.spawn(func() {
+		path, err := saveDialog(mygo.SaveDialogOptions{Title: title, DefaultPath: "lanflow-capture.har"})
+		if err != nil || path == "" {
+			return
+		}
+		if filepath.Ext(path) == "" {
+			path += ".har"
+		}
+		e.Run(func() error { return e.API.ExportHAR(path, bodies) }, i18n.Tf("已导出到 %s", filepath.Base(path)))
+	})
 }
 
 func (p *Page) exportCA() {
-	e := p.e
-	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Title: i18n.T("导出根证书"), DefaultPath: "lanflow-ca.pem"})
-	if err != nil || path == "" {
+	e, title := p.e, i18n.T("导出根证书")
+	p.spawn(func() {
+		path, err := saveDialog(mygo.SaveDialogOptions{Title: title, DefaultPath: "lanflow-ca.pem"})
+		if err != nil || path == "" {
+			return
+		}
+		e.Run(func() error { return e.API.ExportCACert(path) }, i18n.Tf("已导出到 %s", filepath.Base(path)))
+	})
+}
+
+// spawn runs fn on its own goroutine (go, unless a test set p.async).
+func (p *Page) spawn(fn func()) {
+	if p.async != nil {
+		p.async(fn)
 		return
 	}
-	e.Run(func() error { return e.API.ExportCACert(path) }, i18n.Tf("已导出到 %s", filepath.Base(path)))
+	go fn()
 }
 
 // ---- list ----
 
+// rows returns the records and, unless only decrypted ones are asked for
+// or recording is paused, the connections, filtered by the search and in
+// the table's order.
 func (p *Page) rows(paused bool) []model.CaptureFlow {
-	all := p.e.API.CaptureFlows()
+	sh := &p.shown
 	q := strings.ToLower(strings.TrimSpace(p.query))
-	out := make([]model.CaptureFlow, 0, len(all))
-	if !p.onlyDec && !paused {
-		all = append(all, p.connRows()...)
+	withConns := !p.onlyDec && !paused
+	fresh := p.data.Take()
+	if fresh || !sh.ok || withConns != (!sh.onlyDec && !sh.paused) {
+		sh.all = p.e.API.CaptureFlows()
+		if withConns {
+			sh.all = append(sh.all, p.connRows()...)
+		}
+		fresh = true
 	}
-	for _, f := range all {
+	if !fresh && sh.query == q && sh.onlyDec == p.onlyDec && sh.paused == paused && sh.sort == p.sort {
+		return sh.rows
+	}
+	sh.ok, sh.query, sh.onlyDec, sh.paused, sh.sort = true, q, p.onlyDec, paused, p.sort
+	out := make([]model.CaptureFlow, 0, len(sh.all))
+	for _, f := range sh.all {
 		if p.onlyDec && !f.Has(model.FlowDecrypted) {
 			continue
 		}
@@ -605,6 +676,7 @@ func (p *Page) rows(paused bool) []model.CaptureFlow {
 		}
 		return less(out[i], out[j])
 	})
+	sh.rows = out
 	return out
 }
 
@@ -634,7 +706,7 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 	p.list.Key = func(i int) any { return rows[i].ID }
 	p.list.Label = func(i int) string { return rows[i].Host + redact.Path(rows[i].Path) }
 	p.list.CellMenu = func(m *ui.Menu, row, col int) { p.rowMenu(c, m, rows[row], st) }
-	cols := env.I18nColumns(columns)
+	cols := colwidth.Fit(c, env.I18nColumns(columns))
 	if p.wide && p.selected < 0 {
 		p.wide = false
 	}
@@ -793,13 +865,25 @@ func (p *Page) fetch(id int64) {
 	p.det.id, p.det.loading, p.det.err = id, true, ""
 	p.det.d = model.CaptureFlowDetail{}
 	p.det.Unlock()
-	api, redraw := p.e.API, p.e.Redraw
+	api, redraw, reveal := p.e.API, p.e.Redraw, p.reveal
 	go func() {
 		d, err := api.CaptureFlow(id)
+		// The previews the body tabs show first are made here too, so a
+		// tab opens on its content rather than on a spinner.
+		bodies := map[bodyKey]*bodyPreview{}
+		if err == nil {
+			if len(d.ReqBody) > 0 {
+				bodies[bodyKey{reveal: reveal}] = makePreview(d.ReqBody, d.ReqHeader, reveal)
+			}
+			if len(d.RespBody) > 0 {
+				bodies[bodyKey{resp: true, reveal: reveal}] = makePreview(d.RespBody, d.RespHeader, reveal)
+			}
+		}
 		p.det.Lock()
 		if p.det.id == id {
 			p.det.loading = false
 			p.det.d = d
+			p.bodies.reset(bodies)
 			if err != nil {
 				p.det.err = err.Error()
 			}
@@ -885,11 +969,11 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, f model.CaptureFlow) {
 			case 1:
 				p.headers(c, t, d.ReqHeader)
 			case 2:
-				p.bodyView(c, t, d.Flow.ID, d.ReqBody, d.ReqBodySize, d.ReqHeader)
+				p.bodyView(c, t, d, false)
 			case 3:
 				p.headers(c, t, d.RespHeader)
 			case 4:
-				p.bodyView(c, t, d.Flow.ID, d.RespBody, d.RespBodySize, d.RespHeader)
+				p.bodyView(c, t, d, true)
 			case 5:
 				p.frames(c, t, d.WSFrames)
 			}
@@ -971,77 +1055,6 @@ func header(h []model.KV, name string) string {
 		}
 	}
 	return ""
-}
-
-const previewLimit = 256 << 10
-
-func (p *Page) bodyView(c *ui.Context, t *ui.Theme, id int64, body []byte, size int64, h []model.KV) {
-	if size == 0 && len(body) == 0 {
-		ui.Text(c, i18n.T("无正文")).FontSize(12).TextColor(t.TextMuted)
-		return
-	}
-	if size > int64(len(body)) {
-		ui.Text(c, i18n.Tf("已截断：记录了 %s，原大小 %s", env.FmtBytes(int64(len(body))), env.FmtBytes(size))).FontSize(11).TextColor(t.TextMuted)
-	}
-	enc := header(h, "content-encoding")
-	dec, ok := redact.Decode(body, enc)
-	if !ok {
-		ui.Text(c, i18n.Tf("正文以 %s 压缩，无法预览（%s）", enc, env.FmtBytes(int64(len(body))))).FontSize(12).TextColor(t.TextMuted)
-		return
-	}
-	ct := header(h, "content-type")
-	kind := redact.Kind(ct, dec)
-	switch kind {
-	case "image":
-		p.image(c, t, id, dec)
-		return
-	case "binary":
-		ui.Text(c, i18n.Tf("二进制内容（%s）", env.FmtBytes(int64(len(dec))))).FontSize(12).TextColor(t.TextMuted)
-		ui.Text(c, hexdump(dec, 512)).FontSize(11).Font("monospace")
-		return
-	}
-	show := dec
-	if !p.reveal {
-		show = redact.Body(dec, ct)
-	} else if kind == "json" {
-		var b bytes.Buffer
-		if json.Indent(&b, dec, "", "  ") == nil {
-			show = b.Bytes()
-		}
-	}
-	if kind == "form" {
-		show = []byte(strings.ReplaceAll(string(show), "&", "\n"))
-	}
-	if len(show) > previewLimit {
-		show = show[:previewLimit]
-		ui.Text(c, i18n.T("只显示前 256 KiB")).FontSize(11).TextColor(t.TextMuted)
-	}
-	if !p.reveal && (kind == "text" || kind == "multipart") {
-		ui.Text(c, i18n.T("文本正文不做打码，可能包含凭据。")).FontSize(11).TextColor(t.TextMuted)
-	}
-	ui.Text(c, string(bytes.ToValidUTF8(show, []byte("�")))).FontSize(12).Font("monospace")
-}
-
-func (p *Page) image(c *ui.Context, t *ui.Theme, id int64, b []byte) {
-	p.det.Lock()
-	src := p.det.img
-	if p.det.imgFor != id {
-		src = nil
-		if img, _, err := image.Decode(bytes.NewReader(b)); err == nil {
-			src = ui.NewBitmap(img)
-		}
-		p.det.img, p.det.imgFor = src, id
-	}
-	p.det.Unlock()
-	if src == nil {
-		ui.Text(c, i18n.Tf("图片（%s），无法预览此格式", env.FmtBytes(int64(len(b))))).FontSize(12).TextColor(t.TextMuted)
-		return
-	}
-	// At its own size, scaled down to the panel's width, never up.
-	img := ui.Image(c, src).MaxWidthPercent(100).Radius(4)
-	if w, h := ui.ImageSize(src); w > 0 && h > 0 {
-		img.AspectRatio(w / h)
-	}
 }
 
 func (p *Page) frames(c *ui.Context, t *ui.Theme, fs []model.CaptureWSFrame) {

@@ -105,6 +105,29 @@ func peerUID(conn net.Conn) (int, error) {
 	return uid, uerr
 }
 
+// peerProc returns the process at the other end of a unix socket and its
+// executable. The pid is the one that connected: a descriptor passed on
+// to another process still reports it (see sameExe).
+func peerProc(conn net.Conn) (pid int, exe string, err error) {
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		return 0, "", errors.New("不是 unix 套接字连接")
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return 0, "", err
+	}
+	var perr error
+	if err := raw.Control(func(fd uintptr) { pid, perr = sockPeerPID(int(fd)) }); err != nil {
+		return 0, "", err
+	}
+	if perr != nil {
+		return 0, "", perr
+	}
+	exe, err = pidExe(pid)
+	return pid, exe, err
+}
+
 // uidOverride replaces the uid peers must run as, for tests; -1 = none.
 var uidOverride = func() *atomic.Int64 { var v atomic.Int64; v.Store(-1); return &v }()
 

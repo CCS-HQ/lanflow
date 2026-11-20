@@ -3,6 +3,10 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"log"
+	"reflect"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,11 +26,35 @@ const (
 
 // Consent is what the window asks the user.
 type Consent struct {
-	Client  string // "ctl" or "mcp:<name>"
-	Agent   string // the MCP client's name; "" for ctl
-	Kind    Level  // LevelWrite, LevelSensitive or LevelDanger
-	Method  string
-	Summary string // the call, parameters redacted
+	Client string // "ctl" or "mcp:<name>"
+	Agent  string // the MCP client's name; "" for ctl
+	// Kind is LevelWrite (answers: once, always, deny), or LevelSensitive,
+	// LevelDanger or LevelHigh (answers: once, deny). LevelHigh holds for
+	// the connection, LevelDanger for the one call. A LevelHigh request of
+	// Client "ctl" also takes "always" (CtlHighGrant).
+	Kind   Level
+	Method string
+	// Summary is the call, parameters redacted, followed by a line that
+	// names the peer process (PeerLine) when it is known.
+	Summary string
+	// PID and Path are the process that connected and its executable (0
+	// and "" when unknown). Client and Agent are what the connection says
+	// it is; these are what the system says. For `lanflow ctl` and
+	// `lanflow mcp` they are Lanflow itself.
+	PID  int
+	Path string
+}
+
+// PeerLine is the line of Consent.Summary that names the peer process.
+func PeerLine(pid int, path string) string {
+	if pid == 0 {
+		return ""
+	}
+	s := "pid " + strconv.Itoa(pid)
+	if path != "" {
+		s += " · " + path
+	}
+	return s
 }
 
 // PromptFunc asks the user and returns the answer; it returns an error
@@ -43,9 +71,16 @@ var consentTimeout = time.Minute
 //	level      ctl                         mcp
 //	read       yes                         yes
 //	sensitive  --reveal + confirmation     confirmation, per connection
-//	write      yes (audited)               first write asks: once/always/deny
+//	write      at a terminal: yes          first write asks: once/always/deny
+//	           otherwise: like mcp
+//	  high     at a terminal: yes          confirmation, per connection,
+//	           otherwise: like mcp         whatever is allowed "always"
 //	danger     confirmation every time     no
 //	ui         no                          no
+//
+// All are audited. "ctl at a terminal" is Hello.Interactive from
+// Lanflow's own executable; a script or an agent that runs `lanflow ctl`
+// (or speaks to the socket itself) is asked like an MCP client.
 type guard struct {
 	api    app.API
 	prompt PromptFunc
@@ -60,7 +95,55 @@ func refused(format string, args ...any) error {
 	return &Error{Code: CodeConsent, Message: fmt.Sprintf(format, args...)}
 }
 
-func (g *guard) check(ss *session, method string, level Level, summary string) error {
+// highImpact are the writes that replace the configuration in use or cut
+// the network: an "always allow" given for switching nodes does not cover
+// them (the user confirms once per connection).
+var highImpact = map[string]bool{
+	"ImportSubscriptionURL": true, "ImportSubscriptionFile": true, "UseSubscription": true,
+	"SaveOverride": true, "SaveOverrideEntry": true, "DeleteOverrideEntry": true,
+	"StartCore": true, "StopCore": true, "RestartCore": true,
+	"SetSystemProxy": true, "SetTUN": true,
+	"ApplyConfigFile": true,
+}
+
+// HighImpact reports whether the write method is confirmed once per
+// connection whatever the agent was allowed "always".
+func HighImpact(method string) bool { return highImpact[method] }
+
+// isHighImpact is HighImpact for one call: a dry run of ApplyConfigFile
+// changes nothing.
+func isHighImpact(method string, args []reflect.Value) bool {
+	if !highImpact[method] {
+		return false
+	}
+	if method == "ApplyConfigFile" && len(args) == 2 && args[1].Kind() == reflect.Bool && args[1].Bool() {
+		return false
+	}
+	return true
+}
+
+// CtlGrant is the name under which the answer for `lanflow ctl` away from
+// a terminal is remembered (model.AgentGrant.Agent); no MCP client may
+// call itself that (ParseIdentity).
+const CtlGrant = "lanflow ctl"
+
+// CtlHighGrant is the name under which "always" for the high-impact
+// writes of `lanflow ctl` away from a terminal is remembered. Every run of
+// ctl is a connection of its own, so "once per connection" would ask at
+// every run of a script (a cron job, a launcher action) and refuse it when
+// no window can ask; the user may allow those for good instead. MCP
+// clients keep being asked per connection.
+const CtlHighGrant = "lanflow ctl (high impact)"
+
+// grantName is the name id's answer is remembered under.
+func grantName(id Identity) string {
+	if id.Kind == KindCtl {
+		return CtlGrant
+	}
+	return id.Name
+}
+
+func (g *guard) check(ss *session, method string, level Level, high bool, summary string) error {
 	id := ss.identity()
 	if !id.Agent() {
 		return nil
@@ -77,7 +160,7 @@ func (g *guard) check(ss *session, method string, level Level, summary string) e
 		if id.Kind == KindMCP {
 			return denied("MCP 不开放危险操作 %s：请在澜流界面中操作", method)
 		}
-		a, err := g.ask(ss, Consent{Client: id.String(), Kind: LevelDanger, Method: method, Summary: summary})
+		a, err := g.ask(ss, Consent{Client: id.String(), Agent: id.Name, Kind: LevelDanger, Method: method, Summary: summary})
 		if err != nil {
 			return err
 		}
@@ -88,8 +171,14 @@ func (g *guard) check(ss *session, method string, level Level, summary string) e
 	case LevelSensitive:
 		return g.checkSensitive(ss, id, method, summary)
 	case LevelWrite:
-		if id.Kind == KindCtl {
-			return nil
+		ss.mu.Lock()
+		interactive := ss.interactive
+		ss.mu.Unlock()
+		if interactive {
+			return nil // a person typed the command
+		}
+		if high {
+			return g.checkHigh(ss, id, method, summary)
 		}
 		return g.checkWrite(ss, id, method, summary)
 	}
@@ -149,11 +238,19 @@ func (g *guard) checkSensitive(ss *session, id Identity, method, summary string)
 }
 
 func (g *guard) checkWrite(ss *session, id Identity, method, summary string) error {
-	if allow, ok := g.grant(id.Name); ok {
-		if allow {
+	who := grantName(id)
+	// A remembered "always" counts only for Lanflow's own executable
+	// (`lanflow mcp`, `lanflow ctl`): a program that speaks to the socket
+	// itself under a remembered name is asked again. A remembered refusal
+	// counts for everyone.
+	_, _, genuine := ss.peer()
+	if allow, ok := g.grant(who); ok {
+		if !allow {
+			return refused("用户已拒绝「%s」修改澜流的配置；可在 设置 › 高级 › Agent 接入 撤销这个决定", who)
+		}
+		if genuine {
 			return nil
 		}
-		return refused("用户已拒绝「%s」修改澜流的配置；可在 设置 › 高级 › Agent 接入 撤销这个决定", id.Name)
 	}
 	ss.askMu.Lock()
 	defer ss.askMu.Unlock()
@@ -161,11 +258,13 @@ func (g *guard) checkWrite(ss *session, id Identity, method, summary string) err
 		return nil
 	}
 	// Another connection of the same agent may have been answered meanwhile.
-	if allow, ok := g.grant(id.Name); ok {
-		if allow {
+	if allow, ok := g.grant(who); ok {
+		if !allow {
+			return refused("用户已拒绝「%s」修改澜流的配置", who)
+		}
+		if genuine {
 			return nil
 		}
-		return refused("用户已拒绝「%s」修改澜流的配置", id.Name)
 	}
 	a, err := g.askLocked(ss, Consent{Client: id.String(), Agent: id.Name, Kind: LevelWrite, Method: method, Summary: summary})
 	if err != nil {
@@ -176,16 +275,60 @@ func (g *guard) checkWrite(ss *session, id Identity, method, summary string) err
 		ss.writeOK = true
 		return nil
 	case AnswerAlways:
-		if err := g.setGrant(id.Name, true); err != nil {
+		ss.writeOK = true
+		if !genuine {
+			return nil // not remembered: the name is only a claim
+		}
+		if err := g.setGrant(who, true); err != nil {
 			return err
 		}
 		return nil
 	default:
-		if err := g.setGrant(id.Name, false); err != nil {
+		if err := g.setGrant(who, false); err != nil {
 			return err
 		}
-		return refused("用户拒绝了「%s」修改澜流的配置", id.Name)
+		return refused("用户拒绝了「%s」修改澜流的配置", who)
 	}
+}
+
+// checkHigh asks for a high-impact write: once per connection, and
+// whatever the agent was allowed "always". A remembered refusal of its
+// writes still refuses.
+func (g *guard) checkHigh(ss *session, id Identity, method, summary string) error {
+	who := grantName(id)
+	if allow, ok := g.grant(who); ok && !allow {
+		return refused("用户已拒绝「%s」修改澜流的配置；可在 设置 › 高级 › Agent 接入 撤销这个决定", who)
+	}
+	// Scripts that run Lanflow's own `lanflow ctl` may have been allowed
+	// for good (CtlHighGrant).
+	_, _, genuine := ss.peer()
+	script := id.Kind == KindCtl && genuine
+	if script {
+		if allow, ok := g.grant(CtlHighGrant); ok && allow {
+			return nil
+		}
+	}
+	ss.askMu.Lock()
+	defer ss.askMu.Unlock()
+	switch ss.high {
+	case 1:
+		return nil
+	case -1:
+		return refused("用户已拒绝本次连接执行影响较大的操作")
+	}
+	a, err := g.askLocked(ss, Consent{Client: id.String(), Agent: id.Name, Kind: LevelHigh, Method: method, Summary: summary})
+	if err != nil {
+		return err
+	}
+	if a == AnswerDeny {
+		ss.high = -1
+		return refused("用户拒绝了 %s", method)
+	}
+	ss.high = 1
+	if a == AnswerAlways && script {
+		return g.setGrant(CtlHighGrant, true)
+	}
+	return nil
 }
 
 func (g *guard) ask(ss *session, c Consent) (Answer, error) {
@@ -198,6 +341,13 @@ func (g *guard) askLocked(ss *session, c Consent) (Answer, error) {
 	if g.prompt == nil {
 		return "", refused("需要用户授权，但澜流无法弹出授权窗口（没有界面）")
 	}
+	c.PID, c.Path, _ = ss.peer()
+	if line := PeerLine(c.PID, c.Path); line != "" {
+		if c.Summary != "" {
+			c.Summary += "\n"
+		}
+		c.Summary += line
+	}
 	ctx, cancel := context.WithTimeout(ss.ctx, consentTimeout)
 	defer cancel()
 	type result struct {
@@ -208,6 +358,12 @@ func (g *guard) askLocked(ss *session, c Consent) (Answer, error) {
 	// The prompt runs apart: one stuck behind a dialog or a busy main
 	// thread must not hold the caller past the timeout.
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("lanflow: local api: error: the consent prompt panicked: %v\n%s", r, debug.Stack())
+				ch <- result{err: fmt.Errorf("%v", r)}
+			}
+		}()
 		a, err := g.prompt(ctx, c)
 		ch <- result{a, err}
 	}()

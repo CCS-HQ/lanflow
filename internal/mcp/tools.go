@@ -32,8 +32,10 @@ type tool struct {
 
 // offered reports whether an MCP client gets a tool for m: reads,
 // sensitive reads (asked per connection) and writes (asked once per
-// agent). Dangerous and window-only methods are never offered, nor what
-// agents cannot use (whole-settings writes, image bytes).
+// agent; the high-impact ones once per connection). Dangerous and
+// window-only methods are never offered, nor what agents cannot use
+// (whole-settings writes, image bytes) and what reads a local file of
+// the caller's choice (the server refuses those to MCP as well).
 func offered(m rpc.Method) bool {
 	switch m.Level {
 	case rpc.LevelRead, rpc.LevelSensitive, rpc.LevelWrite:
@@ -42,7 +44,8 @@ func offered(m rpc.Method) bool {
 	}
 	switch m.Name {
 	case "OnChange", "SaveSettings", "ApplyDNS", "ApplySniffer", "IconData", "ProcessIcon", "Methods",
-		"ConfigDir", "LogDir", "ExportATrustConfig", "ImportATrustConfig", "ExportDiagnostics", "SaveFeedback":
+		"ConfigDir", "LogDir", "ExportATrustConfig", "ImportATrustConfig", "ExportDiagnostics", "SaveFeedback",
+		"ImportSubscriptionFile":
 		return false
 	}
 	return true
@@ -75,6 +78,27 @@ var levelNote = map[rpc.Level]string{
 	rpc.LevelRead:      "",
 	rpc.LevelSensitive: " [sensitive: the user must approve in Lanflow, once per session]",
 	rpc.LevelWrite:     " [write: the first write asks the user in Lanflow; audited; revert with undo]",
+}
+
+// highNote replaces the write note of the high-impact writes
+// (rpc.HighImpact).
+const highNote = " [high-impact write: Lanflow asks the user to confirm once per session, even when your writes are always allowed; audited]"
+
+// destructive reports whether a write removes, stops or empties
+// something (the MCP destructiveHint): clients that run non-destructive
+// tools without asking must not treat these as harmless. The high-impact
+// writes count too: they replace the configuration in use or cut the
+// network.
+func destructive(m rpc.Method) bool {
+	if rpc.HighImpact(m.Name) {
+		return true
+	}
+	for _, p := range []string{"Delete", "Remove", "Clear", "Stop", "Close", "Reset", "Flush"} {
+		if strings.HasPrefix(m.Name, p) {
+			return true
+		}
+	}
+	return false
 }
 
 var apiType = reflect.TypeOf((*app.API)(nil)).Elem()
@@ -120,10 +144,17 @@ func generatedTool(m rpc.Method) tool {
 		doc = m.Name
 	}
 	ann := map[string]any{"readOnlyHint": m.Level == rpc.LevelRead || m.Level == rpc.LevelSensitive}
+	note := levelNote[m.Level]
 	if m.Level == rpc.LevelWrite {
-		ann["destructiveHint"] = false
+		ann["destructiveHint"] = destructive(m)
+		if rpc.HighImpact(m.Name) {
+			note = highNote
+		}
+		if m.Name == "ApplyConfigFile" {
+			note += " [path: empty for the sync file, or a .yaml file in the same folder]"
+		}
 	}
-	return tool{Tool: Tool{Name: ToolName(m.Name), Description: doc + levelNote[m.Level], InputSchema: schema, Annotations: ann}, method: m}
+	return tool{Tool: Tool{Name: ToolName(m.Name), Description: doc + note, InputSchema: schema, Annotations: ann}, method: m}
 }
 
 var timeType = reflect.TypeOf(time.Time{})

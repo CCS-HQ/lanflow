@@ -203,3 +203,145 @@ func TestRouteDomainEndToEnd(t *testing.T) {
 		t.Fatalf("status: %s", text)
 	}
 }
+
+// TestToolHints: tools that delete, stop or empty something, and the
+// high-impact writes, are declared destructive; reads are read-only; no
+// tool takes a local file of the agent's choice except apply_config_file,
+// which the server keeps to the sync folder.
+func TestToolHints(t *testing.T) {
+	byName := map[string]Tool{}
+	for _, tl := range Tools() {
+		byName[tl.Name] = tl
+	}
+	for _, name := range []string{"stop_core", "delete_custom_rule", "delete_override_entry", "clear_logs", "close_all_connections",
+		"close_connection", "clear_app_logs", "clear_capture_flows", "flush_dns_cache", "save_override", "use_subscription",
+		"import_subscription_url", "set_system_proxy", "set_tun", "restart_core", "apply_config_file"} {
+		tl, ok := byName[name]
+		if !ok {
+			t.Errorf("tool %s missing", name)
+			continue
+		}
+		if tl.Annotations["destructiveHint"] != true || tl.Annotations["readOnlyHint"] != false {
+			t.Errorf("%s: annotations %v, want destructive", name, tl.Annotations)
+		}
+	}
+	for _, name := range []string{"select_proxy", "set_mode", "save_custom_rule", "patch_settings", "undo"} {
+		if tl := byName[name]; tl.Annotations["destructiveHint"] != false {
+			t.Errorf("%s: annotations %v, want not destructive", name, tl.Annotations)
+		}
+	}
+	for _, name := range []string{"status", "proxies", "connections", "test_rule"} {
+		if tl := byName[name]; tl.Annotations["readOnlyHint"] != true {
+			t.Errorf("%s: annotations %v, want read-only", name, tl.Annotations)
+		}
+	}
+	for _, name := range []string{"stop_core", "import_subscription_url", "save_override", "set_tun"} {
+		if !strings.Contains(byName[name].Description, "high-impact") {
+			t.Errorf("%s: the description does not say it is confirmed every session: %s", name, byName[name].Description)
+		}
+	}
+	if strings.Contains(byName["select_proxy"].Description, "high-impact") {
+		t.Error("select_proxy is described as high-impact")
+	}
+	for _, never := range []string{"import_subscription_file", "import_atrust_config"} {
+		if _, ok := byName[never]; ok {
+			t.Errorf("tool %s reads a local file of the agent's choice: it must not be offered", never)
+		}
+	}
+}
+
+func TestClipRunes(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		n    int
+		want string
+	}{{"abc", 5, "abc"}, {"abcdef", 3, "abc"}, {"节点选择", 4, "节"}, {"节点选择", 6, "节点"}, {"a节", 2, "a"}, {"😀x", 3, ""}} {
+		if got := clipRunes(c.in, c.n); got != c.want {
+			t.Errorf("clipRunes(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
+		}
+	}
+	// A long client name is cut at a character, not inside one.
+	s := &Server{}
+	s.initialize(json.RawMessage(`{"clientInfo":{"name":"` + strings.Repeat("澜", 30) + `"}}`))
+	if s.name != strings.Repeat("澜", 21) {
+		t.Errorf("name = %q", s.name)
+	}
+}
+
+// TestHighImpactAndStaleErrors: an "always" for writes does not cover a
+// high-impact tool, and a refused call does not fail the composite tools
+// that follow in the session.
+func TestHighImpactAndStaleErrors(t *testing.T) {
+	var kinds []rpc.Level
+	srv := rpctest.Start(t, func(ctx context.Context, c rpc.Consent) (rpc.Answer, error) {
+		kinds = append(kinds, c.Kind)
+		if c.Kind == rpc.LevelHigh {
+			return rpc.AnswerDeny, nil
+		}
+		return rpc.AnswerAlways, nil
+	})
+	s := newSession(t, srv)
+	s.call("initialize", map[string]any{"protocolVersion": "2025-06-18", "clientInfo": map[string]any{"name": "claude-code"}})
+	if text, isErr := s.tool("set_mode", map[string]any{"m": "global"}); isErr {
+		t.Fatal(text)
+	}
+	text, isErr := s.tool("stop_core", nil)
+	if !isErr || !strings.Contains(text, "the user did not approve") {
+		t.Fatalf("stop_core: %s", text)
+	}
+	if len(kinds) != 2 || kinds[0] != rpc.LevelWrite || kinds[1] != rpc.LevelHigh {
+		t.Fatalf("asked %v", kinds)
+	}
+	if srv.Fake.Status().Core != "running" {
+		t.Fatalf("the core is %s after a refused stop_core", srv.Fake.Status().Core)
+	}
+	// The refusal is over: these read the state anew.
+	if text, isErr = s.tool("diagnose", nil); isErr {
+		t.Fatalf("diagnose after a refused call: %s", text)
+	}
+	if text, isErr = s.tool("switch_node", map[string]any{"group": "节点选择", "node": "香港 01"}); isErr || !strings.Contains(text, `"selected": "香港 01"`) {
+		t.Fatalf("switch_node after a refused call: %s", text)
+	}
+	if text, isErr = s.tool("route_domain", map[string]any{"domain": "x.example.org", "target": "DIRECT", "dry_run": true}); isErr {
+		t.Fatalf("route_domain after a refused call: %s", text)
+	}
+	// A file outside the sync folder is refused by the server.
+	if text, isErr = s.tool("apply_config_file", map[string]any{"path": "/etc/hosts", "dryRun": true}); !isErr || !strings.Contains(text, "permission denied") {
+		t.Fatalf("apply_config_file /etc/hosts: %s", text)
+	}
+}
+
+// TestCancelled: notifications/cancelled ends a call that waits (here for
+// the user's approval); no response is sent for it.
+func TestCancelled(t *testing.T) {
+	asked := make(chan struct{}, 1)
+	srv := rpctest.Start(t, func(ctx context.Context, c rpc.Consent) (rpc.Answer, error) {
+		asked <- struct{}{}
+		<-ctx.Done() // the user never answers
+		return "", ctx.Err()
+	})
+	s := newSession(t, srv)
+	s.call("initialize", map[string]any{"clientInfo": map[string]any{"name": "t"}})
+	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": map[string]any{"name": "set_mode", "arguments": map[string]any{"m": "global"}}})
+	if _, err := s.in.Write(append(b, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-asked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the user was not asked")
+	}
+	b, _ = json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "notifications/cancelled", "params": map[string]any{"requestId": 99}})
+	if _, err := s.in.Write(append(b, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	// The next answer is the ping's: the cancelled call sent none.
+	s.id = 100
+	start := time.Now()
+	if res := s.call("ping", nil); len(res) != 0 {
+		t.Fatalf("ping = %v", res)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("ping answered after %s", d)
+	}
+}

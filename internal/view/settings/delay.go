@@ -87,11 +87,7 @@ func (p *Page) commitDelayURL(s model.Settings) {
 	}
 	s.DelayURL = u
 	p.delayURLErr = ""
-	p.save(s, i18n.T("已更新测速地址"), func(err error) {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		p.delayURLErr = err.Error()
-	})
+	p.save(s, i18n.T("已更新测速地址"), func(err error) { p.delayURLErr = err.Error() })
 }
 
 func (p *Page) commitDelayMs(s model.Settings) {
@@ -106,9 +102,5 @@ func (p *Page) commitDelayMs(s model.Settings) {
 	}
 	s.DelayTimeoutMs = n
 	p.delayMsErr = ""
-	p.save(s, i18n.Tf("测速超时已改为 %d 毫秒", n), func(err error) {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		p.delayMsErr = err.Error()
-	})
+	p.save(s, i18n.Tf("测速超时已改为 %d 毫秒", n), func(err error) { p.delayMsErr = err.Error() })
 }

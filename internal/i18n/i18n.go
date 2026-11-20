@@ -126,6 +126,26 @@ func Tf(key string, args ...any) string {
 	return fmt.Sprintf(T(key), args...)
 }
 
+// PluralOne is the context that marks the English text of a counted
+// message for a count of one (Tn).
+const PluralOne = "|one"
+
+// Tn is Tf for a message that counts n things, where English tells one
+// from several: with n == 1 it says the entry of key+"|one" ("%d 个连接|one":
+// "%d connection"), if there is one, else the entry of key ("%d
+// connections"), which also says zero. Chinese has the one form, key. n is
+// only the count; args are the format's arguments as for Tf.
+//
+//	i18n.Tn(n, "%d 个活动连接", n)
+func Tn(n int, key string, args ...any) string {
+	if n == 1 && Lang() == EN {
+		if s, ok := en[key+PluralOne]; ok {
+			return fmt.Sprintf(s, args...)
+		}
+	}
+	return Tf(key, args...)
+}
+
 // Options translates keys for a Select or Segmented control; KeyOf maps
 // the chosen option back.
 func Options(keys ...string) []string {

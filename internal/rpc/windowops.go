@@ -3,6 +3,7 @@ package rpc
 import (
 	"encoding/json"
 	"log"
+	"time"
 
 	"lanflow/internal/app"
 )
@@ -183,5 +184,14 @@ func (ss *session) sendUI(u UICommand) {
 		log.Printf("lanflow: local api: ui command: %v", err)
 		return
 	}
-	ss.send(message{Method: "ui", Params: b})
+	// Waited for, briefly: the caller may quit right after (UIQuit).
+	om := ss.enqueue(message{Method: "ui", Params: b}, "", true)
+	if om == nil {
+		return
+	}
+	select {
+	case <-om.done:
+	case <-ss.wdone:
+	case <-time.After(flushTimeout):
+	}
 }

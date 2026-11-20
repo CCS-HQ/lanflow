@@ -130,15 +130,20 @@ func (e *ErrorLog) add(r model.ErrorRecord) model.ErrorRecord {
 	line, err := json.Marshal(r)
 	if err == nil {
 		line = append(line, '\n')
-		if e.lines >= maxErrorRecords || (e.size > 0 && e.size+int64(len(line)) > maxErrorBytes) {
-			_ = os.Rename(e.path, e.path+".1")
-			e.lines, e.size = 0, 0
+		full := e.lines >= maxErrorRecords || (e.size > 0 && e.size+int64(len(line)) > maxErrorBytes)
+		// A full file that can be neither moved nor emptied gets no more
+		// records: it must not grow without bound (the next record tries
+		// again).
+		if full && Rotate(e.path) == nil {
+			e.lines, e.size, full = 0, 0, false
 		}
-		if f, err := os.OpenFile(e.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
-			n, _ := f.Write(line)
-			f.Close()
-			e.size += int64(n)
-			e.lines++
+		if !full {
+			if f, err := os.OpenFile(e.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+				n, _ := f.Write(line)
+				f.Close()
+				e.size += int64(n)
+				e.lines++
+			}
 		}
 	}
 	fn := e.onAdd

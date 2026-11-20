@@ -19,6 +19,7 @@ func init() {
 		"经中转":                 "Via relay",
 		"（%s）":                " (%s)",
 		"链式代理 · %d 跳":         "Chained · %d hops",
+		"链式代理 · %d 跳|one":     "Chained · %d hop",
 		"⚠ 位置存疑":              "⚠ Location doubtful",
 		"网站":                  "Site",
 		"地址":                  "Address",

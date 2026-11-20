@@ -35,6 +35,14 @@ func shortDir(t *testing.T) string {
 	return d
 }
 
+// setPipe gives the test its own pipe on Windows (the endpoint does not
+// depend on the directory there).
+func setPipe(t *testing.T, dir string) {
+	if runtime.GOOS == "windows" {
+		t.Setenv("LANFLOW_SOCKET", `\\.\pipe\lanflow-test-`+filepath.Base(dir))
+	}
+}
+
 type harness struct {
 	dir   string
 	fake  *fake.Fake
@@ -67,7 +75,20 @@ func start(t *testing.T, prompt rpc.PromptFunc) *harness {
 
 func (h *harness) dial(t *testing.T, client string, reveal bool) *remote.Client {
 	t.Helper()
-	c, err := remote.Dial(context.Background(), remote.Options{DataDir: h.dir, Client: client, Version: "test", Reveal: reveal})
+	// ctl as a person at a terminal runs it (dialScript: as a script does).
+	c, err := remote.Dial(rpc.WithInteractive(context.Background()), remote.Options{DataDir: h.dir, Client: client, Version: "test", Reveal: reveal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Timeout = 10 * time.Second
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
+// dialScript connects as `lanflow ctl` away from a terminal.
+func (h *harness) dialScript(t *testing.T) *remote.Client {
+	t.Helper()
+	c, err := remote.Dial(context.Background(), remote.Options{DataDir: h.dir, Client: "ctl", Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}

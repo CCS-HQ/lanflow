@@ -57,7 +57,7 @@ var agentOps = map[string]agentOp{
 		run: func(s *Server, ss *session, _ []json.RawMessage) (any, error) {
 			res, err := s.runUndo()
 			if res.Method != "" || err != errNothingToUndo {
-				s.audit.addSummary(ss.identity().String(), "Undo", res.Method, err)
+				s.audit.addSummary(ss, "Undo", res.Method, err)
 			}
 			if err != nil {
 				return nil, err
@@ -119,9 +119,9 @@ func (s *Server) callAgentOp(ss *session, name string, op agentOp, params json.R
 		for i, a := range args {
 			vals[i] = json.RawMessage(a)
 		}
-		if err := s.guard.check(ss, name, level, summarizeAny(name, vals)); err != nil {
+		if err := s.guard.check(ss, name, level, false, summarizeAny(name, vals)); err != nil {
 			if level != LevelRead {
-				s.audit.addSummary(id.String(), name, summarizeAny(name, vals), err)
+				s.audit.addSummary(ss, name, summarizeAny(name, vals), err)
 			}
 			return nil, err
 		}
@@ -156,7 +156,7 @@ func (s *Server) patchSettings(ss *session, patch json.RawMessage, dry bool) (an
 	id := ss.identity()
 	prep := s.prepareUndo("PatchSettings", nil)
 	err = s.o.API.SaveSettings(next)
-	s.audit.addSummary(id.String(), "PatchSettings", truncate("PatchSettings("+strings.Join(changed, ", ")+")", 300), err)
+	s.audit.addSummary(ss, "PatchSettings", truncate("PatchSettings("+strings.Join(changed, ", ")+")", 300), err)
 	if err != nil {
 		return nil, err
 	}

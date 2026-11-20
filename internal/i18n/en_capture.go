@@ -38,7 +38,9 @@ func init() {
 		// internal/view/capture/page.go
 		"抓包":           "Capture",
 		"%d 个主机":       "%d hosts",
+		"%d 个主机|one":   "%d host",
 		"%d 个程序":       "%d apps",
+		"%d 个程序|one":   "%d app",
 		"剩余 %s":        "%s left",
 		"已暂停（%s）":      "Paused (%s)",
 		"解密中":          "Decrypting",
@@ -150,6 +152,7 @@ func init() {
 		"只显示前 256 KiB":       "Showing the first 256 KiB",
 		"文本正文不做打码，可能包含凭据。":   "Text bodies are not masked and may hold credentials.",
 		"图片（%s），无法预览此格式":     "Image (%s) in a format that cannot be previewed",
+		"图片（%s）尺寸过大，不预览":     "Image (%s) too large to preview",
 		"操作码 %d · %s":        "Opcode %d · %s",
 
 		// conns, tray, shell

@@ -38,6 +38,10 @@ const (
 	progressStep        = 256 << 10 // emit progress at most every 256 KB
 )
 
+// PinnedCoreVersion is the Mihomo release shipped with the app; the About
+// row links to the source code and license of exactly that version.
+const PinnedCoreVersion = pinnedCoreVersion
+
 // model.CoreDownload.Phase values (env.CoreDownloadText words them).
 const (
 	phaseDownload = "下载"

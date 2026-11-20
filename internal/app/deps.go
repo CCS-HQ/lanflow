@@ -91,7 +91,7 @@ type sysProxy interface {
 type sysDNS interface {
 	Supported() bool
 	Snapshot() (sysdns.Saved, error)
-	Set(servers []string) error
+	Set(saved sysdns.Saved, servers []string) error // only the services saved records
 	Restore(s sysdns.Saved, ours []string) error
 }
 
@@ -256,7 +256,9 @@ type realSysDNS struct{}
 
 func (realSysDNS) Supported() bool                 { return sysdns.Supported() }
 func (realSysDNS) Snapshot() (sysdns.Saved, error) { return sysdns.Snapshot() }
-func (realSysDNS) Set(servers []string) error      { return sysdns.Set(servers) }
+func (realSysDNS) Set(saved sysdns.Saved, servers []string) error {
+	return sysdns.Set(saved, servers)
+}
 func (realSysDNS) Restore(s sysdns.Saved, ours []string) error {
 	return sysdns.Restore(s, ours)
 }

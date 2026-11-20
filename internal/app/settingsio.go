@@ -92,7 +92,9 @@ func (s *Service) ImportSettings(path string) (summary string, err error) {
 		cur := s.Settings()
 		// machine-local choices stay as they are
 		in := syncfile.KeepLocal(copySettings(*ex.Settings), cur)
-		if err := s.SaveSettings(in); err != nil {
+		// from a file, not made here: a WebDAV server it brings waits for
+		// a confirmation before automatic backups go to it
+		if err := s.saveSettingsFrom(in, true); err != nil {
 			skipped = append(skipped, i18n.Tf("设置（%s）", err.Error()))
 		} else {
 			done = append(done, i18n.T("设置|项"))

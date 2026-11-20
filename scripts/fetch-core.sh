@@ -10,6 +10,8 @@
 #   bin/mihomo[.exe]                   a copy, only when the target is the host
 #                                      (the end-to-end tests use it)
 #   bin/geo/{geoip.metadb,geosite.dat,GeoLite2-ASN.mmdb}
+#   bin/licenses/mihomo/LICENSE        Mihomo's license (GPL-3.0), shipped with
+#                                      the core by scripts/collect-licenses.sh
 #   bin/cache/                         verified release archives (reused)
 #
 # Every download is checked against a SHA-256 known before the download
@@ -24,6 +26,8 @@
 #             tag or commit to pin): the sums come from the GitHub API for
 #             GEO_TAG, or from GEOIP_SHA256 / GEOSITE_SHA256 / ASN_SHA256
 #             when set (to pin a known set of files)
+#   license   Mihomo's LICENSE at the tag of the core, against the sum of
+#             the GPL-3.0 text below
 # The GitHub API is always asked directly (api.github.com), never through
 # GITHUB_MIRROR, so a mirror can only serve files whose sums are known.
 #
@@ -58,6 +62,12 @@ pinned_sha256() {
 	*) return 1 ;;
 	esac
 }
+
+# SHA-256 of the LICENSE file in MetaCubeX/mihomo at PINNED_VERSION, the
+# text of the GNU General Public License version 3 (git blob
+# f288702d2fa16d3cdf0035b15a9fcbc552cd88e7). A version whose LICENSE differs
+# stops the script: look at the change before shipping that core.
+MIHOMO_LICENSE_SHA256="3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="$REPO_ROOT/bin"
@@ -223,6 +233,12 @@ printf '%s  %s\n' "$(sha256 "$PLAT_DIR/$OUT_NAME")" "bin/$GOOS-$GOARCH/$OUT_NAME
 if [ "$IS_HOST" = 1 ]; then
 	cp -f "$PLAT_DIR/$OUT_NAME" "$BIN_DIR/$OUT_NAME"
 fi
+
+# --- license ------------------------------------------------------------
+# The core is distributed under GPL-3.0: its license text goes into the
+# packages with it (scripts/collect-licenses.sh), from the same tag.
+fetch_verified "${GITHUB_MIRROR}https://github.com/MetaCubeX/mihomo/raw/${MIHOMO_VERSION}/LICENSE" \
+	"$BIN_DIR/licenses/mihomo/LICENSE" "$MIHOMO_LICENSE_SHA256"
 
 # --- geodata ------------------------------------------------------------
 geo_override() {

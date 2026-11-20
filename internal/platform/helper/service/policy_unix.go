@@ -10,7 +10,35 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
+
+// verifyNoLinks walks path (symlinks already resolved, inside dataDir)
+// from the root with O_NOFOLLOW in every component, and checks the last
+// one, a directory or a regular file, without following it.
+func verifyNoLinks(_ string, path string, dir bool) error {
+	parent, base := path, ""
+	if !dir {
+		parent, base = filepath.Dir(path), filepath.Base(path)
+	}
+	fd, err := openDirNoFollow(parent)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	if dir {
+		return nil
+	}
+	var st unix.Stat_t
+	if err := unix.Fstatat(fd, base, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return &os.PathError{Op: "stat", Path: path, Err: err}
+	}
+	if fileMode(&st) != unix.S_IFREG {
+		return fmt.Errorf("%w: %s", errUnsafeFile, path)
+	}
+	return nil
+}
 
 func samePath(a, b string) bool           { return a == b }
 func hasPathPrefix(p, prefix string) bool { return strings.HasPrefix(p, prefix) }

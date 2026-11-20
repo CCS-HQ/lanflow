@@ -4,6 +4,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # By hand, on any branch or tag: the release workflow requires a successful
+  # run of this workflow for the tagged commit, and a commit pushed to main
+  # together with later ones has no run of its own.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,6 +24,7 @@ jobs:
   helper-version:
     name: Helper version
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,6 +38,70 @@ jobs:
       - name: Require a helper version bump when the helper changed
         run: scripts/check-helper-version.sh HEAD
 
+  # Checks that need no macOS or Windows runner: the builds nobody runs
+  # day to day, static analysis, and the third-party notices.
+  lint:
+    name: Lint and cross builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # THIRD-PARTY-NOTICES.md ships in every package and release. It names
+      # the Mihomo version whose source the GPL notice points at, and every
+      # Go module linked into the app or the helper: a core or dependency
+      # update that forgets it fails here.
+      - name: Third-party notices are up to date
+        run: |
+          core="$(sed -n 's/^PINNED_VERSION="\([^"]*\)".*/\1/p' scripts/fetch-core.sh)"
+          [ -n "$core" ]
+          ok=1
+          for ref in "MetaCubeX/mihomo/tree/${core}" "MetaCubeX/mihomo/blob/${core}/LICENSE"; do
+            grep -qF "$ref" THIRD-PARTY-NOTICES.md || { echo "THIRD-PARTY-NOTICES.md does not mention ${ref}" >&2; ok=0; }
+          done
+          for goos in darwin windows; do
+            GOOS="$goos" go list -deps -f '{{with .Module}}{{if .Version}}{{.Path}}{{end}}{{end}}' . ./cmd/lanflow-helper
+          done | sort -u > "${RUNNER_TEMP}/modules.txt"
+          [ -s "${RUNNER_TEMP}/modules.txt" ]
+          while read -r mod; do
+            grep -qiF "$mod" THIRD-PARTY-NOTICES.md || { echo "THIRD-PARTY-NOTICES.md does not list ${mod}" >&2; ok=0; }
+          done < "${RUNNER_TEMP}/modules.txt"
+          [ "$ok" = 1 ]
+
+      # The test jobs build darwin/arm64 and windows/amd64 only. Linux has
+      # code of its own (internal/rpc/peer_linux.go among others) and Windows
+      # on ARM is a platform fetch-core.sh knows: keep both compiling.
+      - name: Cross vet and build (linux/amd64, windows/arm64)
+        run: |
+          for target in linux/amd64 windows/arm64; do
+            echo "::group::${target}"
+            GOOS="${target%/*}" GOARCH="${target#*/}" go vet ./...
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./...
+            echo "::endgroup::"
+          done
+
+      # Reported, not yet required: staticcheck is new here and the first
+      # findings have not been gone through. TODO: remove continue-on-error
+      # once the tree is clean.
+      - name: staticcheck
+        continue-on-error: true
+        run: |
+          status=0
+          for goos in darwin windows linux; do
+            echo "::group::GOOS=${goos}"
+            GOOS="$goos" go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./... || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+
   test:
     name: Test (${{ matrix.os }})
     strategy:
@@ -40,6 +109,7 @@ jobs:
       matrix:
         os: [macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30 # a run takes about 5; a hung end-to-end test should not hold a runner for hours
     defaults:
       run:
         shell: bash
@@ -73,17 +143,38 @@ jobs:
       - name: mygo vet
         run: go tool mygo vet .
 
+      # One pass of the tests per platform: with the race detector on macOS
+      # (it needs cgo, and that runner has a C toolchain), without on
+      # Windows. -shuffle=on runs the tests of each package in a random
+      # order, so one that depends on what an earlier test left behind shows
+      # up; a failure prints the seed (-shuffle=<seed> repeats the order).
       - name: go test
+        if: runner.os != 'macOS'
         env:
           CGO_ENABLED: "0"
-        run: go test ./...
+        run: |
+          mkdir -p ci-diagnostics
+          go test -shuffle=on ./... 2>&1 | tee ci-diagnostics/go-test.log
 
-      # -race needs cgo; the macOS runner has a C toolchain.
       - name: go test -race
         if: runner.os == 'macOS'
         env:
           CGO_ENABLED: "1"
-        run: go test -race ./...
+        run: |
+          mkdir -p ci-diagnostics
+          go test -race -shuffle=on ./... 2>&1 | tee ci-diagnostics/go-test.log
+
+      # The whole test output of a failed run, kept as a file: the interface
+      # tests print where every element of the page was when a click missed,
+      # which is what a layout difference between platforms is found with.
+      - name: Upload test output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-output-${{ matrix.os }}
+          path: ci-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

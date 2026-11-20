@@ -141,3 +141,21 @@ func TestCrashOutputBecomesRecord(t *testing.T) {
 		t.Fatalf("crash.txt not emptied: %q", data)
 	}
 }
+
+// TestErrorsRotateBlocked: errors.jsonl stays bounded when it cannot be
+// moved aside (the old file held open on Windows).
+func TestErrorsRotateBlocked(t *testing.T) {
+	dir := t.TempDir()
+	e := OpenErrors(dir, "test")
+	blockRotation(t, e.Path())
+	for i := 0; i < maxErrorRecords*2+10; i++ {
+		e.Add(model.ErrorKindError, "boom", "")
+	}
+	b, err := os.ReadFile(e.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(b), "\n"); n == 0 || n > maxErrorRecords {
+		t.Fatalf("errors.jsonl has %d records with rotation blocked, limit %d", n, maxErrorRecords)
+	}
+}

@@ -44,6 +44,12 @@ func (l *Locator) Probe(ctx context.Context, sel SelectFunc, probePort int, node
 // there is no physical interface or the socket cannot be bound.
 func (l *Locator) Direct(ctx context.Context) (model.EndpointInfo, error) { return l.l.direct(ctx) }
 
+// Reset forgets every cached probe (memory and file). Results are cached by
+// node name: after a subscription update the same name may be a different
+// server, whose exit and probe time the old entry would still describe for
+// up to 24 h.
+func (l *Locator) Reset() error { return l.l.reset() }
+
 // Lookup resolves an IP offline (country place + ISP + ASN).
 func (l *Locator) Lookup(ip string) model.EndpointInfo { return l.l.lookup(ip) }
 

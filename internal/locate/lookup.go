@@ -3,7 +3,10 @@ package locate
 import (
 	"fmt"
 	"net/netip"
+	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/oschwald/maxminddb-golang/v2"
 
@@ -11,23 +14,85 @@ import (
 	"lanflow/internal/model"
 )
 
-// databases holds the lazily opened MMDB readers; either may be nil.
-type databases struct {
-	geo *maxminddb.Reader
-	asn *maxminddb.Reader
+// dbCheckEvery is how often a database file is looked at again for a
+// newer version (or for having appeared at all).
+const dbCheckEvery = 10 * time.Second
+
+// maxDatabaseSize bounds what is read as a database.
+const maxDatabaseSize = 512 << 20
+
+// database is one MMDB file, read again when it changes on disk: the core
+// replaces geoip.metadb and GeoLite2-ASN.mmdb when it updates them. The
+// file is read into memory of its own (readOffHeap) rather than mapped,
+// so replacing or truncating it can neither fault a lookup in progress
+// nor (on Windows) be refused because the file is in use.
+type database struct {
+	path string
+
+	// use holds rw for reading during a lookup; a newer reader takes its
+	// place, and the old one's memory is given back, under the write lock.
+	rw   sync.RWMutex
+	r    *maxminddb.Reader // nil until the file could be read
+	free func()
+
+	mu      sync.Mutex
+	checked time.Time // when the file was last looked at
+	mtime   time.Time // of the file the reader was made from
+	size    int64
 }
 
-func (l *locator) openDBs() {
-	if l.mmdbPath != "" {
-		if r, err := maxminddb.Open(l.mmdbPath); err == nil {
-			l.dbs.geo = r
-		}
+// use runs fn with the current reader; fn is not called when the file is
+// missing or unreadable so far. What fn keeps must not point into the
+// reader's memory (strings.Clone): it is released when the file changes.
+func (d *database) use(now time.Time, fn func(r *maxminddb.Reader)) {
+	if d.path == "" {
+		return
 	}
-	if l.asnPath != "" {
-		if r, err := maxminddb.Open(l.asnPath); err == nil {
-			l.dbs.asn = r
-		}
+	d.refresh(now)
+	d.rw.RLock()
+	defer d.rw.RUnlock()
+	if d.r != nil {
+		fn(d.r)
 	}
+}
+
+// refresh reads the file again when it changed since the last look. A
+// failure is never remembered as "opened": the reader in use stays, and
+// the file is tried again at the next check.
+func (d *database) refresh(now time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.checked.IsZero() && now.Sub(d.checked) >= 0 && now.Sub(d.checked) < dbCheckEvery {
+		return
+	}
+	d.checked = now
+	st, err := os.Stat(d.path)
+	if err != nil {
+		return // gone for the moment (being replaced): keep what we have
+	}
+	d.rw.RLock()
+	have := d.r != nil
+	d.rw.RUnlock()
+	if have && st.ModTime().Equal(d.mtime) && st.Size() == d.size {
+		return
+	}
+	data, free, err := readOffHeap(d.path)
+	if err != nil {
+		return
+	}
+	r, err := maxminddb.OpenBytes(data)
+	if err != nil {
+		free()
+		return // half written or not a database: try again later
+	}
+	d.rw.Lock()
+	old := d.free
+	d.r, d.free = r, free
+	d.rw.Unlock()
+	if old != nil {
+		old()
+	}
+	d.mtime, d.size = st.ModTime(), st.Size()
 }
 
 // lookup resolves an IP offline. Missing databases or unknown IPs leave
@@ -39,27 +104,29 @@ func (l *locator) lookup(ip string) model.EndpointInfo {
 		return ep
 	}
 	addr = addr.Unmap()
-	l.dbOnce.Do(l.openDBs)
+	now := l.now()
 
-	if l.dbs.geo != nil {
-		if code := lookupCountry(l.dbs.geo, addr); code != "" {
-			if p, ok := geo.Country(code); ok {
-				// Only the country is known: show the country's name at
-				// its main city's coordinates.
-				p.City = geo.CountryName(code)
-				ep.Place = &p
-			} else {
-				ep.Place = &model.Place{Country: code, City: code}
-			}
+	// Strings decoded from a reader are cloned: they may point into its
+	// memory, which is released when the file changes (database.use).
+	code := ""
+	l.geoDB.use(now, func(db *maxminddb.Reader) { code = strings.Clone(lookupCountry(db, addr)) })
+	if code != "" {
+		if p, ok := geo.Country(code); ok {
+			// Only the country is known: show the country's name at
+			// its main city's coordinates.
+			p.City = geo.CountryName(code)
+			ep.Place = &p
+		} else {
+			ep.Place = &model.Place{Country: code, City: code}
 		}
 	}
-	if l.dbs.asn != nil {
-		num, org := lookupASN(l.dbs.asn, addr)
+	l.asnDB.use(now, func(db *maxminddb.Reader) {
+		num, org := lookupASN(db, addr)
 		if num != "" {
-			ep.ASN = "AS" + num
+			ep.ASN = "AS" + strings.Clone(num)
 		}
-		ep.ISP = shortenOrg(org)
-	}
+		ep.ISP = strings.Clone(shortenOrg(org))
+	})
 	return ep
 }
 

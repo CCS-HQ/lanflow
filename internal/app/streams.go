@@ -114,6 +114,11 @@ func (s *Service) SetBackground(background bool) {
 		return
 	}
 	s.startConnStream()
+	if !background {
+		// The routes were not rebuilt per frame while out of sight
+		// (onConnections): bring them up to date for the window.
+		s.goBackground(s.rebuildRoutes)
+	}
 }
 
 // restartLogStream reopens the log stream at a new level, once the old
@@ -271,9 +276,11 @@ func (s *Service) onConnections(c controller.Connections) {
 	if s.stats.record(active, now) {
 		s.em.emit(TopicStats)
 	}
-	if hadConns || len(active) > 0 {
+	if (hadConns || len(active) > 0) && !s.background.Load() {
 		// Idle (no connections before or now): the routes only change with
 		// the proxies, the mode or an exit, whose own paths rebuild them.
+		// Out of sight nothing shows the routes (their speeds change with
+		// nearly every frame): SetBackground rebuilds them on the way back.
 		s.rebuildRoutes()
 	}
 }

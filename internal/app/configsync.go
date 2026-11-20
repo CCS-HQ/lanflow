@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,14 @@ import (
 //   - another change is decoded, planned, checked with `mihomo -t` and
 //     loaded (configapply.go); a refused one leaves everything as it was,
 //     and the status (and a notice) say why, with the line;
+//   - a refused version stays in the folder untouched (held): this machine
+//     stops writing the file until that version loads (a failure that
+//     depends on this machine — a port in use, an older core — is tried
+//     again with a growing pause), another device replaces it, or the user
+//     decides (SetConfigSync with SyncUseLocal, ApplyConfigFile). Writing
+//     over it would roll the other devices back to this machine's state.
+//     A file in a newer format, or sealed in a way this build does not
+//     know, is never written over at all (syncfile.Foreign);
 //   - an iCloud placeholder (.lanflow.yaml.icloud) asks iCloud to download
 //     the file (brctl download) and waits;
 //   - conflict copies ("lanflow 2.yaml") are listed for the user to pick
@@ -46,7 +55,41 @@ const (
 	syncDownloadRetry = 15 * time.Second        // between iCloud download requests
 	syncStateFile     = "sync-state.json"       // last hash per file, so a restart knows what changed meanwhile
 	syncBackupDir     = "sync-backups"          // files replaced by an explicit choice
+
+	// A refused version whose failure depends on this machine is loaded
+	// again after syncRetryMin, doubling up to syncRetryMax.
+	syncRetryMin = time.Minute
+	syncRetryMax = time.Hour
+	// A version whose composed configuration did not pass the check is
+	// loaded again this many times (1, 2 and 4 minutes later: enough for a
+	// timeout or a core being replaced), then held like an invalid one.
+	syncRetryLimited = 3
+
+	// The file is read and hashed only when its snapshot (size, time)
+	// changed since the last read. Two guards against a change the
+	// snapshot does not show: a file modified less than syncFreshFile ago
+	// is read every step (file systems with coarse timestamps), and every
+	// file is read again after syncRecheck.
+	syncFreshFile = 3 * time.Second
+	syncRecheck   = time.Minute
 )
+
+// ErrSyncHeld is what an operation that must rewrite the sync file says
+// while a version this machine refused is still in the folder.
+var ErrSyncHeld = i18n.Error("同步文件夹里有一个本机未能加载的版本，本机不会覆盖它。请先解决加载失败的原因，或关闭配置同步后重新开启并选择「用本机配置覆盖文件」。")
+
+// errSyncForeign is what choosing this machine's configuration says for a
+// file this build must not rewrite (syncfile.Foreign).
+var errSyncForeign = i18n.Error("同步文件由更新版本的澜流写入，或使用了本机不支持的加密方式，本机不能覆盖它。请先更新本机的澜流；如确实要弃用这份文件，请先在同步文件夹中手动移走它。")
+
+// heldFile is a version of the sync file this machine refused and that
+// is still in the folder. While it is, nothing is written there.
+type heldFile struct {
+	path, hash string
+	foreign    bool      // never to be written over (syncfile.Foreign)
+	retryAt    time.Time // when to load it again; zero = the content itself is invalid
+	tries      int
+}
 
 // ErrConfigSyncChoice is what SetConfigSync returns when the folder
 // already has a lanflow.yaml that differs from this machine's
@@ -58,7 +101,11 @@ type configSyncState struct {
 	// secrets replaces Secrets for this service (tests); nil = Secrets.
 	secrets SecretStore
 	links   linkSecrets // links this run put into the keychain (configsecrets.go)
-	seal    sealState   // secrets sealed with the sync passphrase (configseal.go)
+	// webdavPW is the WebDAV password (backup.go). It lives here, beside
+	// secrets, because both go through secretStore.
+	webdavPW secretSlot
+	origin   webdavOriginState // the WebDAV server confirmed on this machine (backup.go)
+	seal     sealState         // secrets sealed with the sync passphrase (configseal.go)
 
 	// test hooks: home replaces the user's home directory, download the
 	// iCloud download request, debounce the stable time (0 = syncDebounce).
@@ -77,6 +124,12 @@ type configSyncState struct {
 	snap      syncfile.Snapshot // the folder as last seen
 	snapDir   string
 	changedAt time.Time // when snap last changed
+	held      heldFile  // a refused version still in the folder (path "" = none)
+	// read: the snapshot whose content was last read and dealt with, so an
+	// unchanged file is not read and hashed every second
+	read      syncfile.Snapshot
+	readDir   string
+	readAt    time.Time // wall clock; zero = read the file at the next step
 	askedAt   time.Time // last iCloud download request
 	notified  string    // the error last shown as a notice
 	conflicts string    // the conflict set last shown as a notice
@@ -248,20 +301,12 @@ func (s *Service) syncStep() {
 	case !stable:
 		return // still changing (another program writing it): look again later
 	case snap.Exists:
-		data, err := os.ReadFile(path)
-		if err != nil {
-			s.syncFailed(path, "", fmt.Errorf(i18n.T("读取同步文件失败：%v"), err), 0)
-			return
+		if !s.checkSyncFile(dir, path, snap, now) {
+			return // loaded, refused, or held: nothing to write now
 		}
-		if h := syncfile.Hash(data); h != s.knownHash(path) {
-			s.loadExternal(path, data, h)
-			return
-		}
-		// this machine's own file: learn whether it is sealed before
-		// writing over it (the first step after a start)
-		s.ensureSealPrimed(data)
 	default:
 		dirty = true // no file (deleted, or never written): write this machine's
+		s.releaseHeld()
 		if !s.sealPrimed() {
 			s.markSealedPrimed()
 		}
@@ -271,20 +316,120 @@ func (s *Service) syncStep() {
 	}
 }
 
+// checkSyncFile looks at the sync file's content when it may have changed
+// and reports whether the file is this machine's own (written or loaded
+// here), so a local change may be written over it. An unknown content is
+// loaded; one this machine refused is left alone until its retry is due.
+func (s *Service) checkSyncFile(dir, path string, snap syncfile.Snapshot, now time.Time) bool {
+	wall := time.Now() // file times are wall-clock times
+	s.cs.mu.Lock()
+	unchanged := !s.cs.readAt.IsZero() && s.cs.readDir == dir && snap.Same(s.cs.read) && wall.Sub(s.cs.readAt) < syncRecheck
+	held := s.cs.held
+	s.cs.mu.Unlock()
+	if !s.sealPrimed() {
+		unchanged = false // the file's encryption block must be read before anything is written
+	}
+	waiting := held.path == path && (held.retryAt.IsZero() || now.Before(held.retryAt))
+	if unchanged && (held.path != path || waiting) {
+		return held.path != path
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		s.syncFailed(path, "", fmt.Errorf(i18n.T("读取同步文件失败：%v"), err), 0)
+		return false
+	}
+	s.cs.mu.Lock()
+	s.cs.read, s.cs.readDir, s.cs.readAt = snap, dir, wall
+	if age := wall.Sub(snap.ModTime); age < syncFreshFile {
+		s.cs.readAt = time.Time{} // too fresh to trust its time: read again
+	}
+	s.cs.mu.Unlock()
+	h := syncfile.Hash(data)
+	switch {
+	case h == s.knownHash(path):
+		// this machine's own file: learn whether it is sealed before
+		// writing over it (the first step after a start)
+		s.releaseHeld()
+		s.ensureSealPrimed(data)
+		return true
+	case held.path == path && held.hash == h && waiting:
+		return false // the version refused before; still not its turn
+	}
+	s.loadExternal(path, data, h)
+	return false
+}
+
+// holdExternal records that the content hash at path was refused and
+// stays in the folder: nothing is written there while it does. A
+// retryable failure is scheduled to be loaded again.
+func (s *Service) holdExternal(path, hash string, data []byte, retry bool, limit int) {
+	now := s.d.now()
+	s.cs.mu.Lock()
+	h := heldFile{path: path, hash: hash, foreign: syncfile.Foreign(data)}
+	if retry {
+		if s.cs.held.path == path && s.cs.held.hash == hash {
+			h.tries = s.cs.held.tries
+		}
+		if limit > 0 && h.tries >= limit {
+			retry = false // tried often enough: it waits for the user now
+		}
+	}
+	if retry {
+		wait := syncRetryMax
+		if h.tries < 6 {
+			wait = min(syncRetryMin<<h.tries, syncRetryMax)
+		}
+		h.tries++
+		h.retryAt = now.Add(wait)
+	}
+	s.cs.held = h
+	s.cs.mu.Unlock()
+}
+
+// releaseHeld forgets the refused version: it loaded, was replaced, or
+// the user decided.
+func (s *Service) releaseHeld() {
+	s.cs.mu.Lock()
+	s.cs.held = heldFile{}
+	s.cs.mu.Unlock()
+}
+
+// syncHeld returns the refused version in the way of writing path.
+func (s *Service) syncHeld(path string) (heldFile, bool) {
+	s.cs.mu.Lock()
+	defer s.cs.mu.Unlock()
+	return s.cs.held, s.cs.held.path == path
+}
+
+// heldNote is the line the status adds to a refusal: what this machine
+// does with its own changes meanwhile.
+func heldNote(h heldFile) string {
+	switch {
+	case h.foreign:
+		return i18n.T("本机不会改写这份文件；在它被加载之前，本机的配置改动也不会写入同步文件夹。请先更新本机的澜流。")
+	case !h.retryAt.IsZero():
+		return i18n.T("稍后会自动重试加载。在此之前本机不会覆盖这份文件，本机的配置改动也不会写入同步文件夹；如要以本机配置为准，请关闭配置同步后重新开启并选择「用本机配置覆盖文件」。")
+	}
+	return i18n.T("本机不会覆盖这份文件，本机的配置改动也暂不写入同步文件夹；请修正文件，或关闭配置同步后重新开启并选择「用本机配置覆盖文件」。")
+}
+
 // loadExternal processes a content of the file this machine has not
-// seen: loads it, or records why not. Either way the hash is
-// remembered, so the same content is not tried again.
+// seen: loads it, or records why not. A loaded content's hash is
+// remembered, so it is not loaded again. A refused one is held instead
+// (holdExternal): it is not this machine's file, so it is never written
+// over, and it is tried again after a restart — or sooner, when the
+// failure was this machine's and not the content's.
 func (s *Service) loadExternal(path string, data []byte, hash string) {
 	s.alog.Infof("config sync: %s changed (%s)", path, hash[:12])
 	doc, warns, err := syncfile.DecodeWarn(data, defaultSettings())
 	if err != nil {
-		s.rememberHash(path, hash)
 		line := 0
 		var se *syncfile.Error
 		if errors.As(err, &se) {
 			line = se.Line
 		}
-		s.syncFailed(path, hash, err, line)
+		s.holdExternal(path, hash, data, false, 0)
+		s.syncRefused(path, err, line)
 		return
 	}
 	for _, w := range warns {
@@ -292,16 +437,19 @@ func (s *Service) loadExternal(path string, data []byte, hash string) {
 	}
 	plain, webdav := s.unsealDoc(doc)
 	res, err := s.applyDoc(plain, false)
-	s.rememberHash(path, hash)
 	if err != nil {
 		line := 0
 		var de *docError
 		if errors.As(err, &de) {
 			line = syncfile.LineOf(data, de.path)
 		}
-		s.syncFailed(path, hash, err, line)
+		retry, limit := retryable(err)
+		s.holdExternal(path, hash, data, retry, limit)
+		s.syncRefused(path, err, line)
 		return
 	}
+	s.rememberHash(path, hash)
+	s.releaseHeld()
 	s.primeSeal(doc)
 	s.adoptWebDAVPassword(webdav)
 	now := s.d.now()
@@ -324,6 +472,13 @@ func (s *Service) loadExternal(path string, data []byte, hash string) {
 		s.alog.Infof("config sync: loaded %s: %s", path, res.Summary)
 		s.notify(Notice{Kind: "toast", Title: i18n.T("已加载同步的配置"), Detail: res.Summary})
 	}
+}
+
+// syncRefused is syncFailed for a version of the file that was refused
+// and is now held: the status also says what happens to local changes.
+func (s *Service) syncRefused(path string, err error, line int) {
+	h, _ := s.syncHeld(path)
+	s.syncFailed(path, h.hash, fmt.Errorf("%w\n%s", err, heldNote(h)), line)
 }
 
 // syncFailed records a refused change (or an I/O failure) for the status
@@ -403,9 +558,22 @@ func (s *Service) writeSyncFile(dir string) {
 		s.cs.mu.Lock()
 		ours := bytes.Equal(old, s.cs.canon)
 		s.cs.mu.Unlock()
+		if !ours && syncfile.Hash(old) != s.knownHash(path) {
+			// A version this machine neither wrote nor loaded: one it
+			// refused, or one that arrived since the last look. It is
+			// never replaced from here (another device's changes would be
+			// rolled back everywhere); the next step loads it, and until
+			// it is dealt with the local change waits.
+			s.cs.mu.Lock()
+			s.cs.dirty = true
+			s.cs.readAt = time.Time{}
+			s.cs.mu.Unlock()
+			s.alog.Warnf("config sync: %s holds a version this machine did not load; not writing over it", path)
+			return
+		}
 		if !ours {
-			// a version this machine did not write (a refused change, or
-			// a hand-edited file): keep it before replacing it
+			// a version this machine loaded but did not write (a
+			// hand-edited file, now rewritten canonically): keep it
 			if err := s.backupSyncFile(path, old); err != nil {
 				s.alog.Warnf("config sync: %v", err)
 			}
@@ -492,13 +660,27 @@ func (s *Service) noteConflicts(names []string) {
 // it changed.
 func (s *Service) setSyncStatus(fn func(*model.ConfigSyncStatus)) {
 	s.cs.mu.Lock()
-	before := fmt.Sprintf("%+v", s.cs.st)
+	before := s.cs.st
+	before.Conflicts = append([]string(nil), before.Conflicts...)
+	before.MissingSecrets = append([]string(nil), before.MissingSecrets...)
 	fn(&s.cs.st)
-	changed := before != fmt.Sprintf("%+v", s.cs.st)
+	changed := !reflect.DeepEqual(normalStatus(before), normalStatus(s.cs.st))
 	s.cs.mu.Unlock()
 	if changed {
 		s.em.emit(TopicSettings)
 	}
+}
+
+// normalStatus is st with empty lists as nil, so comparing two statuses
+// compares what they say.
+func normalStatus(st model.ConfigSyncStatus) model.ConfigSyncStatus {
+	if len(st.Conflicts) == 0 {
+		st.Conflicts = nil
+	}
+	if len(st.MissingSecrets) == 0 {
+		st.MissingSecrets = nil
+	}
+	return st
 }
 
 // ---- API ----
@@ -539,6 +721,7 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 	case model.SyncOff:
 		err := s.updateSettings(func(set *model.Settings) { set.Sync = model.ConfigSyncSettings{} })
 		s.resetSeal()
+		s.releaseHeld()
 		s.setSyncStatus(func(st *model.ConfigSyncStatus) { *st = model.ConfigSyncStatus{} })
 		s.em.emit(TopicSettings)
 		return err
@@ -571,6 +754,7 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 	localDoc := buildDoc(local, linksKeychain)
 	var fileData []byte
 	var fileDoc syncfile.Doc
+	fileOK := false // the file is there and decodes
 	if snap.Exists {
 		fileData, err = os.ReadFile(path)
 		if err != nil {
@@ -578,6 +762,7 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 		}
 		var derr error
 		fileDoc, derr = syncfile.Decode(fileData, defaultSettings())
+		fileOK = derr == nil
 		same := derr == nil && bytes.Equal(syncfile.Encode(stripPassword(refsOnly(fileDoc))), syncfile.Encode(localDoc))
 		switch {
 		case same:
@@ -591,6 +776,9 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 			}
 			s.adoptWebDAVPassword(webdav)
 		case choice == model.SyncUseLocal:
+			if syncfile.Foreign(fileData) {
+				return errSyncForeign // not even on request: see syncfile.Foreign
+			}
 			if err := s.backupSyncFile(path, fileData); err != nil {
 				return err
 			}
@@ -601,14 +789,24 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 	if err := s.updateSettings(func(set *model.Settings) { set.Sync = want }); err != nil {
 		return err
 	}
-	if snap.Exists && choice == model.SyncUseFile {
+	s.releaseHeld() // the user decided which version wins
+	switch {
+	case snap.Exists && choice == model.SyncUseFile:
 		s.primeSeal(fileDoc) // the file's encryption (and this machine's key for it)
-	} else {
+	case fileOK && fileDoc.Encryption != nil:
+		// This machine's configuration wins, but the file stays sealed:
+		// the choice is about the configuration, not about turning the
+		// passphrase off for every device (SetSyncPassphrase does that).
+		// Without the key this machine writes its links as keychain
+		// references and passes the sealed values it cannot open through.
+		s.primeSeal(fileDoc)
+	default:
 		s.resetSeal() // this machine's configuration wins: written with keychain references
 		s.markSealedPrimed()
 	}
 	s.cs.mu.Lock()
 	s.cs.snap, s.cs.snapDir, s.cs.changedAt = snap, target, time.Time{}
+	s.cs.readAt = time.Time{} // look at the file's content again
 	s.cs.dirty = true
 	s.cs.notified = ""
 	if snap.Exists && choice == model.SyncUseFile {
@@ -685,6 +883,9 @@ func (s *Service) ResolveConfigConflict(name string, keepCopy bool) (err error) 
 		if err != nil {
 			return fmt.Errorf(i18n.T("冲突副本无效：%v"), err)
 		}
+		if cur, err := os.ReadFile(path); err == nil && syncfile.Foreign(cur) {
+			return errSyncForeign // lanflow.yaml itself must not be rewritten
+		}
 		plain, webdav := s.unsealDoc(doc)
 		if _, err := s.applyDoc(plain, false); err != nil {
 			return fmt.Errorf(i18n.T("冲突副本中的配置未能加载：%v"), err)
@@ -697,6 +898,7 @@ func (s *Service) ResolveConfigConflict(name string, keepCopy bool) (err error) 
 				return err
 			}
 		}
+		s.releaseHeld() // the user decided: the copy replaces lanflow.yaml
 		s.cs.mu.Lock()
 		s.cs.canon = cur // backed up: rewrite lanflow.yaml from what was loaded
 		s.cs.mu.Unlock()

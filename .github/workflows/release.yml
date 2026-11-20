@@ -16,11 +16,20 @@ jobs:
   validate:
     name: Validate release version
     runs-on: ubuntu-24.04
+    timeout-minutes: 60 # mostly waiting for the commit's CI run, 45 minutes at most
+    permissions:
+      contents: read
+      actions: read # the CI runs of the tagged commit
+    outputs:
+      geoip_sha256: ${{ steps.geo.outputs.geoip_sha256 }}
+      geosite_sha256: ${{ steps.geo.outputs.geosite_sha256 }}
+      asn_sha256: ${{ steps.geo.outputs.asn_sha256 }}
+      geo_fetched_at: ${{ steps.geo.outputs.fetched_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0 # the previous release tag, for the helper check
+          fetch-depth: 0 # the previous release tag, for the helper check; main, for the branch check
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -53,10 +62,96 @@ jobs:
             exit 1
           fi
 
+      # A release is cut from main only: a tag on a commit main does not
+      # contain (a feature branch, a commit that was rebased away) stops here.
+      - name: Require the tagged commit on main
+        run: |
+          git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null || {
+            echo "origin/main was not fetched; cannot tell whether ${GITHUB_REF_NAME} is on main" >&2
+            exit 1
+          }
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/main; then
+            echo "tag ${GITHUB_REF_NAME} (${GITHUB_SHA}) is not on main" >&2
+            exit 1
+          fi
+
+      # The build jobs below repeat vet and the tests, but the full set of
+      # checks (race detector, staticcheck, govulncheck, the cross builds) is
+      # the CI workflow's: the tagged commit must have a successful CI run,
+      # from the push to main or started by hand (workflow_dispatch) on the
+      # tag. A run still in progress is waited for; pull request runs do not
+      # count (their workflow file is the pull request's own).
+      - name: Require a successful CI run of the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          deadline=$((SECONDS + 45 * 60))
+          empty=0
+          while :; do
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+              --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | {id, event, status, conclusion, html_url}]')"
+            if jq -e 'any(.[]; .status == "completed" and .conclusion == "success")' <<<"$runs" >/dev/null; then
+              echo "CI succeeded for ${GITHUB_SHA}:"
+              jq -r '.[] | select(.conclusion == "success") | .html_url' <<<"$runs"
+              exit 0
+            fi
+            if jq -e 'any(.[]; .status != "completed")' <<<"$runs" >/dev/null; then
+              echo "CI is still running for ${GITHUB_SHA}; waiting"
+            elif [ "$(jq length <<<"$runs")" = 0 ] && [ "$empty" -lt 6 ]; then
+              # The tag may arrive together with the push to main, before
+              # the CI run is listed.
+              empty=$((empty + 1))
+              echo "no CI run for ${GITHUB_SHA} yet; waiting"
+            else
+              echo "no successful CI run for ${GITHUB_SHA}; a release needs one (run the CI workflow on the tag, then re-run this job):" >&2
+              jq -r '.[] | "\(.html_url)  \(.event)  \(.status)  \(.conclusion)"' <<<"$runs" >&2
+              exit 1
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "CI did not finish within 45 minutes" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+
+      # meta-rules-dat publishes only a rolling "latest" that is replaced
+      # daily, so the geo databases are fetched once, here, and both build
+      # jobs pack these very files: fetch-core.sh finds them in bin/geo/ and
+      # checks them against the sums below (GEOIP_SHA256 and the others)
+      # instead of asking for "latest" again. The sums go into the release
+      # notes and a release asset, so what a release shipped stays on record.
+      - name: Fetch geodata for both platforms
+        id: geo
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          scripts/fetch-core.sh
+          for pair in geoip:geoip.metadb geosite:geosite.dat asn:GeoLite2-ASN.mmdb; do
+            sum="$(sha256sum "bin/geo/${pair#*:}" | cut -d' ' -f1)"
+            echo "${pair%%:*}_sha256=${sum}" >> "$GITHUB_OUTPUT"
+            echo "${sum}  ${pair#*:}"
+          done
+          echo "fetched_at=$(date -u +%Y-%m-%dT%H:%MZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: geodata
+          path: |
+            bin/geo/geoip.metadb
+            bin/geo/geosite.dat
+            bin/geo/GeoLite2-ASN.mmdb
+          if-no-files-found: error
+          retention-days: 7 # long enough to re-run a failed build job
+
   build-macos:
     name: Build macOS
     needs: validate
     runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      GEOIP_SHA256: ${{ needs.validate.outputs.geoip_sha256 }}
+      GEOSITE_SHA256: ${{ needs.validate.outputs.geosite_sha256 }}
+      ASN_SHA256: ${{ needs.validate.outputs.asn_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,13 +167,15 @@ jobs:
           go vet ./...
           go tool mygo vet .
 
-      - name: Test
-        env:
-          CGO_ENABLED: "0"
-        run: go test ./...
+      # The geo databases the validate job fetched, the same for every platform.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: geodata
+          path: bin/geo
 
-      # fetch-core.sh checks the core and geodata against SHA-256 sums
-      # (pinned for the core, from the GitHub API for geodata) and writes
+      # fetch-core.sh checks the core against its pinned SHA-256 and the
+      # geodata above against the sums from the validate job (it downloads
+      # nothing that is already there and matches), and writes
       # bin/<goos>-<goarch>/; prepare-resources.sh copies from there.
       - name: Prepare resources
         env:
@@ -86,6 +183,15 @@ jobs:
         run: |
           scripts/prepare-resources.sh darwin arm64
           scripts/prepare-resources.sh darwin amd64
+
+      # After the resources: bin/mihomo and bin/geo/ are there now, so the
+      # end-to-end tests run against the core that ships instead of skipping
+      # themselves. The race detector and the other checks are CI's, which
+      # the validate job required for this commit.
+      - name: Test
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./...
 
       # No Developer ID: mygo signs ad hoc ("-"), which Apple Silicon requires to run at all.
       # One platform per build: build-app.sh links in that platform's
@@ -112,6 +218,24 @@ jobs:
             [ -n "$want" ] && [ "$want" = "$got" ]
           done
 
+      # Every bundle carries the geo databases of the validate job and the
+      # license material (Mihomo is GPL-3.0: its license and where its
+      # source is ship with it).
+      - name: Check bundled geodata and licenses
+        run: |
+          for arch in arm64 amd64; do
+            res="$(echo build/darwin-${arch}/*.app/Contents/Resources)"
+            for pair in "${GEOIP_SHA256}:geoip.metadb" "${GEOSITE_SHA256}:geosite.dat" "${ASN_SHA256}:GeoLite2-ASN.mmdb"; do
+              want="${pair%%:*}"; f="${pair#*:}"
+              got="$(shasum -a 256 "${res}/geo/${f}" | cut -d' ' -f1)"
+              echo "darwin/${arch} ${f}: expected ${want}, bundled ${got}"
+              [ -n "$want" ] && [ "$want" = "$got" ]
+            done
+            for f in mihomo/LICENSE mihomo/SOURCE.txt geodata/NOTICE.txt THIRD-PARTY-NOTICES.md go/go/LICENSE; do
+              [ -s "${res}/licenses/${f}" ] || { echo "darwin/${arch}: licenses/${f} is not in the bundle" >&2; exit 1; }
+            done
+          done
+
       - name: Collect artifacts
         run: |
           mkdir -p dist
@@ -122,6 +246,7 @@ jobs:
             cp "$d"/*.delta dist/updates/ 2>/dev/null || true
           done
           go version -m build resources > dist/lanflow-macos-buildinfo.txt
+          { echo; echo "geodata (sha256):"; (cd resources/geo && shasum -a 256 -- *); } >> dist/lanflow-macos-buildinfo.txt
           ls -la dist
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -134,6 +259,11 @@ jobs:
     name: Build Windows
     needs: validate
     runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      GEOIP_SHA256: ${{ needs.validate.outputs.geoip_sha256 }}
+      GEOSITE_SHA256: ${{ needs.validate.outputs.geosite_sha256 }}
+      ASN_SHA256: ${{ needs.validate.outputs.asn_sha256 }}
     defaults:
       run:
         shell: bash
@@ -152,15 +282,37 @@ jobs:
           go vet ./...
           go tool mygo vet .
 
-      - name: Test
-        env:
-          CGO_ENABLED: "0"
-        run: go test ./...
+      # The geo databases the validate job fetched, the same for every platform.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: geodata
+          path: bin/geo
 
       - name: Prepare resources
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: scripts/prepare-resources.sh windows amd64
+
+      # What goes into the installer: the geo databases of the validate job
+      # and the license material.
+      - name: Check geodata and licenses to bundle
+        run: |
+          for pair in "${GEOIP_SHA256}:geoip.metadb" "${GEOSITE_SHA256}:geosite.dat" "${ASN_SHA256}:GeoLite2-ASN.mmdb"; do
+            want="${pair%%:*}"; f="${pair#*:}"
+            got="$(sha256sum "resources/geo/${f}" | cut -d' ' -f1)"
+            echo "${f}: expected ${want}, to bundle ${got}"
+            [ -n "$want" ] && [ "$want" = "$got" ]
+          done
+          for f in mihomo/LICENSE mihomo/SOURCE.txt geodata/NOTICE.txt THIRD-PARTY-NOTICES.md go/go/LICENSE; do
+            [ -s "resources/windows-amd64/licenses/${f}" ] || { echo "licenses/${f} was not prepared" >&2; exit 1; }
+          done
+
+      # After the resources, as on macOS: the end-to-end tests run against
+      # the core that ships.
+      - name: Test
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./...
 
       # mygo uses a makensis it finds (PATH or Program Files\NSIS, which the
       # runner image provides) and otherwise downloads NSIS 3.13 and checks
@@ -186,6 +338,7 @@ jobs:
           ls dist/updates/update-windows-*.json >/dev/null
           ls dist/*-setup-*.exe >/dev/null
           go version -m build resources > dist/lanflow-windows-buildinfo.txt
+          { echo; echo "geodata (sha256):"; (cd resources/geo && sha256sum -- *); } >> dist/lanflow-windows-buildinfo.txt
           ls -la dist
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -196,8 +349,9 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build-macos, build-windows]
+    needs: [validate, build-macos, build-windows]
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write     # create the release and upload assets
       id-token: write     # OIDC token for the Sigstore signature
@@ -210,6 +364,7 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: lanflow-* # the installers and update files, not the geodata artifact
           path: artifacts
           merge-multiple: true
 
@@ -232,6 +387,41 @@ jobs:
           rmdir artifacts/updates
           ls update-darwin-arm64.json update-darwin-amd64.json update-windows-amd64.json
 
+      # What ships besides Lanflow itself goes on record with the release:
+      # the third-party notices (Mihomo's GPL-3.0 and the place of its
+      # source among them), and the SHA-256 of the geo databases packed into
+      # every installer of this release (they come from a rolling upstream
+      # release, so the tag alone would not say which files they were).
+      - name: Add third-party notices and geodata record
+        env:
+          GEOIP_SHA256: ${{ needs.validate.outputs.geoip_sha256 }}
+          GEOSITE_SHA256: ${{ needs.validate.outputs.geosite_sha256 }}
+          ASN_SHA256: ${{ needs.validate.outputs.asn_sha256 }}
+          GEO_FETCHED_AT: ${{ needs.validate.outputs.geo_fetched_at }}
+        run: |
+          cp src/THIRD-PARTY-NOTICES.md artifacts/
+          geo="artifacts/lanflow-${GITHUB_REF_NAME}-geodata.sha256"
+          {
+            echo "${GEOIP_SHA256}  geoip.metadb"
+            echo "${GEOSITE_SHA256}  geosite.dat"
+            echo "${ASN_SHA256}  GeoLite2-ASN.mmdb"
+          } > "$geo"
+          grep -c -E '^[0-9a-f]{64}  ' "$geo" | grep -qx 3
+          core="$(sed -n 's/^PINNED_VERSION="\([^"]*\)".*/\1/p' src/scripts/fetch-core.sh)"
+          [ -n "$core" ]
+          {
+            echo "### 随包组件"
+            echo
+            echo "- Mihomo ${core}（GPL-3.0，[对应源代码](https://github.com/MetaCubeX/mihomo/tree/${core})）；其余第三方组件见附件 \`THIRD-PARTY-NOTICES.md\` 与安装包内的 \`licenses/\`。"
+            echo "- 地理数据库取自 MetaCubeX/meta-rules-dat 的 \`latest\`（${GEO_FETCHED_AT}），各平台安装包内为同一份，SHA-256："
+            echo
+            echo '```'
+            cat "$geo"
+            echo '```'
+            echo
+          } > release-body.md
+          cat release-body.md
+
       - name: Generate SHA-256 checksums
         working-directory: artifacts
         run: |
@@ -249,6 +439,7 @@ jobs:
           name: 澜流 Lanflow ${{ github.ref_name }}
           files: artifacts/*
           fail_on_unmatched_files: true
+          body_path: release-body.md # the generated notes follow it
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
 

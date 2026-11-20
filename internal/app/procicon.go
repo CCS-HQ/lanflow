@@ -85,6 +85,9 @@ func (s *Service) loadProcIcon(c *procIconCache, subject string) {
 	c.mu.Lock()
 	delete(c.pending, subject)
 	if err != nil {
+		if len(c.failed) >= maxProcIconsInMem {
+			c.failed = map[string]bool{} // bounded like data; a miss is looked up again
+		}
 		c.failed[subject] = true
 	} else {
 		if len(c.data) >= maxProcIconsInMem {

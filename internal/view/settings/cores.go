@@ -243,14 +243,15 @@ func (p *Page) useCore(version string) {
 // coreJob runs one 使用 / 删除 job, marking the list busy meanwhile.
 func (p *Page) coreJob(version string, job func() error, ok string) {
 	p.cores.busy = version
-	p.e.Run(func() error {
-		err := job()
-		p.mu.Lock()
+	p.e.Then(job, func(err error) {
 		p.cores.busy = ""
-		p.mu.Unlock()
 		p.installedStale().Mark() // the list changed, announced or not
-		return err
-	}, ok)
+		if err != nil {
+			p.e.Toast(err.Error(), true)
+		} else if ok != "" {
+			p.e.Toast(ok, false)
+		}
+	})
 }
 
 // coreUpdateSection holds the update settings.
@@ -284,29 +285,26 @@ func (p *Page) coreUpdateSection(c *ui.Context, s model.Settings) {
 // loadReleases fetches the release list of channel in the background.
 func (p *Page) loadReleases(channel string, refresh bool) {
 	e := p.e
-	p.mu.Lock()
 	if p.cores.releases == nil {
 		p.cores.releases = map[string][]model.CoreRelease{}
 	}
 	if _, ok := p.cores.releases[channel]; ok && !refresh {
-		p.mu.Unlock()
 		return
 	}
 	p.cores.loading = true
 	p.cores.loadErr = ""
-	p.mu.Unlock()
-	e.Run(func() error {
-		list, err := e.API.CoreReleases(channel, refresh)
-		p.mu.Lock()
-		defer p.mu.Unlock()
+	var list []model.CoreRelease
+	e.Then(func() (err error) {
+		list, err = e.API.CoreReleases(channel, refresh)
+		return err
+	}, func(err error) {
 		p.cores.loading = false
 		if err != nil {
-			p.cores.loadErr = err.Error()
-			return nil // shown in the dialog, not as a toast
+			p.cores.loadErr = err.Error() // shown in the dialog, not as a toast
+			return
 		}
 		p.cores.releases[channel] = list
-		return nil
-	}, "")
+	})
 }
 
 // installDialog is 「安装其他版本…」: a channel segmented control and the
@@ -330,10 +328,8 @@ func (p *Page) installDialog(c *ui.Context, t *ui.Theme) {
 				}
 			})
 			channel := channelKeys[cu.channel]
-			p.mu.Lock()
 			list := cu.releases[channel]
 			loading, loadErr := cu.loading, cu.loadErr
-			p.mu.Unlock()
 			if channel == model.CoreChannelAlpha {
 				ui.Text(c, i18n.T("预发布版本按最新提交构建，版本号是提交哈希；适合想第一时间用上新功能的用户。")).FontSize(12).TextColor(t.TextMuted)
 			}
@@ -402,21 +398,29 @@ func (p *Page) releaseRow(c *ui.Context, t *ui.Theme, r model.CoreRelease, downl
 			e.Kit.Tag(c, i18n.T("已安装"), "green")
 		default:
 			ui.Button(c, i18n.T("安装")).Disabled(downloading).OnClick(func() {
-				e.Run(func() error {
-					err := e.API.InstallCore(r.Channel, r.Version)
-					p.installedStale().Mark()
-					if err != nil {
+				var list []model.CoreRelease
+				listed := false
+				e.Then(func() error {
+					if err := e.API.InstallCore(r.Channel, r.Version); err != nil {
 						return err
 					}
 					// re-read the list so the row shows 已安装 (the service
 					// answers from its cache; no network)
-					if list, err := e.API.CoreReleases(r.Channel, false); err == nil {
-						p.mu.Lock()
-						p.cores.releases[r.Channel] = list
-						p.mu.Unlock()
+					if l, err := e.API.CoreReleases(r.Channel, false); err == nil {
+						list, listed = l, true
 					}
 					return nil
-				}, i18n.Tf("内核 %s 已安装，可在列表中点「使用」切换", r.Version))
+				}, func(err error) {
+					p.installedStale().Mark()
+					if err != nil {
+						e.Toast(err.Error(), true)
+						return
+					}
+					if listed {
+						p.cores.releases[r.Channel] = list
+					}
+					e.Toast(i18n.Tf("内核 %s 已安装，可在列表中点「使用」切换", r.Version), false)
+				})
 			})
 		}
 	})

@@ -15,34 +15,33 @@ const (
 
 func command(exe string) string { return `"` + exe + `" ` + strings.Join(Args, " ") }
 
+// registryRun is runStore over HKCU.
+type registryRun struct{ k registry.Key }
+
+func (r registryRun) Get() (string, bool) {
+	v, _, err := r.k.GetStringValue(Label)
+	return v, err == nil
+}
+
+func (r registryRun) Set(cmd string) error { return r.k.SetStringValue(Label, cmd) }
+func (r registryRun) Delete() error        { return r.k.DeleteValue(Label) }
+
+func (r registryRun) ClearApproval() bool {
+	a, err := registry.OpenKey(registry.CURRENT_USER, approvedKey, registry.SET_VALUE)
+	if err != nil {
+		return false
+	}
+	defer a.Close()
+	return a.DeleteValue(Label) == nil
+}
+
 func apply(exe string, on bool) (bool, error) {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		return false, err
 	}
 	defer k.Close()
-	have, _, herr := k.GetStringValue(Label)
-	if !on {
-		if herr != nil {
-			return false, nil
-		}
-		return true, k.DeleteValue(Label)
-	}
-	changed := false
-	if herr != nil || !strings.EqualFold(have, command(exe)) {
-		if err := k.SetStringValue(Label, command(exe)); err != nil {
-			return false, err
-		}
-		changed = true
-	}
-	// Turned off in Task Manager earlier: the user asks for it again now.
-	if a, err := registry.OpenKey(registry.CURRENT_USER, approvedKey, registry.SET_VALUE); err == nil {
-		if a.DeleteValue(Label) == nil {
-			changed = true
-		}
-		a.Close()
-	}
-	return changed, nil
+	return applyRun(registryRun{k}, command(exe), on)
 }
 
 func enabled(exe string) bool {

@@ -3,6 +3,7 @@ package stats
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -186,5 +187,27 @@ func TestEnglish(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("🇺🇸 US") {
 		t.Errorf("English country label: %q", tt.Texts())
+	}
+}
+
+// TestAxisDayFollowsLanguage: the chart's day labels are written as the
+// language writes dates, like the table's dates.
+func TestAxisDayFollowsLanguage(t *testing.T) {
+	t.Cleanup(func() { i18n.SetLang(i18n.ZH) })
+	at := time.Date(2026, 11, 8, 0, 0, 0, 0, time.Local)
+	for _, c := range []struct{ lang, day, today string }{
+		{i18n.ZH, "11-08", "今天"},
+		{i18n.EN, "Nov 8", "Today"},
+	} {
+		i18n.SetLang(c.lang)
+		if got := axisLabel(24, 30, at, false); got != c.day {
+			t.Errorf("%s: day label %q, want %q", c.lang, got, c.day)
+		}
+		if got := axisLabel(29, 30, at, false); got != c.today {
+			t.Errorf("%s: last label %q, want %q", c.lang, got, c.today)
+		}
+		if got := axisLabel(25, 30, at, false); got != "" {
+			t.Errorf("%s: a label between the fifth days: %q", c.lang, got)
+		}
 	}
 }

@@ -104,6 +104,7 @@ type Shell struct {
 	invalidate func() // asks the window for a frame (Window.Invalidate; tests count calls)
 	tray       *tray
 	off        func()
+	offKeys    func() // the settings subscription of RegisterShortcuts
 	quitT      func()
 
 	page  env.Page
@@ -120,18 +121,22 @@ type Shell struct {
 	toasts  []toastReq
 	notices []app.Notice
 
-	confirm     *confirmReq
-	confirmOpen bool
-	invalid     *app.Notice
-	invalidOpen bool
-	recovery    bool
-	recoveryHit bool
-	consents    []*consentReq // agents waiting for the user (agents.go)
-	consentOpen bool
-	fb          feedbackDialog // 反馈问题 and the crash prompt (feedback.go)
-	hiddenOnce  bool
-	hiddenFlag  string // file that records the tray notice was shown (ConfigDir); "" = memory only
-	updateStamp string // file that records the last launch-time update check; "" = check every launch
+	asked []*confirmReq // confirmations asked from any goroutine, under mu (ask)
+
+	confirms     []*confirmReq // confirmations waiting, oldest first; the first is shown
+	confirm      *confirmReq   // the one shown, nil = none
+	confirmOpen  bool
+	invalid      *app.Notice
+	invalidOpen  bool
+	recovery     bool
+	recoveryHit  bool
+	recoveryBusy bool          // an answer of the recovery prompt is being applied
+	consents     []*consentReq // agents waiting for the user (agents.go)
+	consentOpen  bool
+	fb           feedbackDialog // 反馈问题 and the crash prompt (feedback.go)
+	hiddenOnce   bool
+	hiddenFlag   string // file that records the tray notice was shown (ConfigDir); "" = memory only
+	updateStamp  string // file that records the last launch-time update check; "" = check every launch
 
 	keys        *keys  // global shortcuts registered by this process (keys.go)
 	closeWindow func() // Remote: close the window, ending its process (SetCloseWindow)
@@ -176,10 +181,13 @@ func New(api app.API, opts Options) *Shell {
 			s.toast(toastReq{msg: msg, detail: detail})
 		},
 		Run:     s.run,
+		RunThen: s.runThen,
 		Confirm: s.ask,
 		Redraw:  s.Redraw,
-		Mac:     opts.Mac,
-		Kit:     NewKit(),
+
+		RedrawData: s.redrawData,
+		Mac:        opts.Mac,
+		Kit:        NewKit(),
 
 		SetGlobalShortcut: s.SetGlobalShortcut,
 		OpenFeedback:      func() { s.OpenFeedback("") },
@@ -280,6 +288,10 @@ const uiStateDelay = 500 * time.Millisecond
 func (s *Shell) Close() {
 	if s.off != nil {
 		s.off()
+	}
+	if s.offKeys != nil {
+		s.offKeys()
+		s.offKeys = nil
 	}
 	if s.env.UIState != nil {
 		s.env.UIState.Close()
@@ -452,6 +464,46 @@ func (s *Shell) run(job func() error, okMsg string) {
 		return
 	}
 	go do()
+}
+
+// runThen is Env.RunThen: the job off the UI thread, done on it (post).
+// Sync runs both on the calling thread, which in tests is the UI thread.
+func (s *Shell) runThen(job func() error, done func(err error)) {
+	finish := func(err error) {
+		if done != nil {
+			done(err)
+		}
+	}
+	if s.opts.Sync {
+		var err error
+		if job != nil {
+			err = job()
+		}
+		finish(err)
+		s.Redraw()
+		return
+	}
+	if job == nil {
+		s.onUI(func() { finish(nil) })
+		return
+	}
+	go func() {
+		err := job()
+		s.onUI(func() { finish(err) })
+	}()
+}
+
+// onUI runs fn on the UI thread and redraws; safe from any goroutine.
+// With a window it is Window.Update, which runs fn on the main thread
+// even while the window is hidden and no frame is built (a queued
+// settings save must not wait for the window to show); before Attach
+// (tests) it is post, run by the next build.
+func (s *Shell) onUI(fn func()) {
+	if s.win != nil {
+		s.win.Update(fn)
+		return
+	}
+	s.post(fn)
 }
 
 func (s *Shell) navigate(p env.Page, arg string) {

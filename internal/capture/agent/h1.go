@@ -86,6 +86,17 @@ func headerValue(h []model.KV, name string) string {
 	return ""
 }
 
+// hasToken reports whether a comma-separated header value ("close, TE")
+// lists token.
+func hasToken(v, token string) bool {
+	for _, t := range strings.Split(v, ",") {
+		if strings.EqualFold(strings.TrimSpace(t), token) {
+			return true
+		}
+	}
+	return false
+}
+
 func splitHostPort(a string) (string, int) {
 	if i := strings.LastIndexByte(a, ':'); i > 0 && !strings.Contains(a[i:], "]") {
 		if p, err := strconv.Atoi(a[i+1:]); err == nil {
@@ -160,13 +171,22 @@ type h1Parser struct {
 	queue  []*h1req
 	reqEOF bool
 	ws     *wsState
+	// respDone is closed when the response side stops parsing: a request
+	// waiting to learn whether its Upgrade was accepted gives up then,
+	// instead of holding the connection's slot for the whole timeout.
+	respDone chan struct{}
+	respOnce sync.Once
 }
 
 func newH1Parser(c *connRec, scheme, host string) *h1Parser {
-	p := &h1Parser{c: c, scheme: scheme, host: host}
+	p := &h1Parser{c: c, scheme: scheme, host: host, respDone: make(chan struct{})}
 	p.cond = sync.NewCond(&p.mu)
 	return p
 }
+
+// upgradeWait is how long a request with an Upgrade header waits for the
+// response that decides the protocol.
+const upgradeWait = 60 * time.Second
 
 func (p *h1Parser) push(r *h1req) {
 	p.mu.Lock()
@@ -207,7 +227,6 @@ func (p *h1Parser) requests(r io.Reader) {
 		p.reqEOF = true
 		p.cond.Broadcast()
 		p.mu.Unlock()
-		io.Copy(io.Discard, br)
 	}()
 	for {
 		start, hdr, err := readHead(br)
@@ -240,15 +259,29 @@ func (p *h1Parser) requests(r io.Reader) {
 			return
 		}
 		if req.upgrade {
+			t := time.NewTimer(upgradeWait)
+			var sw, known bool
 			select {
-			case sw := <-req.switched:
-				if sw {
-					if p.ws != nil {
-						p.ws.frames(br, false)
-					}
-					return
+			case sw = <-req.switched:
+				known = true
+			case <-p.respDone:
+				// the answer may have been given just before the response
+				// side ended
+				select {
+				case sw = <-req.switched:
+					known = true
+				default:
 				}
-			case <-time.After(60 * time.Second):
+			case <-t.C:
+			}
+			t.Stop()
+			if !known {
+				return
+			}
+			if sw {
+				if p.ws != nil {
+					p.ws.frames(br, false)
+				}
 				return
 			}
 		}
@@ -258,7 +291,7 @@ func (p *h1Parser) requests(r io.Reader) {
 // responses parses the server's side.
 func (p *h1Parser) responses(r io.Reader) {
 	br := bufio.NewReaderSize(r, 64<<10)
-	defer io.Copy(io.Discard, br)
+	defer p.respOnce.Do(func() { close(p.respDone) })
 	for {
 		start, hdr, err := readHead(br)
 		if err != nil {
@@ -307,7 +340,7 @@ func (p *h1Parser) responses(r io.Reader) {
 			return
 		}
 		p.c.finish(req.rec, "")
-		if strings.EqualFold(headerValue(hdr, "connection"), "close") {
+		if hasToken(headerValue(hdr, "connection"), "close") {
 			return
 		}
 	}

@@ -211,7 +211,7 @@ func (b *Background) decide(r *bgConsent) {
 	}
 	var answers []string
 	var buttons []string
-	if r.Kind == "write" {
+	if consentRemembers(r.AgentConsent) {
 		buttons, answers = []string{i18n.T("始终允许"), i18n.T("仅本次"), i18n.T("拒绝")}, []string{"always", "once", "deny"}
 	} else {
 		buttons, answers = []string{i18n.T("允许"), i18n.T("拒绝")}, []string{"once", "deny"}

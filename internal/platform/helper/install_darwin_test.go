@@ -111,7 +111,11 @@ func TestInstallBuildsOsascriptAndMapsCancel(t *testing.T) {
 	}
 	script := gotArgs[1]
 	sum, _ := fileSHA256(helperBin)
-	wantShell := verifiedExec(helperBin, sum, []string{"install", "--core", coreBin, "--data-dir", dataDir, "--uid", "501"})
+	// --core is the resolved path (t.TempDir is below a link on macOS),
+	// with the digest taken before the prompt.
+	realCore, _ := filepath.EvalSymlinks(coreBin)
+	coreSum, _ := fileSHA256(coreBin)
+	wantShell := verifiedExec(helperBin, sum, []string{"install", "--core", realCore, "--core-sha256", coreSum, "--data-dir", dataDir, "--uid", "501"})
 	if !strings.Contains(script, appleQuote(wantShell)) {
 		t.Fatalf("script %q does not contain %q", script, wantShell)
 	}
@@ -133,6 +137,50 @@ func TestInstallBuildsOsascriptAndMapsCancel(t *testing.T) {
 	execCommand = func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }
 	if err := install(context.Background(), InstallOptions{HelperBin: "relative", CoreBin: coreBin, DataDir: dataDir}); err == nil || called {
 		t.Fatalf("err = %v called = %v", err, called)
+	}
+	// Nor does a core that is not the one the caller expects.
+	err = install(context.Background(), InstallOptions{HelperBin: helperBin, CoreBin: coreBin, CoreSHA256: strings.Repeat("0", 64), DataDir: dataDir})
+	if err == nil || called || !strings.Contains(err.Error(), "内核校验失败") {
+		t.Fatalf("err = %v called = %v", err, called)
+	}
+}
+
+// A core chosen through a link (Homebrew's bin/mihomo) is passed to the
+// installer by its target, which does not follow links itself, with the
+// target's digest.
+func TestInstallResolvesLinkedCore(t *testing.T) {
+	dir := t.TempDir()
+	helperBin := filepath.Join(dir, "lanflow-helper")
+	target := filepath.Join(dir, "Cellar", "mihomo")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{helperBin, target} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n# "+filepath.Base(p)+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(dir, "mihomo")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	oldExec, oldUID, oldVer := execCommand, currentUID, helperVersionOf
+	t.Cleanup(func() { execCommand, currentUID, helperVersionOf = oldExec, oldUID, oldVer })
+	helperVersionOf = func(context.Context, string) (string, error) { return "", errors.New("not a real helper") }
+	currentUID = func() int { return 501 }
+	var script string
+	execCommand = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		script = args[len(args)-1]
+		return []byte("execution error: User canceled. (-128)\n"), errors.New("exit status 1")
+	}
+	if err := install(context.Background(), InstallOptions{HelperBin: helperBin, CoreBin: link, DataDir: dir}); !errors.Is(err, errCanceled) {
+		t.Fatalf("err = %v", err)
+	}
+	realTarget, _ := filepath.EvalSymlinks(target)
+	sum, _ := fileSHA256(target)
+	want := appleQuote(shellCommand([]string{"install", "--core", realTarget, "--core-sha256", sum}))
+	if !strings.Contains(script, want) {
+		t.Fatalf("script %q does not contain %q", script, want)
 	}
 }
 
@@ -183,26 +231,5 @@ func TestVerifiedExecRunsVerifiedCopy(t *testing.T) {
 	out, err = exec.Command("/bin/sh", "-c", verifiedExec(bin, sum, args)).CombinedOutput()
 	if err == nil || strings.Contains(string(out), "pwned") || !strings.Contains(string(out), verifyFailed) {
 		t.Fatalf("tampered helper ran: %v %s", err, out)
-	}
-}
-
-func TestHelperDigestPinned(t *testing.T) {
-	dir := t.TempDir()
-	bin := fakeHelperScript(t, dir)
-	sum, _ := fileSHA256(bin)
-	old := ExpectedHelperSHA256
-	t.Cleanup(func() { ExpectedHelperSHA256 = old })
-
-	ExpectedHelperSHA256 = ""
-	if got, err := helperDigest(bin); err != nil || got != sum {
-		t.Fatalf("unpinned: %s %v", got, err)
-	}
-	ExpectedHelperSHA256 = strings.ToUpper(sum)
-	if got, err := helperDigest(bin); err != nil || got != sum {
-		t.Fatalf("pinned: %s %v", got, err)
-	}
-	ExpectedHelperSHA256 = strings.Repeat("0", 64)
-	if _, err := helperDigest(bin); err == nil {
-		t.Fatal("mismatching helper accepted")
 	}
 }

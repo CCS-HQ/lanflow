@@ -61,7 +61,7 @@ echo "== routes before"
 as_root "/usr/sbin/netstat -rn -f inet | head -8"
 
 echo "== installing the helper as root"
-as_root "'$RES/lanflow-helper' install --core '$RES/mihomo' --data-dir '$T/run/data' --uid $guest_uid"
+as_root "'$RES/lanflow-helper' install --core '$RES/mihomo' --core-sha256 \"\$(/usr/bin/shasum -a 256 '$RES/mihomo' | cut -d' ' -f1)\" --data-dir '$T/run/data' --uid $guest_uid"
 as_root "/bin/ls -l /var/run/lanflow-helper.sock /Library/PrivilegedHelperTools/ /Library/LaunchDaemons/ | grep -i lanflow"
 
 echo "== running TestLiveTUN as $guest_user"

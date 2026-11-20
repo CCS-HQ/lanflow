@@ -41,3 +41,20 @@ func Terminate(pid int) error {
 
 // Kill ends process pid at once (tests: a crash).
 func Kill(pid int) error { return Terminate(pid) }
+
+// pinProcess holds a handle to process pid: while it is open the system
+// does not give the pid to another process, so the pid-based calls of
+// StopService keep meaning this process. same reports whether it still
+// runs.
+func pinProcess(pid int) (same func() bool, release func()) {
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		// Cannot be opened (gone, or not ours): nothing is pinned, and
+		// Terminate will fail the same way.
+		return func() bool { return true }, func() {}
+	}
+	return func() bool {
+		ev, err := windows.WaitForSingleObject(h, 0)
+		return err == nil && ev == uint32(windows.WAIT_TIMEOUT)
+	}, func() { windows.CloseHandle(h) }
+}

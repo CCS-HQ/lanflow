@@ -126,3 +126,48 @@ func TestTrustCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The trust-check leaf lives as long as the root: the window verifies the
+// stored one for the root's whole life, long after a served leaf (seven
+// days) would have expired.
+func TestTrustLeafLastsAsLongAsTheRoot(t *testing.T) {
+	now := time.Now()
+	r, _, err := Generate(&MemKeys{}, "host", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(r.Cert)
+	for _, age := range []time.Duration{0, 30 * 24 * time.Hour} { // signed at install, or by a later agent start
+		r.now = func() time.Time { return now.Add(age) }
+		der, err := r.TrustLeaf()
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !leaf.NotAfter.Equal(r.Cert.NotAfter) {
+			t.Fatalf("signed after %v: trust leaf ends %v, root %v", age, leaf.NotAfter, r.Cert.NotAfter)
+		}
+		for _, day := range []int{0, 8, 60, 89} {
+			at := now.Add(age).Add(time.Duration(day) * 24 * time.Hour)
+			if at.After(r.Cert.NotAfter) {
+				continue
+			}
+			if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: TrustCheckHost, CurrentTime: at,
+				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+				t.Fatalf("signed after %v, checked %d days later: %v", age, day, err)
+			}
+		}
+	}
+	// served leaves keep their seven days, and the trust leaf is not one of them
+	l, err := r.Leaf(TrustCheckHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Leaf.NotAfter.Sub(r.now()) > LeafValidity+time.Minute {
+		t.Fatalf("served leaf valid until %v", l.Leaf.NotAfter)
+	}
+}

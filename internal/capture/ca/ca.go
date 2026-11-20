@@ -254,7 +254,8 @@ func (r *Root) Leaf(host string) (*tls.Certificate, error) {
 		r.slots[host] = wg
 		r.mu.Unlock()
 
-		cert, exp, err := r.sign(host)
+		exp := r.now().Add(LeafValidity)
+		cert, exp, err := r.sign(host, exp)
 		r.mu.Lock()
 		delete(r.slots, host)
 		if err == nil {
@@ -270,13 +271,14 @@ func (r *Root) Leaf(host string) (*tls.Certificate, error) {
 	}
 }
 
-func (r *Root) sign(host string) (*tls.Certificate, time.Time, error) {
+// sign issues a leaf for host valid until exp, or the root's end when that
+// comes first.
+func (r *Root) sign(host string, exp time.Time) (*tls.Certificate, time.Time, error) {
 	now := r.now()
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	exp := now.Add(LeafValidity)
 	if exp.After(r.Cert.NotAfter) {
 		exp = r.Cert.NotAfter
 	}
@@ -322,9 +324,12 @@ func TrustCheck(leaf *x509.Certificate, roots *x509.CertPool) error {
 // TrustCheckHost is the name of the leaf used to test trust.
 const TrustCheckHost = "trust-check.lanflow.invalid"
 
-// TrustLeaf signs the long-lived (as long as the root) trust-check leaf.
+// TrustLeaf signs the trust-check leaf. It is valid as long as the root
+// (not the seven days of a served leaf): the window keeps it on disk and
+// verifies it against the system roots for the root's whole life, and a
+// leaf that expired first would read as "the root is not trusted".
 func (r *Root) TrustLeaf() ([]byte, error) {
-	cert, err := r.Leaf(TrustCheckHost)
+	cert, _, err := r.sign(TrustCheckHost, r.Cert.NotAfter)
 	if err != nil {
 		return nil, err
 	}

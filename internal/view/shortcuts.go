@@ -30,7 +30,10 @@ func (s *Shell) RegisterShortcuts() map[string]error {
 	}
 	hotkey.SetRegistrar(s.keys.set)
 	errs := s.keys.sync(s.api.Settings(), false)
-	s.api.OnChange(func(t app.Topic) {
+	if s.offKeys != nil {
+		s.offKeys() // registered again (a rebuilt shell): one subscription
+	}
+	s.offKeys = s.api.OnChange(func(t app.Topic) {
 		if t != app.TopicSettings {
 			return
 		}

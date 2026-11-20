@@ -223,6 +223,25 @@ func (s *Service) pruneExits() {
 			delete(s.state.exitEntry, n)
 		}
 	}
+	// The 检测 page's reports and name guesses of nodes that are gone
+	// (probe.go). The direct connection is no node, and a report still
+	// being written belongs to its probe.
+	pr := &s.state.probe
+	for n, rep := range pr.ip {
+		if _, ok := nodes[n]; !ok && n != model.ProbeDirect && !rep.Running {
+			delete(pr.ip, n)
+		}
+	}
+	for n, rep := range pr.unlock {
+		if _, ok := nodes[n]; !ok && n != model.ProbeDirect && !rep.Running {
+			delete(pr.unlock, n)
+		}
+	}
+	for n := range pr.regionCache {
+		if _, ok := nodes[n]; !ok {
+			delete(pr.regionCache, n)
+		}
+	}
 }
 
 // storeExit records a probe result and refreshes the routes.
@@ -233,8 +252,43 @@ func (s *Service) storeExit(info model.ExitInfo) {
 	s.rebuildRoutes()
 }
 
-// probeNode measures one node through the probe listener and analyses its path.
+// errProbeGroupBusy is returned when the probe group stays in use by
+// another probe (检测 page) for as long as the caller may wait.
+var errProbeGroupBusy = i18n.Error("其他检测正在使用探测通道，请稍后再试。")
+
+// probeNode measures one node through the probe listener and analyses its
+// path. Like every probe that selects in the probe group it holds
+// probeExitMu (probe.go); it waits for it as long as ctx allows.
 func (s *Service) probeNode(ctx context.Context, node string) error {
+	if !s.lockProbeExit(ctx) {
+		return errProbeGroupBusy
+	}
+	defer s.probeExitMu.Unlock()
+	return s.probeNodeLocked(ctx, node)
+}
+
+// lockProbeExit takes probeExitMu, giving up when ctx ends first; it
+// reports whether the caller now holds it.
+func (s *Service) lockProbeExit(ctx context.Context) bool {
+	if s.probeExitMu.TryLock() {
+		return true
+	}
+	t := time.NewTicker(50 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+			if s.probeExitMu.TryLock() {
+				return true
+			}
+		}
+	}
+}
+
+// probeNodeLocked is probeNode for a caller that holds probeExitMu.
+func (s *Service) probeNodeLocked(ctx context.Context, node string) error {
 	s.mu.Lock()
 	port := s.state.probePort
 	running := s.state.st.Core == model.CoreRunning
@@ -319,27 +373,38 @@ func (s *Service) scheduleMainProbe() {
 	if s.probeTimer != nil {
 		s.probeTimer.Stop()
 	}
-	s.probeTimer = s.afterFunc(probeDebounce, func() {
-		s.mu.Lock()
-		snap := s.state.proxies
-		mode := s.state.st.Mode
-		running := s.state.st.Core == model.CoreRunning
-		s.mu.Unlock()
-		if !running || mode == model.ModeDirect {
-			return
-		}
-		main := snap.MainGroup
-		if mode == model.ModeGlobal {
-			main = "GLOBAL"
-		}
-		node := resolveNode(snap, main)
-		if node == "" || node == "DIRECT" || node == "REJECT" || node == main {
-			return
-		}
-		ctx, cancel := s.ctrlCtx(nil, probeTimeout)
-		defer cancel()
-		_ = s.probeNode(ctx, node)
-	})
+	s.probeTimer = s.afterFunc(probeDebounce, s.runMainProbe)
+}
+
+// runMainProbe is the automatic probe of the main group's exit. While
+// another probe uses the probe group (an unlock check, a region scan: up
+// to minutes) it does not wait and does not switch the group under it; it
+// is put off by another debounce instead.
+func (s *Service) runMainProbe() {
+	s.mu.Lock()
+	snap := s.state.proxies
+	mode := s.state.st.Mode
+	running := s.state.st.Core == model.CoreRunning
+	s.mu.Unlock()
+	if !running || mode == model.ModeDirect {
+		return
+	}
+	main := snap.MainGroup
+	if mode == model.ModeGlobal {
+		main = "GLOBAL"
+	}
+	node := resolveNode(snap, main)
+	if node == "" || node == "DIRECT" || node == "REJECT" || node == main {
+		return
+	}
+	if !s.probeExitMu.TryLock() {
+		s.scheduleMainProbe()
+		return
+	}
+	defer s.probeExitMu.Unlock()
+	ctx, cancel := s.ctrlCtx(nil, probeTimeout)
+	defer cancel()
+	_ = s.probeNodeLocked(ctx, node)
 }
 
 // youBackoff spaces the retries of the direct public endpoint lookup

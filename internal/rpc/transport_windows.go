@@ -102,6 +102,30 @@ func verifyPeer(conn net.Conn) error {
 	return nil
 }
 
+// peerProc returns the client process of a pipe connection the server
+// accepted, and its executable.
+func peerProc(conn net.Conn) (pid int, exe string, err error) {
+	fc, ok := conn.(interface{ Fd() uintptr })
+	if !ok {
+		return 0, "", errors.New("无法获取管道句柄")
+	}
+	var id uint32
+	if err := windows.GetNamedPipeClientProcessId(windows.Handle(fc.Fd()), &id); err != nil {
+		return 0, "", err
+	}
+	proc, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, id)
+	if err != nil {
+		return int(id), "", err
+	}
+	defer windows.CloseHandle(proc)
+	buf := make([]uint16, 32768)
+	n := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(proc, 0, &buf[0], &n); err != nil {
+		return int(id), "", err
+	}
+	return int(id), windows.UTF16ToString(buf[:n]), nil
+}
+
 func processSID(pid uint32) (string, error) {
 	proc, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {

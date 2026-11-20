@@ -5,8 +5,8 @@ import (
 	"lanflow/internal/view/settings"
 )
 
-// newService wires the real service (internal/app). main falls back to the
-// fake backend, with a log line, when it cannot be created. lang is the
+// newService wires the real service (internal/app). When it cannot be
+// created main tells the user and exits (backend in main.go). lang is the
 // language of a first run ("zh" or "en").
 func newService(lang string) (app.API, error) {
 	o := app.DefaultOptions("Lanflow")

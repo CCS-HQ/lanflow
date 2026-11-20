@@ -72,12 +72,18 @@ func (p *Policy) Validate(spec protocol.Spec) (protocol.Spec, error) {
 	if fi, err := os.Stat(out.WorkDir); err != nil || !fi.IsDir() {
 		return out, fmt.Errorf("工作目录不存在或不是目录: %s", spec.WorkDir)
 	}
+	if err := refuseLinks(dataDir, spec.WorkDir, out.WorkDir, true, "工作目录"); err != nil {
+		return out, err
+	}
 	out.Config, err = p.insideDataDir(dataDir, spec.Config, "配置文件")
 	if err != nil {
 		return out, err
 	}
 	if fi, err := os.Stat(out.Config); err != nil || !fi.Mode().IsRegular() {
 		return out, fmt.Errorf("配置文件不存在或不是普通文件: %s", spec.Config)
+	}
+	if err := refuseLinks(dataDir, spec.Config, out.Config, false, "配置文件"); err != nil {
+		return out, err
 	}
 	out.LogFile, err = p.insideDataDir(dataDir, spec.LogFile, "日志文件")
 	if err != nil {
@@ -121,6 +127,45 @@ func (p *Policy) insideDataDir(dataDir, path, what string) (string, error) {
 		return "", fmt.Errorf("%s必须位于 Lanflow 数据目录内: %s", what, path)
 	}
 	return resolved, nil
+}
+
+// refuseLinks refuses a work dir or config that is reached through a
+// symbolic link (or, on Windows, any reparse point) inside the data
+// directory. Mihomo runs as root/SYSTEM on these paths, which the user
+// owns: a link there is how a root process gets pointed at another place,
+// so none is accepted, even one that resolves to somewhere inside the data
+// directory right now.
+//
+// given is the path of the request and resolved its symlink-free form.
+// Links above the data directory (a linked home directory) are the
+// user's own layout and stay allowed: the part of given below the data
+// directory must name resolved literally. verifyNoLinks then walks the
+// resolved path without following links.
+//
+// This narrows the hole, it does not close it: the user can still swap a
+// directory for a link after this check, and Mihomo itself opens paths
+// from the user's config. See the helper package notes on a root-owned
+// work directory.
+func refuseLinks(dataDir, given, resolved string, dir bool, what string) error {
+	given = filepath.Clean(given)
+	below, ok := "", false
+	for prefix := given; ; prefix = filepath.Dir(prefix) {
+		if r, err := filepath.EvalSymlinks(prefix); err == nil && samePath(r, dataDir) {
+			below, ok = given[len(prefix):], true
+			// Keep going: the shortest such prefix is the data directory
+			// as the request names it.
+		}
+		if filepath.Dir(prefix) == prefix {
+			break
+		}
+	}
+	if !ok || !samePath(filepath.Join(dataDir, below), resolved) {
+		return fmt.Errorf("%s路径中不能有符号链接: %s", what, given)
+	}
+	if err := verifyNoLinks(dataDir, resolved, dir); err != nil {
+		return fmt.Errorf("%s路径中不能有符号链接: %w", what, err)
+	}
+	return nil
 }
 
 // resolvePath is EvalSymlinks that tolerates a missing final components:

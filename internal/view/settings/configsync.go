@@ -228,7 +228,7 @@ func (p *Page) syncChoiceDialog(c *ui.Context, t *ui.Theme) {
 		return
 	}
 	ui.Modal(c, &ch.open, func() {
-		ui.Column(c.Key("sync-choice")).Width(460).Gap(12).Children(func() {
+		ui.Column(c.Key("sync-choice")).Width(env.DialogWidth(c, 460)).Gap(12).Children(func() {
 			ui.Text(c, i18n.T("同步文件夹中已有配置")).FontSize(15).Bold()
 			ui.Text(c, i18n.T("文件夹里的 lanflow.yaml 与本机配置不同，可能来自另一台设备。请选择保留哪一份：")).FontSize(12).TextColor(t.TextMuted)
 			ui.Text(c, i18n.T("· 使用文件中的配置：校验通过后加载到本机，替换本机的设置、覆写、自定义规则和订阅（TUN、内核路径等本机项不变）。")).FontSize(12)

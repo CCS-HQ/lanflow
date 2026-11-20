@@ -351,3 +351,60 @@ func TestGridColumnsFit(t *testing.T) {
 		}
 	}
 }
+
+// TestBigGroupGridVirtual: in the grid view too, a large group builds only
+// the tiles in view, and 定位当前节点 reaches a tile far down.
+func TestBigGroupGridVirtual(t *testing.T) {
+	api := fake.NewInstant()
+	e, _ := testEnv(api)
+	p := New(e)
+	p.view = viewGrid
+	g := model.ProxyGroup{Name: "大组", Type: model.GroupSelect}
+	for i := 0; i < 300; i++ {
+		g.All = append(g.All, fmt.Sprintf("节点 %03d", i))
+	}
+	g.Now = g.All[250]
+	px := model.ProxySnapshot{Groups: []model.ProxyGroup{g}, MainGroup: g.Name}
+	p.open[g.Name], p.openInit[g.Name] = true, true
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Scroll(c).Fill().Children(func() { p.group(c, g, g.All, len(g.All), px, groupNames(px)) })
+	}, 800, 900)
+	tt.Frame()
+	count := func() (n int, cur bool) {
+		for _, x := range tt.Texts() {
+			if strings.HasPrefix(x, "节点 ") {
+				n++
+			}
+			cur = cur || x == "节点 250"
+		}
+		return n, cur
+	}
+	n, cur := count()
+	if n == 0 || n > 150 || cur {
+		t.Fatalf("built %d of 300 tiles (current shown: %v)", n, cur)
+	}
+	if err := tt.Click("定位当前节点 大组"); err != nil {
+		info, ok := tt.AccessByRole(ui.RoleButton, "定位当前节点 大组")
+		if !ok {
+			t.Fatal(err)
+		}
+		tt.ClickAt(info.Bounds.X+info.Bounds.W/2, info.Bounds.Y+info.Bounds.H/2)
+	}
+	tt.Frame()
+	tt.Frame()
+	if n, cur = count(); !cur || n > 150 {
+		t.Fatalf("after 定位: %d tiles, current shown: %v", n, cur)
+	}
+}
+
+// TestHideTimeoutKeepsCurrent: 隐藏超时节点 does not hide the member in use.
+func TestHideTimeoutKeepsCurrent(t *testing.T) {
+	e, _ := testEnv(fake.NewInstant())
+	p := New(e)
+	p.hideTimeout = true
+	g := model.ProxyGroup{Name: "g", Type: model.GroupSelect, All: []string{"a", "b", "c"}, Now: "b"}
+	px := model.ProxySnapshot{Proxies: map[string]model.Proxy{"a": {Delay: 20}, "b": {Delay: -1}, "c": {Delay: -1}}}
+	if got := strings.Join(p.filterNodes(g, px), ","); got != "a,b" {
+		t.Fatalf("shown %q, want the live node and the current one", got)
+	}
+}

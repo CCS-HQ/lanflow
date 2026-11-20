@@ -2,8 +2,6 @@ package settings
 
 import (
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -23,27 +21,39 @@ type cacheAPI interface {
 	CleanCaches() (freed int64, err error)
 }
 
-// cacheRefresh is how old the sizes shown may get before they are read
-// again (the listing is cheap, but not per frame).
-const cacheRefresh = 5 * time.Second
-
+// cacheState is the row's state, UI thread only. The sizes are read off
+// the UI thread (the listing walks the cache directories), once each
+// time the row comes into view (loaded is cleared when the tab or the
+// page is left) and again after a cleaning; there is no polling.
 type cacheState struct {
-	mu    sync.Mutex
-	items []app.CacheItem
-	at    time.Time
-	busy  bool
+	items   []app.CacheItem
+	loaded  bool // items are as of this showing of the row
+	loading bool
+	busy    bool // 清理缓存 runs
 }
 
-// usage returns the sizes, re-read when stale.
-func (cs *cacheState) usage(api cacheAPI, now time.Time) []app.CacheItem {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	if cs.items == nil || now.Sub(cs.at) > cacheRefresh {
-		cs.items = api.CacheUsage()
-		cs.at = now
+// loadCaches reads the sizes in the background.
+func (p *Page) loadCaches(api cacheAPI) {
+	cs := &p.caches
+	if cs.loading {
+		return
 	}
-	return cs.items
+	cs.loading = true
+	var items []app.CacheItem
+	p.e.Then(func() error {
+		items = api.CacheUsage()
+		if items == nil {
+			items = []app.CacheItem{}
+		}
+		return nil
+	}, func(error) {
+		cs.items, cs.loaded, cs.loading = items, true, false
+	})
 }
+
+// Hidden is called by the shell when the page goes out of sight: the
+// cache sizes are read again when it shows next.
+func (p *Page) Hidden() { p.caches.loaded = false }
 
 // cacheRow draws the row.
 func (p *Page) cacheRow(c *ui.Context) {
@@ -52,27 +62,30 @@ func (p *Page) cacheRow(c *ui.Context) {
 		return
 	}
 	e := p.e
-	items := p.caches.usage(api, time.Now())
-	p.caches.mu.Lock()
-	busy := p.caches.busy
-	p.caches.mu.Unlock()
-	e.Kit.Row(c, i18n.T("缓存"), cacheSummary(items), func() {
-		b := ui.Button(c, i18n.T("清理缓存")).Disabled(busy)
+	cs := &p.caches
+	if !cs.loaded && !cs.busy {
+		p.loadCaches(api)
+	}
+	desc := cacheSummary(cs.items)
+	if cs.items == nil {
+		desc = i18n.T("正在读取…")
+	}
+	e.Kit.Row(c, i18n.T("缓存"), desc, func() {
+		b := ui.Button(c, i18n.T("清理缓存")).Disabled(cs.busy || cs.items == nil)
 		if b.Clicked() {
-			p.caches.mu.Lock()
-			p.caches.busy = true
-			p.caches.mu.Unlock()
-			e.Run(func() error {
-				freed, err := api.CleanCaches()
-				p.caches.mu.Lock()
-				p.caches.busy, p.caches.items = false, nil
-				p.caches.mu.Unlock()
+			cs.busy = true
+			var freed int64
+			e.Then(func() (err error) {
+				freed, err = api.CleanCaches()
+				return err
+			}, func(err error) {
+				cs.busy, cs.loaded = false, false // read again: the sizes changed
 				if err != nil {
-					return err
+					e.Toast(err.Error(), true)
+					return
 				}
 				e.Toast(i18n.Tf("已清理 %s", env.FmtBytes(freed)), false)
-				return nil
-			}, "")
+			})
 		}
 	})
 }

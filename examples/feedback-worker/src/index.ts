@@ -81,18 +81,32 @@ function authorized(req: Request, env: Env): boolean {
 
 // A fixed one-hour window per client IP, counted in KV. KV is eventually
 // consistent, so the limit is approximate; use the Rate Limiting binding
-// for a strict one.
-async function rateLimited(req: Request, env: Env): Promise<number> {
+// for a strict one. The check and the count are separate steps: a client
+// over the limit is turned away before its body is read, and only a
+// report that was valid and stored counts against it, so a malformed
+// request (or a retry of one) does not use up the hour's allowance.
+function rateKey(req: Request): { key: string; now: number; hour: number } {
   const ip = req.headers.get("cf-connecting-ip") ?? "unknown";
   const now = Math.floor(Date.now() / 1000);
   const hour = Math.floor(now / 3600);
-  const key = `rl:${ip}:${hour}`;
+  return { key: `rl:${ip}:${hour}`, now, hour };
+}
+
+// rateLimited returns the seconds to wait, 0 when the client may send.
+async function rateLimited(req: Request, env: Env): Promise<number> {
+  const { key, now, hour } = rateKey(req);
   const count = Number((await env.REPORTS.get(key)) ?? "0");
   if (count >= num(env.REPORTS_PER_HOUR, 10)) {
     return (hour + 1) * 3600 - now; // seconds until the window resets
   }
-  await env.REPORTS.put(key, String(count + 1), { expirationTtl: 3600 + 60 });
   return 0;
+}
+
+// countReport records one stored report of this client.
+async function countReport(req: Request, env: Env): Promise<void> {
+  const { key } = rateKey(req);
+  const count = Number((await env.REPORTS.get(key)) ?? "0");
+  await env.REPORTS.put(key, String(count + 1), { expirationTtl: 3600 + 60 });
 }
 
 function validMeta(m: unknown, id: string): m is ReportMeta {
@@ -188,6 +202,7 @@ async function handleReport(req: Request, env: Env): Promise<Response> {
   // The metadata is written last: a report counts as stored once its KV
   // entry exists, so a failed R2 write is simply retried by the client.
   await env.REPORTS.put(`report:${id}`, JSON.stringify(stored), { expirationTtl: retention });
+  await countReport(req, env);
   return json(201, answer(id, env));
 }
 
@@ -199,8 +214,11 @@ export default {
     try {
       return await handleReport(req, env);
     } catch (e) {
-      // 5xx: the client retries with backoff
-      return fail(500, e instanceof Error ? e.message : "internal error");
+      // 5xx: the client retries with backoff. The exception goes to the
+      // Worker's log, not to the client: its message may name bindings,
+      // keys or other internals.
+      console.error("report failed:", e);
+      return fail(500, "internal error");
     }
   },
 } satisfies ExportedHandler<Env>;

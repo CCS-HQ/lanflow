@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"sort"
@@ -42,11 +43,46 @@ func newWebDAVClient(rawURL, user, pass string, c *http.Client) (*webdavClient, 
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, errors.New(i18n.T("WebDAV 地址须是以 http:// 或 https:// 开头的完整地址"))
 	}
+	if u.Scheme == "http" && !lanHost(u.Hostname()) {
+		// Basic auth over plain http: anyone on the path reads the password
+		return nil, errors.New(i18n.T("WebDAV 地址使用 http:// 时密码会以明文发送，只允许本机或局域网内的服务器；公网服务器请使用 https://。"))
+	}
 	u.RawQuery, u.Fragment = "", ""
 	if u.Path == "" {
 		u.Path = "/"
 	}
 	return &webdavClient{base: u, user: user, pass: pass, http: c}, nil
+}
+
+// cgnat is 100.64.0.0/10: carrier-grade NAT, and what overlay networks
+// (Tailscale) number their private hosts from.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// lanHost reports whether host names this machine or one on a private
+// network, where plain http is tolerated: a loopback, private or
+// link-local address, a name without a dot, or a name under a suffix
+// reserved for local networks.
+func lanHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if isLocalHost(host) {
+		return true
+	}
+	if a, err := netip.ParseAddr(host); err == nil {
+		a = a.Unmap()
+		return a.IsPrivate() || a.IsLinkLocalUnicast() || cgnat.Contains(a)
+	}
+	if host == "" {
+		return false
+	}
+	if !strings.Contains(host, ".") {
+		return true // a single label resolves on the local network only
+	}
+	for _, suf := range []string{".local", ".lan", ".home", ".internal", ".home.arpa", ".localhost", ".ts.net"} {
+		if strings.HasSuffix(host, suf) {
+			return true
+		}
+	}
+	return false
 }
 
 // href returns the absolute URL of p (segments relative to the root,

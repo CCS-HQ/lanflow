@@ -51,16 +51,11 @@ func (p *Page) backupSection(c *ui.Context, t *ui.Theme, s model.Settings) {
 				ui.Button(c, i18n.T("管理备份…")).Disabled(busy).OnClick(func() {
 					f.davListOpen = true
 					if !f.davListed {
-						p.davJob("list", p.reloadBackups, "")
+						p.davListJob("list", nil, "")
 					}
 				})
 				ui.PrimaryButton(c, i18n.T("立即备份")).Disabled(busy).OnClick(func() {
-					p.davJob("backup", func() error {
-						if err := e.API.BackupNow(); err != nil {
-							return err
-						}
-						return p.reloadBackups()
-					}, i18n.T("已备份到 WebDAV"))
+					p.davListJob("backup", e.API.BackupNow, i18n.T("已备份到 WebDAV"))
 				})
 			})
 		})
@@ -78,11 +73,11 @@ func (p *Page) backupConfigDialog(c *ui.Context, t *ui.Theme, s model.Settings, 
 	}
 	w := s.WebDAV
 	ui.Modal(c, &f.davOpen, func() {
-		ui.Column(c.Key("dav-config")).Width(520).Gap(12).Children(func() {
+		ui.Column(c.Key("dav-config")).Width(env.DialogWidth(c, 520)).Gap(12).Children(func() {
 			ui.Text(c, i18n.T("WebDAV 网盘")).FontSize(15).Bold()
 			ui.Text(c, i18n.T("填写网盘的 WebDAV 地址和账号；每一项在离开输入框时保存。")).FontSize(12).TextColor(t.TextMuted)
 			ui.Column(c).Radius(8).Border(1, t.Border).Clip().Dividers(1, t.Border).Children(func() {
-				p.davField(c, i18n.T("服务器地址"), i18n.T("WebDAV 地址，例如 https://dav.jianguoyun.com/dav/"), "dav-url", &f.davURL, w.URL, 280, func(v string) {
+				p.davField(c, t, i18n.T("服务器地址"), i18n.T("WebDAV 地址，例如 https://dav.jianguoyun.com/dav/"), "dav-url", &f.davURL, w.URL, 0, func(v string) {
 					if v != "" && !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
 						f.davErr = i18n.T("WebDAV 地址须是以 http:// 或 https:// 开头的完整地址")
 						return
@@ -90,7 +85,7 @@ func (p *Page) backupConfigDialog(c *ui.Context, t *ui.Theme, s model.Settings, 
 					s.WebDAV.URL = v
 					p.save(s, "", nil)
 				})
-				p.davField(c, i18n.T("用户名"), "", "dav-user", &f.davUser, w.User, 200, func(v string) { s.WebDAV.User = v; p.save(s, "", nil) })
+				p.davField(c, t, i18n.T("用户名"), "", "dav-user", &f.davUser, w.User, 200, func(v string) { s.WebDAV.User = v; p.save(s, "", nil) })
 				pwDesc := i18n.T("保存在系统钥匙串中")
 				if info.PasswordStore == model.PasswordStoreFile {
 					pwDesc = i18n.T("本机没有可用的钥匙串：密码经混淆后保存在设置目录（仅当前用户可读），并非加密")
@@ -125,7 +120,7 @@ func (p *Page) backupConfigDialog(c *ui.Context, t *ui.Theme, s model.Settings, 
 						}
 					})
 				})
-				p.davField(c, i18n.T("远程目录"), i18n.Tf("留空为 %s", model.WebDAVDefaultDir), "dav-dir", &f.davDir, w.Dir, 200, func(v string) {
+				p.davField(c, t, i18n.T("远程目录"), i18n.Tf("留空为 %s", model.WebDAVDefaultDir), "dav-dir", &f.davDir, w.Dir, 200, func(v string) {
 					s.WebDAV.Dir = strings.Trim(v, "/")
 					p.save(s, "", nil)
 				})
@@ -188,7 +183,7 @@ func (p *Page) backupListDialog(c *ui.Context, t *ui.Theme, busy bool) {
 				if busy {
 					ui.Spinner(c).Label(i18n.T("正在处理")).Size(14, 14)
 				}
-				ui.Button(c, i18n.T("刷新")).Disabled(busy).OnClick(func() { p.davJob("list", p.reloadBackups, "") })
+				ui.Button(c, i18n.T("刷新")).Disabled(busy).OnClick(func() { p.davListJob("list", nil, "") })
 			})
 			if f.davErr != "" {
 				ui.Text(c, f.davErr).FontSize(11).TextColor(t.Danger)
@@ -220,7 +215,7 @@ func (p *Page) backupListDialog(c *ui.Context, t *ui.Theme, busy bool) {
 // backupRow is one remote backup with 恢复 and 删除.
 func (p *Page) backupRow(c *ui.Context, b model.WebDAVBackup, busy bool) {
 	e := p.e
-	when := b.Modified.Local().Format("2006-01-02 15:04:05")
+	when := env.FmtDateTime(b.Modified.Local())
 	desc := when
 	if b.Size > 0 {
 		desc += " · " + env.FmtBytes(b.Size)
@@ -229,26 +224,16 @@ func (p *Page) backupRow(c *ui.Context, b model.WebDAVBackup, busy bool) {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Button(c, i18n.T("恢复")).Disabled(busy).OnClick(func() {
 				e.Confirm(i18n.Tf("恢复 %s 的备份？", when), i18n.T("备份中的设置、覆写、自定义规则和订阅会应用到本机；内核文件路径和 TUN 开关保持不变。"), i18n.T("恢复"), false, func() {
-					p.davJob("restore", func() error {
-						summary, err := e.API.RestoreBackup(b.Name)
-						if err != nil {
-							return err
-						}
-						p.mu.Lock()
-						p.toast = summary
-						p.mu.Unlock()
-						return nil
-					}, "")
+					summary := ""
+					p.davJobThen("restore", func() (err error) {
+						summary, err = e.API.RestoreBackup(b.Name)
+						return err
+					}, func() { e.Toast(summary, false) })
 				})
 			})
 			ui.Button(c, i18n.T("删除")).Disabled(busy).OnClick(func() {
 				e.Confirm(i18n.Tf("删除 %s 的备份？", when), i18n.T("备份会从服务器上删除，此操作无法撤销。"), i18n.T("删除"), true, func() {
-					p.davJob("delete", func() error {
-						if err := e.API.DeleteBackup(b.Name); err != nil {
-							return err
-						}
-						return p.reloadBackups()
-					}, i18n.T("备份已删除"))
+					p.davListJob("delete", func() error { return e.API.DeleteBackup(b.Name) }, i18n.T("备份已删除"))
 				})
 			})
 		})
@@ -256,12 +241,20 @@ func (p *Page) backupRow(c *ui.Context, b model.WebDAVBackup, busy bool) {
 }
 
 // davField draws one committed text field of the WebDAV form.
-func (p *Page) davField(c *ui.Context, label, desc, key string, f *field, current string, width float32, set func(string)) {
-	p.e.Kit.Row(c, label, desc, func() {
+// A width of 0 stacks the input under the label and takes the row's width
+// (stackedRow): a URL beside its description squeezed the description
+// into a narrow column, the more so in English or a wide font.
+func (p *Page) davField(c *ui.Context, t *ui.Theme, label, desc, key string, f *field, current string, width float32, set func(string)) {
+	control := func() {
 		if p.f2.davErr == "" || key != "dav-url" {
 			f.show(current)
 		}
-		in := ui.TextInput(c.Key(key), &f.text).Width(width).Label(label).Invalid(key == "dav-url" && p.f2.davErr != "")
+		in := ui.TextInput(c.Key(key), &f.text).Label(label).Invalid(key == "dav-url" && p.f2.davErr != "")
+		if width > 0 {
+			in.Width(width)
+		} else {
+			in.FillWidth()
+		}
 		if in.Changed() && key == "dav-url" {
 			p.f2.davErr = ""
 		}
@@ -271,34 +264,59 @@ func (p *Page) davField(c *ui.Context, label, desc, key string, f *field, curren
 				set(v)
 			}
 		}
-	})
+	}
+	if width <= 0 {
+		stackedRow(c, t, label, desc, control)
+		return
+	}
+	p.e.Kit.Row(c, label, desc, control)
 }
 
 // davJob runs one remote operation, marking the section busy meanwhile;
 // its error shows in the open dialog and as a toast.
 func (p *Page) davJob(kind string, job func() error, ok string) {
+	p.davJobThen(kind, job, func() {
+		if ok != "" {
+			p.e.Toast(ok, false)
+		}
+	})
+}
+
+// davJobThen is davJob with what a success does, on the UI thread, in
+// place of a toast. The busy mark and the error are the page's state:
+// they are written there too, not by the job.
+func (p *Page) davJobThen(kind string, job func() error, done func()) {
 	p.f2.davBusy = kind
 	p.f2.davErr = ""
-	p.e.Run(func() error {
-		err := job()
-		p.mu.Lock()
+	p.e.Then(job, func(err error) {
 		p.f2.davBusy = ""
 		if err != nil {
 			p.f2.davErr = err.Error()
+			p.e.Toast(err.Error(), true)
+			return
 		}
-		p.mu.Unlock()
-		return err
-	}, ok)
+		if done != nil {
+			done()
+		}
+	})
 }
 
-// reloadBackups fetches the remote list (off the UI thread).
-func (p *Page) reloadBackups() error {
-	list, err := p.e.API.ListBackups()
-	if err != nil {
+// davListJob runs first (nil: nothing), then fetches the remote list and
+// shows it.
+func (p *Page) davListJob(kind string, first func() error, ok string) {
+	var list []model.WebDAVBackup
+	p.davJobThen(kind, func() (err error) {
+		if first != nil {
+			if err = first(); err != nil {
+				return err
+			}
+		}
+		list, err = p.e.API.ListBackups()
 		return err
-	}
-	p.mu.Lock()
-	p.f2.davBackups, p.f2.davListed = list, true
-	p.mu.Unlock()
-	return nil
+	}, func() {
+		p.f2.davBackups, p.f2.davListed = list, true
+		if ok != "" {
+			p.e.Toast(ok, false)
+		}
+	})
 }

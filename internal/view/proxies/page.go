@@ -4,6 +4,7 @@
 package proxies
 
 import (
+	"image"
 	"slices"
 	"sort"
 	"strings"
@@ -72,15 +73,29 @@ type Page struct {
 	iconFail    map[string]bool           // references that do not decode
 	lists       map[string]*ui.ListState  // the virtual lists of large groups, by group
 
+	// idle is set by View when no node of the snapshot it draws is being
+	// tested: no group then walks its members to look for one (group).
+	idle bool
+
+	// decode runs a group icon's decoding off the UI thread; tests make
+	// it synchronous.
+	decode func(fn func())
+
 	mu      sync.Mutex
 	pending map[string]string // optimistic selection by group
 	testing bool              // 全部测速 running
+	// iconBusy are the icon references being decoded; iconDone what the
+	// decoding left for the view to take: nil for bytes that are no
+	// picture or too large a one.
+	iconBusy map[string]bool
+	iconDone map[string]image.Image
 }
 
 // New returns the page.
 func New(e *env.Env) *Page {
 	return &Page{e: e, open: map[string]bool{}, openInit: map[string]bool{}, pending: map[string]string{},
-		icons: map[string]ui.ImageSource{}, iconFail: map[string]bool{}, lists: map[string]*ui.ListState{}}
+		icons: map[string]ui.ImageSource{}, iconFail: map[string]bool{}, lists: map[string]*ui.ListState{},
+		iconBusy: map[string]bool{}, iconDone: map[string]image.Image{}, decode: func(fn func()) { go fn() }}
 }
 
 // restore loads the remembered expanded states and view once.
@@ -223,6 +238,7 @@ func (p *Page) View(c *ui.Context) {
 			}
 			groups := p.visibleGroups(px, st)
 			names := groupNames(px)
+			p.idle = !anyTesting(px)
 			shown := 0
 			list := ui.Column(c).Gap(10)
 			if st.Mode == model.ModeDirect {
@@ -306,7 +322,9 @@ func (p *Page) filterNodes(g model.ProxyGroup, px model.ProxySnapshot) []string 
 		if q != "" && !strings.Contains(strings.ToLower(n), q) {
 			continue
 		}
-		if p.hideTimeout && px.Proxies[n].Delay < 0 {
+		// The member in use stays listed even when it timed out: it is
+		// what 定位当前节点 reveals and what the user must see to change.
+		if p.hideTimeout && px.Proxies[n].Delay < 0 && n != g.Now {
 			continue
 		}
 		nodes = append(nodes, n)
@@ -382,11 +400,15 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 	if pendingNow != "" {
 		now = pendingNow
 	}
+	// Only while some node is being tested (View looks once a build)
+	// is a group's member list walked for its own.
 	groupTesting := false
-	for _, n := range g.All {
-		if px.Proxies[n].Testing {
-			groupTesting = true
-			break
+	if !p.idle {
+		for _, n := range g.All {
+			if px.Proxies[n].Testing {
+				groupTesting = true
+				break
+			}
 		}
 	}
 	selectable := g.Type == model.GroupSelect
@@ -412,7 +434,7 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 					meta = i18n.Tf("%s · 当前 %s", meta, now)
 				}
 				if p.query != "" {
-					meta = i18n.Tf("%s · %d 个匹配", meta, matched)
+					meta = i18n.Tn(matched, "%s · %d 个匹配", meta, matched)
 				}
 				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(meta)
 			})
@@ -457,7 +479,12 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 					// From the window's width, not the grid's last
 					// frame, so a resize refits the columns at once.
 					winW, _ := c.Size()
-					ui.Grid(c).Columns(gridColumnsFor(winW-gridChrome)).Gap(6).Padding(4, 6, 2, 6).Children(func() {
+					cols := gridColumnsFor(winW - gridChrome)
+					if len(nodes) > bigGroup {
+						p.bigGrid(c, g, nodes, cols, now, selectable, px, names)
+						return
+					}
+					ui.Grid(c).Columns(cols).Gap(6).Padding(4, 6, 2, 6).Children(func() {
 						for _, n := range nodes {
 							p.cell(c, g, n, now, selectable, px, names)
 						}
@@ -476,6 +503,16 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 	})
 }
 
+// anyTesting reports whether a latency test runs on any node of px.
+func anyTesting(px model.ProxySnapshot) bool {
+	for _, pr := range px.Proxies {
+		if pr.Testing {
+			return true
+		}
+	}
+	return false
+}
+
 // bigList shows a large group's members in a virtual list, scrolled to
 // the current member when 定位当前节点 asks for it.
 func (p *Page) bigList(c *ui.Context, g model.ProxyGroup, nodes []string, now string, selectable bool, px model.ProxySnapshot, names map[string]bool) {
@@ -485,6 +522,9 @@ func (p *Page) bigList(c *ui.Context, g model.ProxyGroup, nodes []string, now st
 		p.lists[g.Name] = ls
 	}
 	ls.Key = func(i int) any { return nodes[i] }
+	// Sorted by delay, the members move as results arrive: the list stays
+	// where it is scrolled rather than follow the node at its top.
+	ls.KeepOffset = true
 	if l := p.locate; l.group == g.Name && !l.shown && !l.until.IsZero() {
 		if i := slices.Index(nodes, now); i >= 0 {
 			ls.ScrollTo(i, ui.Center)
@@ -493,6 +533,40 @@ func (p *Page) bigList(c *ui.Context, g model.ProxyGroup, nodes []string, now st
 	ui.List(c.Key("nodes"), ls, len(nodes), func(i int) {
 		p.node(c, g, nodes[i], now, selectable, px, names)
 	}).Height(float32(bigListRows(c, len(nodes))) * nodeRowH).FillWidth().Label(g.Name)
+}
+
+// gridRowH is the height a row of tiles takes in a large group's virtual
+// grid: a tile's minimum height and the gap under it.
+const gridRowH = 56 + 6
+
+// bigGrid is bigList for the grid view: a large group's tiles in a
+// virtual list of rows of cols tiles, which builds only the rows in view
+// (a group of hundreds of nodes is otherwise hundreds of tiles each build,
+// several times a second while a latency test runs).
+func (p *Page) bigGrid(c *ui.Context, g model.ProxyGroup, nodes []string, cols int, now string, selectable bool, px model.ProxySnapshot, names map[string]bool) {
+	key := "grid:" + g.Name
+	ls := p.lists[key]
+	if ls == nil {
+		ls = &ui.ListState{}
+		p.lists[key] = ls
+	}
+	rows := (len(nodes) + cols - 1) / cols
+	ls.Key = func(i int) any { return nodes[i*cols] }
+	ls.KeepOffset = true // as bigList: sorted by delay, the tiles move
+	if l := p.locate; l.group == g.Name && !l.shown && !l.until.IsZero() {
+		if i := slices.Index(nodes, now); i >= 0 {
+			ls.ScrollTo(i/cols, ui.Center)
+		}
+	}
+	_, h := c.Size()
+	shown := min(max(int(h*0.55/gridRowH), bigGroupRows/2), maxBigGroupRows/2, rows)
+	ui.List(c.Key("tiles"), ls, rows, func(i int) {
+		ui.Grid(c).Columns(cols).Gap(6).Padding(3, 6).Children(func() {
+			for _, n := range nodes[i*cols : min((i+1)*cols, len(nodes))] {
+				p.cell(c, g, n, now, selectable, px, names)
+			}
+		})
+	}).Height(float32(shown) * gridRowH).FillWidth().Label(g.Name)
 }
 
 // bigListRows is how many rows a large group's virtual list shows: about
@@ -607,7 +681,7 @@ func (p *Page) providers(c *ui.Context, provs []model.ProxyProvider, px model.Pr
 			ui.Box(c).TextColor(t.TextMuted).Children(func() { k.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
 			ui.Text(c, i18n.T("代理集合")).FontSize(13).FontWeight(600).SingleLine()
 			ui.Text(c, i18n.Tf("%d 个代理集合", len(provs))).FontSize(12).TextColor(t.TextMuted).SingleLine().
-				Tooltip(i18n.Tf("%d 个 proxy-provider", len(provs)))
+				Tooltip(i18n.Tn(len(provs), "%d 个 proxy-provider", len(provs)))
 		})
 		parts.Panel(func() {
 			ui.Column(c).Padding(0, 6, 6, 6).Children(func() {
@@ -638,7 +712,7 @@ func providerSource(vehicle string) string {
 
 // providerMeta is the muted summary line under a provider's name.
 func providerMeta(pv model.ProxyProvider) string {
-	meta := i18n.Tf("%s · %d 个节点", providerSource(pv.VehicleType), len(pv.Proxies))
+	meta := i18n.Tn(len(pv.Proxies), "%s · %d 个节点", providerSource(pv.VehicleType), len(pv.Proxies))
 	if !pv.UpdatedAt.IsZero() {
 		meta += i18n.Tf(" · 更新于 %s", env.FmtAgo(pv.UpdatedAt))
 	}

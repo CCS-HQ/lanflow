@@ -447,7 +447,7 @@ func (f *fakeDNS) Snapshot() (sysdns.Saved, error) {
 	defer f.mu.Unlock()
 	return json.Marshal(f.servers)
 }
-func (f *fakeDNS) Set(servers []string) error {
+func (f *fakeDNS) Set(_ sysdns.Saved, servers []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sets++

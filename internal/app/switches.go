@@ -27,6 +27,7 @@ func (s *Service) setSystemProxyLocked(on bool) error {
 		if err := s.releaseProxy(); err != nil {
 			return fmt.Errorf(i18n.T("关闭系统代理失败：%v。请在系统设置中手动关闭代理。"), err)
 		}
+		s.stopPAC() // nothing fetches the PAC file any more
 		s.mu.Lock()
 		s.state.weSetProxy = false
 		s.state.st.SystemProxy = false
@@ -84,6 +85,7 @@ func (s *Service) applySystemProxy() error {
 		return fmt.Errorf(i18n.T("开启系统代理失败：%v。内核仍在运行，可以手动把系统代理指向 127.0.0.1:%d。"), err, port)
 	}
 	s.writeMarker(port, saved)
+	s.stopPAC() // PAC mode was turned off: the manual proxy replaced the PAC URL
 	return nil
 }
 
@@ -281,7 +283,10 @@ func (s *Service) UninstallTUNHelper() (err error) {
 
 // ---- mode ----
 
-// SetMode switches the routing mode (hot) and persists it.
+// SetMode switches the routing mode (hot) and persists it. It holds opMu:
+// a reload composes from the stored settings, so the mode is stored before
+// the core is patched and no reload can run between the two and leave the
+// core in another mode than the settings and Status say.
 func (s *Service) SetMode(m model.Mode) (err error) {
 	defer func() { s.logOp("mode "+string(m), err) }()
 	switch m {
@@ -289,25 +294,36 @@ func (s *Service) SetMode(m model.Mode) (err error) {
 	default:
 		return fmt.Errorf(i18n.T("未知的模式「%s」"), m)
 	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	var old model.Mode
+	saveErr := s.updateSettings(func(set *model.Settings) {
+		old = set.Mode
+		set.Mode = m
+	})
 	if s.running() {
 		mode := string(m)
 		ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 		err := s.d.ctrl.PatchConfigs(ctx, controller.ConfigPatch{Mode: &mode})
 		cancel()
 		if err != nil {
+			// The core kept its mode: so do the settings.
+			if rerr := s.updateSettings(func(set *model.Settings) { set.Mode = old }); rerr != nil {
+				s.alog.Warnf("mode %s: restore the stored mode %s: %v", m, old, rerr)
+			}
+			s.em.emit(TopicSettings)
 			return fmt.Errorf(i18n.T("切换模式失败：%v"), err)
 		}
 		if m == model.ModeGlobal {
 			s.ensureGlobalExit()
 		}
 	}
-	err = s.updateSettings(func(set *model.Settings) {
-		set.Mode = m
-		s.state.st.Mode = m
-	})
+	s.mu.Lock()
+	s.state.st.Mode = m
+	s.mu.Unlock()
 	s.em.emit(TopicStatus, TopicSettings)
 	s.rebuildRoutes()
-	return err
+	return saveErr
 }
 
 // ensureGlobalExit points Mihomo's GLOBAL group at the main group when it

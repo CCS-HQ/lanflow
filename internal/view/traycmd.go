@@ -2,7 +2,6 @@ package view
 
 import (
 	"bytes"
-	"fmt"
 	"image"
 	"image/color"
 	_ "image/jpeg" // group icons may be JPEG
@@ -11,32 +10,20 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+
+	"lanflow/internal/view/env"
 )
 
 // Terminal proxy commands for the tray's 复制终端代理命令 submenu, one per
-// shell family (docs/design.md §7).
+// shell family (docs/design.md §7); the overview shows one of the same
+// (env.ShellCommandFor).
 
 // shellCommand is one variant of the terminal proxy command.
-type shellCommand struct {
-	Label string // shown in the menu
-	Cmd   string // copied to the clipboard
-}
+type shellCommand = env.ShellCommand
 
 // shellCommands returns the variants for port: bash/zsh, fish, PowerShell
 // and cmd.
-func shellCommands(port int) []shellCommand {
-	if port <= 0 {
-		port = 7890
-	}
-	h := fmt.Sprintf("http://127.0.0.1:%d", port)
-	s := fmt.Sprintf("socks5://127.0.0.1:%d", port)
-	return []shellCommand{
-		{"bash / zsh", fmt.Sprintf("export https_proxy=%s http_proxy=%s all_proxy=%s", h, h, s)},
-		{"fish", fmt.Sprintf("set -gx https_proxy %s; set -gx http_proxy %s; set -gx all_proxy %s", h, h, s)},
-		{"PowerShell", fmt.Sprintf(`$env:HTTPS_PROXY="%s"; $env:HTTP_PROXY="%s"; $env:ALL_PROXY="%s"`, h, h, s)},
-		{"cmd", fmt.Sprintf("set https_proxy=%s && set http_proxy=%s && set all_proxy=%s", h, h, s)},
-	}
-}
+func shellCommands(port int) []shellCommand { return env.ShellCommands(port) }
 
 // menuIconPNG renders icon bytes (SVG, PNG or JPEG) as a small PNG for a
 // menu item; nil when the data cannot be drawn.

@@ -243,6 +243,53 @@ func decode(data []byte, defaults model.Settings) (Doc, *decoder, error) {
 	return doc, d, nil
 }
 
+// Foreign reports whether data is a lanflow.yaml this build must never
+// rewrite, because writing it back would destroy what another device put
+// there: a file in a newer format (Decode refuses it), or one whose
+// secrets are sealed in a way this build does not know (another key
+// derivation, or sealed values of a version other than enc:v1:). An older
+// build that rewrote such a file from its own configuration would turn
+// encryption off for every device, or drop what the newer format added.
+// Anything else that does not load is merely invalid, not foreign.
+func Foreign(data []byte) bool {
+	var root yaml.Node
+	if yaml.Unmarshal(data, &root) != nil || len(root.Content) == 0 {
+		return false
+	}
+	top := root.Content[0]
+	if f := mapValue(top, "format"); f != nil && f.Kind == yaml.ScalarNode {
+		if ver, err := strconv.Atoi(f.Value); err == nil && ver > Format {
+			return true
+		}
+	}
+	// a sealed value of another version: "enc:" without this build's prefix
+	other := func(n *yaml.Node) bool {
+		return n != nil && n.Kind == yaml.ScalarNode && strings.HasPrefix(n.Value, sealedScheme) && !IsSealed(n.Value)
+	}
+	if e := mapValue(top, "encryption"); e != nil {
+		if e.Kind != yaml.MappingNode {
+			return true
+		}
+		if k := mapValue(e, "kdf"); k == nil || k.Value != KDFArgon2id {
+			return true
+		}
+		if other(mapValue(e, "check")) {
+			return true
+		}
+	}
+	if other(mapValue(top, "webdavPassword")) {
+		return true
+	}
+	if subs := mapValue(top, "subscriptions"); subs != nil && subs.Kind == yaml.SequenceNode {
+		for _, sub := range subs.Content {
+			if other(mapValue(sub, "url")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // yamlErr turns a YAML syntax error into an *Error with its line.
 func yamlErr(err error) error {
 	msg := err.Error()

@@ -32,6 +32,11 @@ const (
 	LevelUI        Level = "ui"        // only the window calls these (notice queue, UI state)
 )
 
+// LevelHigh is not a level of the manifest: it is the Kind of the consent
+// request for a high-impact write (guard.go, highImpact), which the user
+// confirms once per connection whatever was allowed "always".
+const LevelHigh Level = "high"
+
 // Param is one parameter of a method.
 type Param struct {
 	Name string `json:"name"`
@@ -88,7 +93,8 @@ func ParseIdentity(s string) (Identity, error) {
 		if name == "" {
 			name = "unknown"
 		}
-		if len(name) > 64 || strings.ContainsAny(name, "\r\n\t") {
+		// CtlGrant is the name `lanflow ctl` is remembered under.
+		if len(name) > 64 || strings.ContainsAny(name, "\r\n\t") || strings.EqualFold(name, CtlGrant) || strings.EqualFold(name, CtlHighGrant) {
 			return Identity{}, fmt.Errorf("客户端名称无效: %q", name)
 		}
 		return Identity{Kind: KindMCP, Name: name}, nil
@@ -150,6 +156,11 @@ type Hello struct {
 	// Reveal asks for sensitive reads (ctl --reveal); the user still
 	// confirms them in the window.
 	Reveal bool `json:"reveal,omitempty"`
+	// Interactive: ctl was started by a person at a terminal (stdin and
+	// stdout are terminals). The server believes it only from Lanflow's
+	// own executable (peer.go); any other ctl connection is a script or an
+	// agent, whose writes ask the user like those of MCP.
+	Interactive bool `json:"interactive,omitempty"`
 }
 
 // Welcome is the handshake answer.

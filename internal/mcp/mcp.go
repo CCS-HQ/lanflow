@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"lanflow/internal/app"
 	"lanflow/internal/app/remote"
@@ -27,7 +28,7 @@ import (
 // protocolVersions are the MCP revisions spoken, newest first.
 var protocolVersions = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
 
-const instructions = `Lanflow (澜流) is a Mihomo proxy client running on this computer. Standard flow: look at the state (status, diagnose), preview (dry_run / patch_settings with dryRun), apply, then verify (test_rule, test_proxy_delay, diagnose_site). Writes need the user's approval in Lanflow the first time and are audited; "undo" reverts the latest write. Subscription links are never shown: do not try to obtain them.`
+const instructions = `Lanflow (澜流) is a Mihomo proxy client running on this computer. Standard flow: look at the state (status, diagnose), preview (dry_run / patch_settings with dryRun), apply, then verify (test_rule, test_proxy_delay, diagnose_site). Writes need the user's approval in Lanflow the first time and are audited; "undo" reverts the latest write. High-impact writes (importing or switching subscriptions, overrides, starting or stopping the core, system proxy, TUN, loading a configuration file) are confirmed by the user once per session even when writes are always allowed. If the user declines, stop: do not retry or reach for another route such as the lanflow ctl command. Subscription links are never shown: do not try to obtain them.`
 
 // Dialer connects to Lanflow as client ("mcp:<name>").
 type Dialer func(ctx context.Context, client string) (*remote.Client, error)
@@ -49,6 +50,9 @@ type Server struct {
 	mu   sync.Mutex
 	name string // clientInfo.name
 	conn *remote.Client
+	// running are the requests under way, by id, for
+	// notifications/cancelled.
+	running map[string]context.CancelFunc
 }
 
 // Main runs the server on stdin/stdout until stdin closes.
@@ -112,13 +116,64 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 			s.reply(req, s.initialize(req.Params)) // before anything else
 			continue
 		}
+		if req.Method == "notifications/cancelled" {
+			s.cancelRequest(req.Params) // in order: after its request was read
+			continue
+		}
+		rctx, done := s.track(ctx, req.ID)
 		wg.Add(1)
 		go func(req request) {
 			defer wg.Done()
-			s.reply(req, s.handle(ctx, req))
+			res := s.handle(rctx, req)
+			cancelled := rctx.Err() != nil && ctx.Err() == nil
+			done()
+			if cancelled {
+				return // the client gave up on it: no response is expected
+			}
+			s.reply(req, res)
 		}(req)
 	}
 	return sc.Err()
+}
+
+// track returns the context of the request id and what to call when it
+// is answered.
+func (s *Server) track(ctx context.Context, id json.RawMessage) (context.Context, func()) {
+	if len(id) == 0 {
+		return ctx, func() {}
+	}
+	rctx, cancel := context.WithCancel(ctx)
+	key := string(id)
+	s.mu.Lock()
+	if s.running == nil {
+		s.running = map[string]context.CancelFunc{}
+	}
+	s.running[key] = cancel
+	s.mu.Unlock()
+	return rctx, func() {
+		s.mu.Lock()
+		delete(s.running, key)
+		s.mu.Unlock()
+		cancel()
+	}
+}
+
+// cancelRequest handles notifications/cancelled: the request stops
+// waiting (for Lanflow, for the user's approval). A write already sent
+// to Lanflow may still take effect.
+func (s *Server) cancelRequest(params json.RawMessage) {
+	var p struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if json.Unmarshal(params, &p) != nil || len(p.RequestID) == 0 {
+		return
+	}
+	s.mu.Lock()
+	cancel := s.running[string(p.RequestID)]
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (s *Server) reply(req request, res any) {
@@ -163,9 +218,7 @@ func (s *Server) initialize(params json.RawMessage) any {
 	if name == "" {
 		name = "unknown"
 	}
-	if len(name) > 64 {
-		name = name[:64]
-	}
+	name = clipRunes(name, 64)
 	s.mu.Lock()
 	s.name = name
 	s.mu.Unlock()
@@ -242,9 +295,21 @@ func toolResult(v any, isErr bool) map[string]any {
 		}
 	}
 	if len(text) > maxText {
-		text = text[:maxText] + "\n…（结果过长，已截断）"
+		// Cut text is no longer valid JSON; the note says why.
+		text = clipRunes(text, maxText) + "\n…（结果过长，已截断）"
 	}
 	return map[string]any{"content": []map[string]any{{"type": "text", "text": text}}, "isError": isErr}
+}
+
+// clipRunes cuts s to at most n bytes, not inside a UTF-8 sequence.
+func clipRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 func errorResult(err error) map[string]any {
@@ -278,7 +343,23 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 	}
 	var res any
 	if t.composite != nil {
-		res, err = t.composite(ctx, c, a)
+		// A composite makes several calls: when the client cancels, the
+		// answer is given up at once (the step under way still finishes).
+		type result struct {
+			v   any
+			err error
+		}
+		ch := make(chan result, 1)
+		go func() {
+			v, err := t.composite(ctx, c, a)
+			ch <- result{v, err}
+		}()
+		select {
+		case r := <-ch:
+			res, err = r.v, r.err
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
 	} else {
 		res, err = callMethod(ctx, c, t.method, a)
 	}

@@ -41,6 +41,9 @@ type DialOptions struct {
 	Client  string // ui, ctl or mcp:<name>
 	Version string // this program's Lanflow version
 	Reveal  bool   // ask for sensitive reads (ctl --reveal)
+	// Interactive: ctl run by a person at a terminal (Hello.Interactive);
+	// also set by a context of WithInteractive.
+	Interactive bool
 	// OnEvent receives "changed" notifications after Subscribe, in order,
 	// on a goroutine of their own (it may call the server).
 	OnEvent func(topic string)
@@ -48,6 +51,15 @@ type DialOptions struct {
 	// AttachUI), in order with the events.
 	OnUI    func(UICommand)
 	Timeout time.Duration // dial and handshake, default 3 s
+}
+
+type interactiveKey struct{}
+
+// WithInteractive marks the connections dialed with ctx as `lanflow ctl`
+// run by a person at a terminal (Hello.Interactive), for callers that
+// reach Dial through a wrapper without the option (remote.Dial).
+func WithInteractive(ctx context.Context) context.Context {
+	return context.WithValue(ctx, interactiveKey{}, true)
 }
 
 // Dial connects and performs the handshake. ErrNotRunning means Lanflow
@@ -68,7 +80,9 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 	}
 	c := newConn(nc, o.OnEvent, o.OnUI)
 	var w Welcome
-	if err := c.Call(dctx, "hello", Hello{Protocol: ProtocolVersion, Version: o.Version, Client: o.Client, Reveal: o.Reveal}, &w); err != nil {
+	interactive, _ := ctx.Value(interactiveKey{}).(bool)
+	hello := Hello{Protocol: ProtocolVersion, Version: o.Version, Client: o.Client, Reveal: o.Reveal, Interactive: o.Interactive || interactive}
+	if err := c.Call(dctx, "hello", hello, &w); err != nil {
 		_ = c.Close()
 		return nil, err
 	}

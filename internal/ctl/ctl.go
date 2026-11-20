@@ -4,6 +4,7 @@
 package ctl
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,8 @@ type Env struct {
 	Stdin          io.Reader
 	Stdout, Stderr io.Writer
 	Version        string
-	// Dial connects to Lanflow; nil dials the default endpoint.
+	// Dial connects to Lanflow; nil dials the default endpoint. ctx says
+	// whether a person at a terminal runs the command (rpc.WithInteractive).
 	Dial func(ctx context.Context, reveal bool) (*remote.Client, error)
 }
 
@@ -56,7 +58,7 @@ const usage = `用法: lanflow ctl <命令> [参数] [--format json|table]
   proxies test <代理组>                 测试代理组内节点的延迟
   mode set <rule|global|direct>       切换出站模式
   sub list                            订阅列表（不含订阅链接）
-  sub add <链接> [--name 名称] [--use]  导入订阅
+  sub add <链接|-> [--name 名称] [--use]  导入订阅；- 表示从标准输入读取链接（链接不进入命令历史）
   sub use <ID或名称>                    切换到某个订阅
   sub update [ID或名称|--all]           更新订阅（默认当前订阅）
   rule add <类型> <内容> <目标> [--dry-run]  添加自定义规则，如 DOMAIN-SUFFIX example.com 节点选择
@@ -71,6 +73,11 @@ const usage = `用法: lanflow ctl <命令> [参数] [--format json|table]
   audit [条数]                         最近的审计记录
   methods                             本机接口的方法清单与权限级别
   call <方法> [JSON 参数...]            直接调用本机接口的方法
+
+修改类命令不在终端里运行时（脚本、agent 调用，标准输入或输出不是终端），
+第一次修改需要在澜流界面中确认，与 MCP 相同；影响较大的操作（导入或切换订阅、
+覆写、内核启停、系统代理、TUN、加载配置文件）另行确认：选「仅本次」则每次运行
+都问，选「始终允许」后脚本可无人值守运行（可在 设置 › 高级 › Agent 接入 撤销）。
 
 选项:
   --format json|table   输出格式，默认 json
@@ -160,6 +167,10 @@ func (e usageError) Error() string { return string(e) }
 
 // Main runs `lanflow ctl args...` and returns the exit code.
 func Main(args []string, env Env) int {
+	// A person at a terminal: both ends are the terminal. Anything else
+	// (a pipe, a file, an agent's tool call) is a script, whose writes
+	// Lanflow asks the user about (internal/rpc/guard.go).
+	interactive := env.Stdin == nil && env.Stdout == nil && isTerminal(os.Stdin) && isTerminal(os.Stdout)
 	if env.Stdout == nil {
 		env.Stdout = os.Stdout
 	}
@@ -185,6 +196,9 @@ func Main(args []string, env Env) int {
 		return ExitOK
 	}
 	ctx := context.Background()
+	if interactive {
+		ctx = rpc.WithInteractive(ctx)
+	}
 	c, err := env.Dial(ctx, o.reveal)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "lanflow ctl: %v\n", err)
@@ -242,8 +256,8 @@ func (r *runner) run() (any, error) {
 	cmd, sub := r.arg(0), r.arg(1)
 	switch cmd {
 	case "status":
-		st := r.c.Status()
-		if err := r.read(); err != nil {
+		var st model.Status
+		if err := Read(r.c, "Status", &st); err != nil {
 			return nil, err
 		}
 		return statusView(st, r.c.Subscriptions(), r.c.Proxies()), r.read()
@@ -331,6 +345,29 @@ func (r *runner) run() (any, error) {
 		return res, nil
 	}
 	return nil, usageError(fmt.Sprintf("未知命令 %s", strings.TrimSpace(cmd+" "+sub)))
+}
+
+// Read calls a method of the API without parameters and returns this
+// call's error. (remote.Client.LastError is the error of the last call
+// that failed, which in a long session — `lanflow mcp` — may be an old
+// one: a read that succeeded would be reported as failed.)
+func Read(c *remote.Client, method string, out any) error {
+	return ReadContext(context.Background(), c, method, out)
+}
+
+// ReadContext is Read that ends with ctx.
+func ReadContext(ctx context.Context, c *remote.Client, method string, out any) error {
+	conn := c.Conn()
+	if conn == nil {
+		return remote.ErrDisconnected
+	}
+	d := c.Timeout
+	if d <= 0 {
+		d = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	return conn.CallAPI(ctx, method, nil, out)
 }
 
 // jsonOrString parses s as JSON, or keeps it as a string.
@@ -455,10 +492,21 @@ func (r *runner) subCmd(sub string) (any, error) {
 		subs := r.c.Subscriptions()
 		return subs, r.read()
 	case "add":
-		if err := r.need(3, "sub add <链接>"); err != nil {
+		if err := r.need(3, "sub add <链接|->"); err != nil {
 			return nil, err
 		}
-		s, err := r.c.ImportSubscriptionURL(r.arg(2), r.o.name, "", false, r.o.use)
+		link := r.arg(2)
+		if link == "-" {
+			// From stdin: an argument shows in the shell history and in ps.
+			line, err := bufio.NewReader(io.LimitReader(r.env.Stdin, 64<<10)).ReadString('\n')
+			if err != nil && err != io.EOF {
+				return nil, err
+			}
+			if link = strings.TrimSpace(line); link == "" {
+				return nil, errors.New("标准输入里没有订阅链接")
+			}
+		}
+		s, err := r.c.ImportSubscriptionURL(link, r.o.name, "", false, r.o.use)
 		if err != nil {
 			return nil, err
 		}
@@ -485,8 +533,11 @@ func (r *runner) subCmd(sub string) (any, error) {
 		}
 		key := r.arg(2)
 		if key == "" {
-			key = r.c.Status().CurrentSubscription
-			if key == "" {
+			var st model.Status
+			if err := Read(r.c, "Status", &st); err != nil {
+				return nil, err // not "no subscription in use"
+			}
+			if key = st.CurrentSubscription; key == "" {
 				return nil, errors.New("没有正在使用的订阅；请指定 ID 或名称，或用 --all")
 			}
 		}

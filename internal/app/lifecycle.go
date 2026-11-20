@@ -402,6 +402,12 @@ func (s *Service) stopLocked() (err error) {
 			s.mu.Unlock()
 		}
 	}
+	if proxyErr == nil {
+		// Nothing points at the PAC file any more. After a failed release
+		// the server stays: the system still fetches the file, whose last
+		// resort is DIRECT.
+		s.stopPAC()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	err = s.d.mgr.Stop(ctx)
 	cancel()
@@ -409,6 +415,11 @@ func (s *Service) stopLocked() (err error) {
 	st := &s.state.st
 	st.Core = model.CoreStopped
 	st.CoreError = ""
+	if err != nil {
+		// The core may still run: say so instead of showing it stopped.
+		st.Core = model.CoreError
+		st.CoreError = fmt.Sprintf(i18n.T("停止内核失败：%v"), err)
+	}
 	st.TUN = false
 	s.state.runningTUN = false
 	st.Up, st.Down, st.Memory, st.Connections = 0, 0, 0, 0
@@ -468,16 +479,72 @@ func (s *Service) ensureStarted() error {
 }
 
 // restartLocked stops (without touching the system proxy) and starts again.
+// When the start fails the core stays down, so the system proxy and DNS
+// are let go as after a crash (coreGoneCleanupLocked) rather than left
+// pointing at a core that is not there; the error says so.
 func (s *Service) restartLocked() (err error) {
 	defer func() { s.logOp("restart core", err) }()
 	s.stopStreams()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	_ = s.d.mgr.Stop(ctx)
+	if serr := s.d.mgr.Stop(ctx); serr != nil {
+		s.alog.Warnf("restart core: stop: %v", serr) // the start below reports a core that stayed
+	}
 	cancel()
 	s.mu.Lock()
 	s.state.st.Core = model.CoreStopped
 	s.mu.Unlock()
-	return s.startLocked()
+	if err = s.startLocked(); err == nil {
+		return nil
+	}
+	s.mu.Lock()
+	s.state.st.Up, s.state.st.Down, s.state.st.Connections = 0, 0, 0
+	s.setConnsLocked(nil)
+	s.state.routes = nil
+	s.mu.Unlock()
+	s.em.emit(TopicConns, TopicExits)
+	switch g := s.coreGoneCleanupLocked(); {
+	case !g.ours:
+		return err
+	case g.proxyErr != nil:
+		return fmt.Errorf(i18n.T("%w。关闭系统代理失败（%v），请在系统设置中手动关闭代理。"), err, g.proxyErr)
+	default:
+		return fmt.Errorf(i18n.T("%w。系统代理已关闭，内核恢复后请重新打开。"), err)
+	}
+}
+
+// coreGone is what coreGoneCleanupLocked found and did.
+type coreGone struct {
+	ours     bool  // Lanflow had set the system proxy
+	tun      bool  // the core that went away ran with TUN
+	proxyErr error // the system proxy could not be released: it still points at the core
+}
+
+// coreGoneCleanupLocked lets go of everything that points the system at a
+// core that is gone (a crash, a restart whose start failed), so the user
+// is not left without network: the system proxy Lanflow set is released,
+// TUN is marked off and the system DNS put back. A proxy that cannot be
+// released stays Lanflow's (weSetProxy), is logged and reported in the
+// result. opMu must be held.
+func (s *Service) coreGoneCleanupLocked() coreGone {
+	s.mu.Lock()
+	g := coreGone{ours: s.state.weSetProxy, tun: s.state.runningTUN}
+	s.state.runningTUN = false
+	s.state.st.TUN = false
+	s.mu.Unlock()
+	if g.ours {
+		if g.proxyErr = s.releaseProxy(); g.proxyErr == nil {
+			s.mu.Lock()
+			s.state.weSetProxy = false
+			s.state.st.SystemProxy = false
+			s.mu.Unlock()
+			s.stopPAC()
+		} else {
+			s.alog.Errorf("the core is gone and the system proxy could not be restored: %v", g.proxyErr)
+		}
+	}
+	s.em.emit(TopicStatus)
+	s.releaseDNS() // a later start sets it again when TUN comes back
+	return g
 }
 
 // reloadLocked recomposes, validates and hot-reloads the running core.
@@ -587,13 +654,24 @@ func (s *Service) handleCrash(cause error) {
 	}
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
-	s.stopStreams()
+	if s.d.mgr.Running() {
+		// The report is stale or a duplicate: the operation that held opMu
+		// while the core exited has started it again since (a restart, a
+		// TUN switch), or the same exit was already handled through the
+		// other path (watchCrashes and the wake recheck both report it).
+		// The manager marks itself stopped before it reports an exit, so a
+		// running manager means this report is not about the current core.
+		s.alog.Infof("ignored a stale core exit report, the core is running: %v", cause)
+		return
+	}
 	s.mu.Lock()
 	if s.state.st.Core != model.CoreRunning && s.state.st.Core != model.CoreStarting {
 		s.mu.Unlock()
 		return // a stop we requested raced with the exit report
 	}
-	ours := s.state.weSetProxy
+	s.mu.Unlock()
+	s.stopStreams()
+	s.mu.Lock()
 	last := s.state.lastAutoStart
 	now := s.d.now()
 	s.state.st.Core = model.CoreError
@@ -605,28 +683,20 @@ func (s *Service) handleCrash(cause error) {
 	s.em.emit(TopicStatus, TopicConns, TopicExits)
 	s.recordCoreExit(cause)
 
-	if ours {
-		if err := s.releaseProxy(); err == nil {
-			s.mu.Lock()
-			s.state.weSetProxy = false
-			s.state.st.SystemProxy = false
-			s.mu.Unlock()
-			s.em.emit(TopicStatus)
-		}
-	}
-	s.mu.Lock()
-	tun := s.state.runningTUN
-	s.state.runningTUN = false
-	s.mu.Unlock()
-	s.releaseDNS() // the restart below sets it again when TUN comes back
+	g := s.coreGoneCleanupLocked() // the restart below sets the DNS again when TUN comes back
 	if errors.Is(cause, core.ErrStateUnknown) && s.d.stray != nil {
 		// The helper went silent: the core may well still run and hold
 		// its ports, which would fail the restart below.
 		sctx, scancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := s.d.stray.Stop(sctx, s.workDir, tun); err != nil {
+		if err := s.d.stray.Stop(sctx, s.workDir, g.tun); err != nil {
 			s.alog.Warnf("stop the core of unknown state: %v", err)
 		}
 		scancel()
+	}
+	// What to tell the user about the system proxy when it is not restored.
+	proxyOff := i18n.T("系统代理已关闭，请在需要时重新打开。")
+	if g.proxyErr != nil {
+		proxyOff = i18n.Tf("关闭系统代理失败（%v），请在系统设置中手动关闭代理。", g.proxyErr)
 	}
 
 	if s.rootCtx.Err() == nil && (last.IsZero() || now.Sub(last) > autoRestartGap) {
@@ -634,8 +704,8 @@ func (s *Service) handleCrash(cause error) {
 		s.state.lastAutoStart = now
 		s.mu.Unlock()
 		if err := s.startLocked(); err == nil {
-			detail := i18n.T("系统代理已关闭，请在需要时重新打开。")
-			if ours {
+			detail := proxyOff
+			if g.ours {
 				if err := s.setSystemProxyLocked(true); err == nil {
 					detail = i18n.T("系统代理已恢复。")
 				}
@@ -649,5 +719,9 @@ func (s *Service) handleCrash(cause error) {
 	s.state.st.CoreError = msg
 	s.mu.Unlock()
 	s.em.emit(TopicStatus)
-	s.notify(Notice{Kind: "core-crash", Title: i18n.T("Mihomo 内核意外退出"), Detail: i18n.Tf("%s。系统代理已关闭。可在「日志」中查看原因，或重新启动内核。", msg), System: true})
+	detail := i18n.Tf("%s。系统代理已关闭。可在「日志」中查看原因，或重新启动内核。", msg)
+	if g.proxyErr != nil {
+		detail = i18n.Tf("%s。%s可在「日志」中查看原因，或重新启动内核。", msg, proxyOff)
+	}
+	s.notify(Notice{Kind: "core-crash", Title: i18n.T("Mihomo 内核意外退出"), Detail: detail, System: true})
 }

@@ -11,6 +11,9 @@
 //
 // Pages read state from e.API on every build (reads are cheap snapshots)
 // and run actions with e.Run (never call API actions on the UI thread).
+// A page's own state is read and written on the UI thread only: a job
+// that has a result for it runs through e.Then, whose done function
+// writes the state there (the job itself must not).
 package env
 
 import (
@@ -109,11 +112,27 @@ type Env struct {
 	// on success it toasts okMsg (if non-empty); it always redraws.
 	Run func(job func() error, okMsg string)
 
+	// RunThen runs job off the UI thread and then done, with job's error,
+	// on the UI thread before the next build; it redraws. Nothing is
+	// toasted: done says what the outcome means. It is how a page changes
+	// its own state after background work: job only computes (into
+	// variables done reads), done writes the fields the view reads, so the
+	// view needs no lock. A nil job just queues done for the UI thread,
+	// from any goroutine. Nil in Env values without a shell (tests): use
+	// the Then method, which then runs both at once.
+	RunThen func(job func() error, done func(err error))
+
 	// Confirm shows a modal confirmation; onOK runs on the UI thread.
 	Confirm func(title, body, okLabel string, danger bool, onOK func())
 
 	// Redraw requests a new frame (safe from any goroutine).
 	Redraw func()
+
+	// RedrawData requests a frame as Redraw does, but rate limited the
+	// way the shell limits frames for service data: for progress that
+	// ticks many times a second. Nil without a shell; use the Progress
+	// method.
+	RedrawData func()
 
 	// Mac is true on macOS (labels: 访达/菜单栏 vs 资源管理器/通知区域, ⌘ vs Ctrl).
 	Mac bool
@@ -140,6 +159,41 @@ type Env struct {
 
 	// panes holds each PaneSize key's last loaded or saved size.
 	panes map[string]float32
+}
+
+// Then is RunThen: job off the UI thread, then done(err) on the UI
+// thread. In an Env without RunThen (tests without a shell) both run at
+// once on the calling goroutine.
+func (e *Env) Then(job func() error, done func(err error)) {
+	if e.RunThen != nil {
+		e.RunThen(job, done)
+		return
+	}
+	var err error
+	if job != nil {
+		err = job()
+	}
+	if done != nil {
+		done(err)
+	}
+	if e.Redraw != nil {
+		e.Redraw()
+	}
+}
+
+// OnUI runs fn on the UI thread before the next build; safe from any
+// goroutine (a job reporting progress, a system dialog's goroutine).
+func (e *Env) OnUI(fn func()) { e.Then(nil, func(error) { fn() }) }
+
+// Progress requests a rate-limited frame (RedrawData), or a plain one in
+// an Env without it; safe from any goroutine.
+func (e *Env) Progress() {
+	switch {
+	case e.RedrawData != nil:
+		e.RedrawData()
+	case e.Redraw != nil:
+		e.Redraw()
+	}
 }
 
 // Kit draws the shared, native-looking building blocks (see docs/design.md §3).

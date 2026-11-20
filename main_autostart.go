@@ -50,8 +50,8 @@ func queueAutostart(exe string, open bool) {
 }
 
 // applyAutostart (through queueAutostart) makes the login start the service process
-// (internal/autostart: a launch agent on macOS, a Run entry on Windows)
-// when Settings.OpenAtLogin is on. The login item of the versions before
+// (internal/autostart: a launch agent on macOS, a Run entry on Windows, an
+// XDG autostart entry on Linux) when Settings.OpenAtLogin is on. The login item of the versions before
 // the split (MyGo's, which opens the app, i.e. the window) is removed the
 // first time: the service started at login opens the window itself
 // unless Settings.SilentStart (docs/service-split.md S3).

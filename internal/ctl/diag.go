@@ -45,20 +45,33 @@ func Diagnose(c *remote.Client, run bool) (DiagReport, error) {
 			rep.Findings = append(rep.Findings, "泄漏检查无法完成: "+err.Error())
 		}
 	}
-	st := c.Status()
-	if err := c.LastError(); err != nil {
+	// Each read's own error (Read): the first one is the report's.
+	var err error
+	get := func(method string, out any) {
+		if e := Read(c, method, out); e != nil && err == nil {
+			err = e
+		}
+	}
+	var st model.Status
+	if get("Status", &st); err != nil {
 		return rep, err
 	}
-	rep.Status = statusView(st, c.Subscriptions(), c.Proxies())
-	rep.Network = c.NetInfo()
-	d := c.EffectiveDNS()
+	var subs []model.Subscription
+	var px model.ProxySnapshot
+	get("Subscriptions", &subs)
+	get("Proxies", &px)
+	rep.Status = statusView(st, subs, px)
+	get("NetInfo", &rep.Network)
+	var d model.EffectiveDNS
+	get("EffectiveDNS", &d)
 	rep.DNS = DiagDNS{Source: d.Source, Enabled: d.Enabled, EnhancedMode: d.Settings.EnhancedMode, Nameserver: d.Settings.Nameserver}
 	for i, ns := range rep.DNS.Nameserver {
 		rep.DNS.Nameserver[i] = applog.Redact(ns)
 	}
-	rep.Sites = c.Sites()
-	rep.Leak = c.LeakCheck()
-	logs := c.AppLogs()
+	get("Sites", &rep.Sites)
+	get("LeakCheck", &rep.Leak)
+	var logs []model.LogEntry
+	get("AppLogs", &logs)
 	for i := len(logs) - 1; i >= 0 && len(rep.RecentLog) < 10; i-- {
 		if logs[i].Level == applog.Warn || logs[i].Level == applog.Error {
 			rep.RecentLog = append([]model.LogEntry{logs[i]}, rep.RecentLog...)
@@ -68,7 +81,7 @@ func Diagnose(c *remote.Client, run bool) (DiagReport, error) {
 	if len(rep.Findings) == 0 {
 		rep.Findings = []string{"没有发现明显问题"}
 	}
-	return rep, c.LastError()
+	return rep, err
 }
 
 func findings(st model.Status, rep DiagReport) []string {
@@ -133,8 +146,8 @@ type SiteReport struct {
 func DiagnoseSite(c *remote.Client, host string) (SiteReport, error) {
 	host = CleanHost(host)
 	rep := SiteReport{Host: host}
-	st := c.Status()
-	if err := c.LastError(); err != nil {
+	var st model.Status
+	if err := Read(c, "Status", &st); err != nil {
 		return rep, err
 	}
 	px := c.Proxies()

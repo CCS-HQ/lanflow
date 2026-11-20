@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -27,6 +28,19 @@ import (
 // config of the current subscription with `mihomo -t`. Then the store is
 // written and the settings go through SaveSettings, which applies them
 // hot, reloads or restarts the core as each change needs.
+//
+// Loading is all or nothing. When a step after the checks fails (the
+// disk, a port taken in the meantime, a reload the core refuses), what
+// was already written is put back (restorePlan), so "not loaded" means
+// this machine has exactly what it had. Subscriptions the file drops are
+// deleted last, when nothing can fail any more: a deletion takes the
+// downloaded content with it and could not be undone.
+//
+// Errors come in two kinds. A *docError from planning says the document
+// itself is wrong, and the same content will never load. Everything from
+// checkPlan on is wrapped in *retryError: it depends on this machine now
+// (a port in use, an older core, a timeout, the disk) and the same
+// content may load later, so configuration sync tries it again.
 
 // docError is a problem with one part of the document; path locates it
 // for the line number (syncfile.LineOf).
@@ -37,6 +51,35 @@ type docError struct {
 
 func (e *docError) Error() string { return e.path + i18n.T("：") + e.err.Error() }
 func (e *docError) Unwrap() error { return e.err }
+
+// retryError marks a failure to load a document that is not the
+// document's fault: the same content may load later.
+//
+// limited marks a failure of composing or validating the configuration
+// (checkPlan's `mihomo -t`). It may be this machine's (an older core, a
+// timeout) or the document's own (an override that makes the config
+// invalid), and nothing tells the two apart, so it is tried a few times
+// and then left to the user rather than run every hour for good.
+type retryError struct {
+	err     error
+	limited bool
+}
+
+func (e *retryError) Error() string { return e.err.Error() }
+func (e *retryError) Unwrap() error { return e.err }
+
+// retryable reports whether err is worth trying the same content again,
+// and how often at most (0 = as long as it fails).
+func retryable(err error) (retry bool, limit int) {
+	var re *retryError
+	if !errors.As(err, &re) {
+		return false, 0
+	}
+	if re.limited {
+		return true, syncRetryLimited
+	}
+	return true, 0
+}
 
 // applyPlan is what loading a document changes.
 type applyPlan struct {
@@ -200,15 +243,32 @@ func (s *Service) applyDoc(doc syncfile.Doc, dryRun bool) (model.ConfigApplyResu
 		return res, nil
 	}
 	if err := s.checkPlan(p); err != nil {
-		return res, err
+		var de *docError
+		return res, &retryError{err: err, limited: !errors.As(err, &de)}
 	}
 	if err := s.storePlan(p); err != nil {
-		return res, fmt.Errorf(i18n.T("保存配置失败，可能只加载了一部分：%v"), err)
+		if rerr := s.restorePlan(p); rerr != nil {
+			s.alog.Errorf("config load: undo after a failed save: %v", rerr)
+			return res, &retryError{err: fmt.Errorf(i18n.T("保存配置失败，可能只加载了一部分：%v"), err)}
+		}
+		return res, &retryError{err: fmt.Errorf(i18n.T("保存配置失败，已恢复原有配置：%v"), err)}
 	}
-	if err := s.applyPlanSettings(p); err != nil {
-		return res, err
+	warn, err := s.applyPlanSettings(p)
+	if err != nil {
+		if rerr := s.restorePlan(p); rerr != nil {
+			s.alog.Errorf("config load: undo after a failed apply: %v", rerr)
+			err = fmt.Errorf(i18n.T("%w（恢复原有配置时又出错，可能只加载了一部分：%v）"), err, rerr)
+		}
+		return res, &retryError{err: err}
 	}
+	// Nothing can fail the load any more: drop what the file no longer has.
+	s.dropPlan(p)
 	res.Applied = true
+	if warn != nil {
+		// loaded and in force; only a follow-up step failed
+		s.alog.Warnf("config load: %v", warn)
+		s.notify(Notice{Kind: "error", Title: i18n.T("配置已加载，但有一步未完成"), Detail: warn.Error()})
+	}
 	for _, id := range p.fresh {
 		id := id
 		s.goBackground(func() { s.downloadSynced(id) })
@@ -271,6 +331,7 @@ func (s *Service) checkPlan(p *applyPlan) error {
 }
 
 // storePlan writes the subscriptions, overrides and rules of the plan.
+// Subscriptions the file drops are deleted later (dropPlan).
 func (s *Service) storePlan(p *applyPlan) error {
 	st := s.d.store
 	for _, sub := range p.put {
@@ -278,10 +339,25 @@ func (s *Service) storePlan(p *applyPlan) error {
 			return err
 		}
 	}
-	// overrides: update or add, drop the others, then order as the file
-	want := map[string]bool{}
-	for _, o := range p.next.ovs {
-		want[o.ID] = true
+	if err := s.storeOverrides(p.next.ovs); err != nil {
+		return err
+	}
+	if !rulesEqual(p.cur.rules, p.next.rules) {
+		if _, err := st.SetCustomRules(p.next.rules); err != nil {
+			return err
+		}
+	}
+	s.refreshStore(TopicSubs, TopicSettings, TopicRules)
+	return nil
+}
+
+// storeOverrides makes the store's override list exactly want: update or
+// add, drop the others, then order as want.
+func (s *Service) storeOverrides(want []model.Override) error {
+	st := s.d.store
+	keep := map[string]bool{}
+	for _, o := range want {
+		keep[o.ID] = true
 		if old, ok := st.GetOverride(o.ID); ok && old == o {
 			continue
 		}
@@ -290,13 +366,13 @@ func (s *Service) storePlan(p *applyPlan) error {
 		}
 	}
 	for _, o := range st.Overrides() {
-		if !want[o.ID] {
+		if !keep[o.ID] {
 			if err := st.DeleteOverride(o.ID); err != nil {
 				return err
 			}
 		}
 	}
-	for i, o := range p.next.ovs {
+	for i, o := range want {
 		for j, have := range st.Overrides() {
 			if have.ID == o.ID && j != i {
 				if err := st.MoveOverride(o.ID, i-j); err != nil {
@@ -306,19 +382,61 @@ func (s *Service) storePlan(p *applyPlan) error {
 			}
 		}
 	}
-	if !rulesEqual(p.cur.rules, p.next.rules) {
-		if _, err := st.SetCustomRules(p.next.rules); err != nil {
-			return err
-		}
+	return nil
+}
+
+// dropPlan deletes the URL subscriptions the file no longer has, with
+// their keychain links. It runs after everything else succeeded; a
+// failure here is logged and leaves a subscription the next load drops.
+func (s *Service) dropPlan(p *applyPlan) {
+	if len(p.del) == 0 {
+		return
 	}
 	for _, sub := range p.del {
-		if err := st.Delete(sub.ID); err != nil {
-			return err
+		if err := s.d.store.Delete(sub.ID); err != nil {
+			s.alog.Warnf("config load: delete subscription %s: %v", sub.ID, err)
+			continue
 		}
 		s.forgetLinkSecret(sub.ID)
 	}
+	s.refreshStore(TopicSubs, TopicSettings)
+}
+
+// restorePlan puts the store back to what it was before storePlan: the
+// override list, the custom rules, and every subscription record the
+// plan (or dropping an override, which also leaves the selections of
+// subscriptions) changed; subscriptions the plan added are removed. It
+// goes on after an error and returns the first.
+func (s *Service) restorePlan(p *applyPlan) error {
+	st := s.d.store
+	var first error
+	note := func(err error) {
+		if err != nil && first == nil {
+			first = err
+		}
+	}
+	note(s.storeOverrides(p.cur.ovs))
+	if !rulesEqual(p.cur.rules, st.CustomRules()) {
+		_, err := st.SetCustomRules(p.cur.rules)
+		note(err)
+	}
+	was := map[string]bool{}
+	for _, old := range p.cur.subs {
+		was[old.ID] = true
+		if now, ok := st.Get(old.ID); !ok || !subEqual(now, old) {
+			_, err := st.Put(old)
+			note(err)
+		}
+	}
+	for _, sub := range p.put {
+		if !was[sub.ID] {
+			if _, ok := st.Get(sub.ID); ok {
+				note(st.Delete(sub.ID))
+			}
+		}
+	}
 	s.refreshStore(TopicSubs, TopicSettings, TopicRules)
-	return nil
+	return first
 }
 
 func rulesEqual(a, b []model.CustomRule) bool {
@@ -336,7 +454,11 @@ func rulesEqual(a, b []model.CustomRule) bool {
 // applyPlanSettings brings the core up to date: SaveSettings for changed
 // settings (hot, reload or restart as each change needs), a reload when
 // only the store changed what the current subscription composes.
-func (s *Service) applyPlanSettings(p *applyPlan) error {
+//
+// err means the plan is not in force, and the settings are what they
+// were: the caller puts the store back. warn means it is in force and
+// only a follow-up step failed (the system proxy did not follow).
+func (s *Service) applyPlanSettings(p *applyPlan) (warn, err error) {
 	settingsChanged := false
 	storeChanged := false
 	for _, c := range p.changed {
@@ -348,8 +470,15 @@ func (s *Service) applyPlanSettings(p *applyPlan) error {
 	}
 	reloaded := false
 	if settingsChanged {
-		if err := s.SaveSettings(p.next.set); err != nil {
-			return &docError{"settings", err}
+		if err := s.saveSettingsFrom(p.next.set, true); err != nil {
+			var w *settingsWarning
+			if !errors.As(err, &w) {
+				// refused or reverted (SaveSettings restores the previous
+				// settings when applying them fails); make sure of it
+				s.undoPlanSettings(p)
+				return nil, &docError{"settings", err}
+			}
+			warn = err
 		}
 		reloaded = needsReload(p.cur.set, p.next.set) || advancedNeedsReload(p.cur.set.Advanced, p.next.set.Advanced)
 	}
@@ -358,10 +487,27 @@ func (s *Service) applyPlanSettings(p *applyPlan) error {
 		err := s.reloadLocked()
 		s.opMu.Unlock()
 		if err != nil {
-			return err
+			if settingsChanged {
+				s.undoPlanSettings(p)
+			}
+			return nil, err
 		}
 	}
-	return nil
+	return warn, nil
+}
+
+// undoPlanSettings makes the settings what they were before the plan,
+// when a later step of loading it failed. Best effort: the error that
+// made the load fail is the one reported.
+func (s *Service) undoPlanSettings(p *applyPlan) {
+	cur := s.Settings()
+	back := syncfile.KeepLocal(copySettings(p.cur.set), cur) // machine-local items as they are now
+	if reflect.DeepEqual(copySettings(cur), back) {
+		return // SaveSettings refused the change, or already reverted it
+	}
+	if err := s.saveSettingsFrom(back, true); err != nil {
+		s.alog.Warnf("config load: restore the previous settings: %v", err)
+	}
 }
 
 // downloadSynced fetches a subscription that arrived through the file;
@@ -433,6 +579,7 @@ func (s *Service) ApplyConfigFile(path string, dryRun bool) (res model.ConfigApp
 	if !dryRun && path == syncPath {
 		// loaded: the poller must not load it again
 		s.rememberHash(path, syncfile.Hash(data))
+		s.releaseHeld()
 		s.primeSeal(doc)
 		s.adoptWebDAVPassword(webdav)
 		s.cs.mu.Lock()

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -26,15 +27,26 @@ var sensitiveHeaders = map[string]bool{
 	"x-api-key": true, "x-auth-token": true, "x-csrf-token": true, "x-xsrf-token": true,
 }
 
-var sensitiveName = regexp.MustCompile(`(?i)(token|secret|session|password|passwd|signature|api[-_]?key|auth)`)
+// Names that hold credentials wherever they appear in a name, and the
+// short ones (pass, pwd, sid) that are only meant as a word of their own:
+// "user_pass", "userPass" and "connect.sid", not "passenger" or "inside".
+var (
+	sensitiveName  = regexp.MustCompile(`(?i)(token|secret|session|password|passwd|passphrase|signature|api[-_]?key|auth|cookie|credential|bearer|jwt)`)
+	sensitiveWord  = regexp.MustCompile(`(?i)(^|[^a-z0-9])(pass|pwd|sid)($|[^a-z0-9])`)
+	sensitiveCamel = regexp.MustCompile(`[a-z0-9](Pass|Pwd|Sid)($|[^a-z])`)
+)
+
+func sensitive(name string) bool {
+	return sensitiveName.MatchString(name) || sensitiveWord.MatchString(name) || sensitiveCamel.MatchString(name)
+}
 
 // SensitiveHeader reports a header masked by default.
 func SensitiveHeader(name string) bool {
-	return sensitiveHeaders[strings.ToLower(name)] || sensitiveName.MatchString(name)
+	return sensitiveHeaders[strings.ToLower(name)] || sensitive(name)
 }
 
 // SensitiveKey reports a query parameter, form field or JSON key masked by default.
-func SensitiveKey(name string) bool { return sensitiveName.MatchString(name) }
+func SensitiveKey(name string) bool { return sensitive(name) }
 
 // Mask shows the first four characters and the length: "abcd…(32 B)";
 // values of eight bytes or less show only the length.
@@ -147,11 +159,7 @@ func Body(body []byte, contentType string) []byte {
 	}
 	switch kind {
 	case "json":
-		var v any
-		if json.Unmarshal(body, &v) != nil {
-			return body
-		}
-		b, err := json.MarshalIndent(maskJSON(v), "", "  ")
+		b, err := maskJSON(body)
 		if err != nil {
 			return body
 		}
@@ -184,22 +192,98 @@ func looksForm(b []byte) bool {
 	return bytes.IndexByte(b, '=') > 0 && !bytes.ContainsAny(b, " \n\r\t{}\"")
 }
 
-func maskJSON(v any) any {
-	switch x := v.(type) {
-	case map[string]any:
-		for k, val := range x {
-			if s, ok := val.(string); ok && SensitiveKey(k) {
-				x[k] = Mask(s)
-				continue
-			}
-			x[k] = maskJSON(val)
-		}
-	case []any:
-		for i := range x {
-			x[i] = maskJSON(x[i])
+// maskJSON re-indents a JSON document with the values under sensitive
+// keys masked: strings and numbers, and everything inside an object or
+// array found there ({"auth":{"user":…}}, {"tokens":[…]}). The document is
+// rewritten token by token, so keys keep their order and numbers their
+// digits (decoding into Go values would sort the keys and round integers
+// beyond 2^53).
+func maskJSON(body []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var out bytes.Buffer
+	if err := maskValue(dec, &out, 0, false); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("redact: data after the JSON value")
+	}
+	return out.Bytes(), nil
+}
+
+const maxJSONDepth = 512
+
+func maskValue(dec *json.Decoder, out *bytes.Buffer, depth int, mask bool) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if depth > maxJSONDepth {
+		return fmt.Errorf("redact: JSON nested too deeply")
+	}
+	quote := func(s string) {
+		b, _ := json.Marshal(s)
+		out.Write(b)
+	}
+	indent := func(n int) {
+		out.WriteByte('\n')
+		for i := 0; i < n; i++ {
+			out.WriteString("  ")
 		}
 	}
-	return v
+	switch t := tok.(type) {
+	case json.Delim:
+		open, end := byte(t), byte('}')
+		if t == '[' {
+			end = ']'
+		}
+		out.WriteByte(open)
+		n := 0
+		for dec.More() {
+			if n > 0 {
+				out.WriteByte(',')
+			}
+			n++
+			indent(depth + 1)
+			inner := mask
+			if open == '{' {
+				kt, err := dec.Token()
+				if err != nil {
+					return err
+				}
+				k, _ := kt.(string)
+				quote(k)
+				out.WriteString(": ")
+				inner = mask || SensitiveKey(k)
+			}
+			if err := maskValue(dec, out, depth+1, inner); err != nil {
+				return err
+			}
+		}
+		if _, err := dec.Token(); err != nil { // the closing delimiter
+			return err
+		}
+		if n > 0 {
+			indent(depth)
+		}
+		out.WriteByte(end)
+	case string:
+		if mask {
+			t = Mask(t)
+		}
+		quote(t)
+	case json.Number:
+		if mask {
+			quote(Mask(t.String()))
+		} else {
+			out.WriteString(t.String())
+		}
+	case bool:
+		out.WriteString(strconv.FormatBool(t))
+	case nil:
+		out.WriteString("null")
+	}
+	return nil
 }
 
 // Structure reduces a body to its shape: JSON keys with types and

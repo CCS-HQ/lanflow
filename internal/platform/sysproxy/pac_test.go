@@ -32,13 +32,13 @@ func TestDarwinSetPACCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"networksetup -listallnetworkservices",
-		"networksetup -setautoproxyurl USB 10/100/1000 LAN http://127.0.0.1:11233/proxy.pac",
-		"networksetup -setautoproxystate USB 10/100/1000 LAN on",
-		"networksetup -setautoproxyurl Wi-Fi http://127.0.0.1:11233/proxy.pac",
-		"networksetup -setautoproxystate Wi-Fi on",
-		"networksetup -setautoproxyurl iPhone USB http://127.0.0.1:11233/proxy.pac",
-		"networksetup -setautoproxystate iPhone USB on",
+		"/usr/sbin/networksetup -listallnetworkservices",
+		"/usr/sbin/networksetup -setautoproxyurl USB 10/100/1000 LAN http://127.0.0.1:11233/proxy.pac",
+		"/usr/sbin/networksetup -setautoproxystate USB 10/100/1000 LAN on",
+		"/usr/sbin/networksetup -setautoproxyurl Wi-Fi http://127.0.0.1:11233/proxy.pac",
+		"/usr/sbin/networksetup -setautoproxystate Wi-Fi on",
+		"/usr/sbin/networksetup -setautoproxyurl iPhone USB http://127.0.0.1:11233/proxy.pac",
+		"/usr/sbin/networksetup -setautoproxystate iPhone USB on",
 	}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Fatalf("set PAC:\n got %q\nwant %q", f.calls, want)
@@ -48,10 +48,10 @@ func TestDarwinSetPACCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	want = []string{
-		"networksetup -listallnetworkservices",
-		"networksetup -setautoproxystate USB 10/100/1000 LAN off",
-		"networksetup -setautoproxystate Wi-Fi off",
-		"networksetup -setautoproxystate iPhone USB off",
+		"/usr/sbin/networksetup -listallnetworkservices",
+		"/usr/sbin/networksetup -setautoproxystate USB 10/100/1000 LAN off",
+		"/usr/sbin/networksetup -setautoproxystate Wi-Fi off",
+		"/usr/sbin/networksetup -setautoproxystate iPhone USB off",
 	}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Fatalf("clear PAC:\n got %q\nwant %q", f.calls, want)
@@ -76,12 +76,12 @@ func TestParseGetAutoProxy(t *testing.T) {
 // is put back, URL and state.
 func TestDarwinSnapshotRestoresForeignPAC(t *testing.T) {
 	f := newFake()
-	f.outputs["networksetup -listallnetworkservices"] = "Wi-Fi\n"
-	f.outputs["networksetup -getwebproxy Wi-Fi"] = "Enabled: No\nServer: \nPort: 0\n"
-	f.outputs["networksetup -getsecurewebproxy Wi-Fi"] = "Enabled: No\nServer: \nPort: 0\n"
-	f.outputs["networksetup -getsocksfirewallproxy Wi-Fi"] = "Enabled: No\nServer: \nPort: 0\n"
-	f.outputs["networksetup -getproxybypassdomains Wi-Fi"] = "There aren't any bypass domains set on Wi-Fi.\n"
-	f.outputs["networksetup -getautoproxyurl Wi-Fi"] = "URL: http://pac.corp/proxy.pac\nEnabled: Yes\n"
+	f.outputs["/usr/sbin/networksetup -listallnetworkservices"] = "Wi-Fi\n"
+	f.outputs["/usr/sbin/networksetup -getwebproxy Wi-Fi"] = "Enabled: No\nServer: \nPort: 0\n"
+	f.outputs["/usr/sbin/networksetup -getsecurewebproxy Wi-Fi"] = "Enabled: No\nServer: \nPort: 0\n"
+	f.outputs["/usr/sbin/networksetup -getsocksfirewallproxy Wi-Fi"] = "Enabled: No\nServer: \nPort: 0\n"
+	f.outputs["/usr/sbin/networksetup -getproxybypassdomains Wi-Fi"] = "There aren't any bypass domains set on Wi-Fi.\n"
+	f.outputs["/usr/sbin/networksetup -getautoproxyurl Wi-Fi"] = "URL: http://pac.corp/proxy.pac\nEnabled: Yes\n"
 	saved, err := darwinSnapshot(context.Background(), f.run)
 	if err != nil {
 		t.Fatal(err)
@@ -91,13 +91,13 @@ func TestDarwinSnapshotRestoresForeignPAC(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"networksetup -listallnetworkservices",
-		"networksetup -setwebproxystate Wi-Fi off",
-		"networksetup -setsecurewebproxystate Wi-Fi off",
-		"networksetup -setsocksfirewallproxystate Wi-Fi off",
-		"networksetup -setproxybypassdomains Wi-Fi Empty",
-		"networksetup -setautoproxyurl Wi-Fi http://pac.corp/proxy.pac",
-		"networksetup -setautoproxystate Wi-Fi on",
+		"/usr/sbin/networksetup -listallnetworkservices",
+		"/usr/sbin/networksetup -setwebproxystate Wi-Fi off",
+		"/usr/sbin/networksetup -setsecurewebproxystate Wi-Fi off",
+		"/usr/sbin/networksetup -setsocksfirewallproxystate Wi-Fi off",
+		"/usr/sbin/networksetup -setproxybypassdomains Wi-Fi Empty",
+		"/usr/sbin/networksetup -setautoproxyurl Wi-Fi http://pac.corp/proxy.pac",
+		"/usr/sbin/networksetup -setautoproxystate Wi-Fi on",
 	}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Fatalf("restore:\n got %q\nwant %q", f.calls, want)
@@ -108,13 +108,13 @@ func TestDarwinSnapshotRestoresForeignPAC(t *testing.T) {
 // field (older build) restores nothing about PAC.
 func TestDarwinRestoreOldSnapshotLeavesPAC(t *testing.T) {
 	f := newFake()
-	f.outputs["networksetup -listallnetworkservices"] = "Wi-Fi\n"
+	f.outputs["/usr/sbin/networksetup -listallnetworkservices"] = "Wi-Fi\n"
 	saved := Saved(`{"os":"darwin","services":[{"name":"Wi-Fi","web":{"on":false},"secure":{"on":false},"socks":{"on":false}}]}`)
 	if err := darwinRestore(context.Background(), f.run, saved); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range f.calls {
-		if reflect.DeepEqual(c[:len("networksetup -setauto")], "networksetup -setauto") {
+		if reflect.DeepEqual(c[:len("/usr/sbin/networksetup -setauto")], "/usr/sbin/networksetup -setauto") {
 			t.Fatalf("old snapshot must not touch PAC: %q", f.calls)
 		}
 	}

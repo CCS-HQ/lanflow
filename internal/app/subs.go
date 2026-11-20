@@ -298,17 +298,38 @@ func (s *Service) UpdateSubscription(id string) (err error) {
 	return err
 }
 
+// errSubChanged is what an update says when the subscription's link was
+// changed while its old link was being downloaded.
+var errSubChanged = i18n.Error("订阅在更新期间被修改了，本次下载的内容已放弃，请重新更新。")
+
+// mergeSub applies fn to the subscription's record as it is in the store
+// now and writes it back. A download may take minutes, and the record
+// read before it must not be written back whole: an edit, an override
+// selection or a change loaded from the sync file made meanwhile would be
+// undone. A subscription deleted meanwhile is not brought back.
+func (s *Service) mergeSub(id string, fn func(*model.Subscription)) (model.Subscription, error) {
+	cur, ok := s.d.store.Get(id)
+	if !ok {
+		return cur, errors.New(i18n.T("订阅不存在，可能已被删除。"))
+	}
+	fn(&cur)
+	return s.d.store.Put(cur)
+}
+
 // updateOne downloads, validates and stores a subscription's new content,
 // reloading the core when it is the current one. The record's LastError
 // explains failures; the stored content is replaced only when the new one
-// passes validation.
+// passes validation. sub is the record as it was when the update began:
+// it says where to download from, and only what the download found out
+// is merged into the stored record afterwards (mergeSub).
 func (s *Service) updateOne(sub model.Subscription) error {
+	id := sub.ID
 	fail := func(err error) error {
-		sub.LastError = err.Error()
-		_, _ = s.d.store.Put(sub)
+		_, _ = s.mergeSub(id, func(cur *model.Subscription) { cur.LastError = err.Error() })
 		return err
 	}
 	var data []byte
+	var merge func(cur *model.Subscription) // what the download changes in the record
 	switch sub.Source {
 	case urlSubscriptionK:
 		if sub.URL == "" {
@@ -326,9 +347,12 @@ func (s *Service) updateOne(sub model.Subscription) error {
 			return fail(fmt.Errorf(i18n.T("订阅更新失败：%v。仍在使用上次的配置。%s。"), err, hint))
 		}
 		data = f.Data
-		applyFetched(&sub, f, s.d.now())
-		if sub.AutoUpdateHours == 0 && f.UpdateInterval > 0 {
-			sub.AutoUpdateHours = snapAutoUpdate(f.UpdateInterval)
+		now := s.d.now()
+		merge = func(cur *model.Subscription) {
+			applyFetched(cur, f, now)
+			if cur.AutoUpdateHours == 0 && f.UpdateInterval > 0 {
+				cur.AutoUpdateHours = snapAutoUpdate(f.UpdateInterval)
+			}
 		}
 	case fileSubscriptionK:
 		d, err := os.ReadFile(sub.FilePath)
@@ -339,8 +363,8 @@ func (s *Service) updateOne(sub model.Subscription) error {
 			return fail(fmt.Errorf(i18n.T("文件不是 Clash/Mihomo 格式的配置：%v。仍在使用上次的配置。"), err))
 		}
 		data = d
-		sub.UpdatedAt = s.d.now()
-		sub.LastError = ""
+		now := s.d.now()
+		merge = func(cur *model.Subscription) { cur.UpdatedAt, cur.LastError = now, "" }
 	default:
 		return fail(errors.New(i18n.T("未知的订阅来源")))
 	}
@@ -350,29 +374,38 @@ func (s *Service) updateOne(sub model.Subscription) error {
 	// composed and checked once.
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
+	cur, ok := s.d.store.Get(id)
+	if !ok {
+		return errors.New(i18n.T("订阅不存在，可能已被删除。"))
+	}
+	if cur.Source != sub.Source || cur.URL != sub.URL || cur.FilePath != sub.FilePath {
+		// downloaded from where the subscription no longer points: its
+		// content must not be stored under the new link
+		return errSubChanged
+	}
 	s.mu.Lock()
 	bin := s.state.coreBin
 	s.mu.Unlock()
 	var p prepared
 	if bin != "" {
 		var err error
-		if p, err = s.prepare(composeArgs{subID: sub.ID, content: data}); err != nil {
+		if p, err = s.prepare(composeArgs{subID: id, content: data}); err != nil {
 			// §6.3: the dialog, not a toast; the stored content is unchanged.
-			msg := fmt.Sprintf(i18n.T("「%s」更新后的配置未通过校验，仍在使用上次的配置"), sub.Name)
-			s.notify(Notice{Kind: "invalid-config", Title: i18n.T("配置无法使用"), Detail: msg + i18n.T("。") + "\n" + err.Error(), Subject: sub.ID})
-			return fail(fmt.Errorf(i18n.T("「%s」更新后的%w：%v。仍在使用上次的配置。"), sub.Name, ErrInvalidConfig, err))
+			msg := fmt.Sprintf(i18n.T("「%s」更新后的配置未通过校验，仍在使用上次的配置"), cur.Name)
+			s.notify(Notice{Kind: "invalid-config", Title: i18n.T("配置无法使用"), Detail: msg + i18n.T("。") + "\n" + err.Error(), Subject: id})
+			return fail(fmt.Errorf(i18n.T("「%s」更新后的%w：%v。仍在使用上次的配置。"), cur.Name, ErrInvalidConfig, err))
 		}
 	}
-	if err := s.d.store.SetContent(sub.ID, data); err != nil {
+	if err := s.d.store.SetContent(id, data); err != nil {
 		p.discard()
 		return fail(fmt.Errorf(i18n.T("保存订阅内容失败：%v"), err))
 	}
-	if _, err := s.d.store.Put(sub); err != nil {
+	if _, err := s.mergeSub(id, merge); err != nil {
 		p.discard()
 		return fmt.Errorf(i18n.T("保存订阅失败：%v"), err)
 	}
-	cur, ok := s.d.store.Current()
-	if !ok || cur.ID != sub.ID {
+	now, ok := s.d.store.Current()
+	if !ok || now.ID != id {
 		p.discard()
 		return nil
 	}
@@ -383,9 +416,7 @@ func (s *Service) updateOne(sub model.Subscription) error {
 		err = s.reloadLocked()
 	}
 	if err != nil {
-		sub.LastError = err.Error()
-		_, _ = s.d.store.Put(sub)
-		return err
+		return fail(err)
 	}
 	return nil
 }

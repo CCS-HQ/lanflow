@@ -2,5 +2,5 @@
 
 package autostart
 
-func apply(string, bool) (bool, error) { return false, nil }
-func enabled(string) bool              { return false }
+func apply(exe string, on bool) (bool, error) { return xdgApply(exe, on) }
+func enabled(exe string) bool                 { return xdgEnabled(exe) }

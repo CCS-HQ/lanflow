@@ -134,26 +134,24 @@ func (p *Page) setMirror(s model.Settings, m string) {
 func (p *Page) testMirrors() {
 	e := p.e
 	p.f2.mirrorTesting = true
-	e.Run(func() error {
-		res := e.API.TestMirrors()
-		p.mu.Lock()
+	var res []model.MirrorTest
+	e.Then(func() error {
+		res = e.API.TestMirrors()
+		return nil
+	}, func(error) {
 		p.f2.mirrorResults, p.f2.mirrorTesting = res, false
-		p.mu.Unlock()
 		best := ""
 		for _, r := range res {
 			if r.Ms > 0 && (best == "" || r.Ms < bestMs(res, best)) {
 				best = r.URL
 			}
 		}
-		p.mu.Lock()
 		if best == "" {
-			p.toast = i18n.T("所有镜像站都无法访问")
+			e.Toast(i18n.T("所有镜像站都无法访问"), false)
 		} else {
-			p.toast = i18n.Tf("最快的镜像：%s", mirrorLabel(best))
+			e.Toast(i18n.Tf("最快的镜像：%s", mirrorLabel(best)), false)
 		}
-		p.mu.Unlock()
-		return nil
-	}, "")
+	})
 }
 
 func bestMs(res []model.MirrorTest, u string) int {

@@ -198,17 +198,16 @@ func (p *Page) applyAdvanced() {
 	}
 	s.Advanced = a
 	p.applying = true
-	e.Run(func() error {
-		err := e.API.SaveSettings(s)
-		p.mu.Lock()
+	// Through the page's save queue: it is a whole Settings value too.
+	p.saveThen(s, func(err error) {
 		p.applying = false
-		if err == nil {
-			p.advLoaded = a
-			p.toast = i18n.T("高级设置已应用")
+		if err != nil {
+			e.Toast(err.Error(), true)
+			return
 		}
-		p.mu.Unlock()
-		return err
-	}, "")
+		p.advLoaded = a
+		e.Toast(i18n.T("高级设置已应用"), false)
+	})
 }
 
 // advancedTab draws the tab: two columns at ≥1100 pt, inbound / system

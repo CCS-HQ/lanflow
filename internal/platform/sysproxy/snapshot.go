@@ -13,10 +13,17 @@ import (
 )
 
 // darwinProxy is one of a service's three proxies as networksetup reports it.
+//
+// Auth records "Authenticated Proxy Enabled". Set rewrites the server
+// without credentials (networksetup would need the password, which lives
+// in the keychain), so an authenticated proxy comes back from Restore with
+// its server and port but without its login; AuthenticatedServices names
+// the services this concerns so the user can be told.
 type darwinProxy struct {
 	On     bool   `json:"on"`
 	Server string `json:"server,omitempty"`
 	Port   int    `json:"port,omitempty"`
+	Auth   bool   `json:"auth,omitempty"`
 }
 
 // darwinAuto is a service's automatic proxy configuration (PAC).
@@ -64,9 +71,30 @@ func parseGetProxy(out string) darwinProxy {
 			p.Server = v
 		case "Port":
 			p.Port, _ = strconv.Atoi(v)
+		case "Authenticated Proxy Enabled":
+			p.Auth = v == "1" || strings.EqualFold(v, "Yes")
 		}
 	}
 	return p
+}
+
+// darwinAuthServices lists the services of a snapshot that had a proxy
+// with a login.
+func darwinAuthServices(s Saved) []string {
+	var saved darwinSaved
+	if err := json.Unmarshal(s, &saved); err != nil || saved.OS != "darwin" {
+		return nil
+	}
+	var names []string
+	for _, ds := range saved.Services {
+		for _, p := range []darwinProxy{ds.Web, ds.Secure, ds.Socks} {
+			if p.Auth && p.Server != "" {
+				names = append(names, ds.Name)
+				break
+			}
+		}
+	}
+	return names
 }
 
 // parseGetAutoProxy parses `networksetup -getautoproxyurl <service>`:
@@ -121,16 +149,16 @@ func darwinSnapshot(ctx context.Context, run executor) (Saved, error) {
 			flag string
 			dst  *darwinProxy
 		}{{"-getwebproxy", &ds.Web}, {"-getsecurewebproxy", &ds.Secure}, {"-getsocksfirewallproxy", &ds.Socks}} {
-			out, err := run(ctx, "networksetup", it.flag, svc)
+			out, err := run(ctx, networksetup, it.flag, svc)
 			if err != nil {
 				return nil, fmt.Errorf("无法读取「%s」的代理设置：%w", svc, err)
 			}
 			*it.dst = parseGetProxy(out)
 		}
-		if out, err := run(ctx, "networksetup", "-getproxybypassdomains", svc); err == nil {
+		if out, err := run(ctx, networksetup, "-getproxybypassdomains", svc); err == nil {
 			ds.Bypass = parseBypassDomains(out)
 		}
-		if out, err := run(ctx, "networksetup", "-getautoproxyurl", svc); err == nil {
+		if out, err := run(ctx, networksetup, "-getautoproxyurl", svc); err == nil {
 			a := parseGetAutoProxy(out)
 			ds.Auto = &a
 		}

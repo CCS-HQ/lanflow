@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -60,6 +62,9 @@ type Supervisor struct {
 	Start  StartFunc
 	Hooks  Hooks
 	Logf   func(format string, args ...any)
+	// PidFile, when set, records the running process's pid (removed when
+	// it exits) so the next helper can end a core this one left behind.
+	PidFile string
 
 	mu       sync.Mutex
 	proc     Process
@@ -134,6 +139,11 @@ func (s *Supervisor) StartCore(ctx context.Context, spec protocol.Spec) error {
 	s.stopping = false
 	s.done = make(chan struct{})
 	s.Logf("started mihomo pid=%d", proc.Pid())
+	if s.PidFile != "" {
+		if err := writePidFile(s.PidFile, proc.Pid()); err != nil {
+			s.Logf("pid file: %v", err)
+		}
+	}
 	if s.Hooks.AfterStart != nil {
 		go s.Hooks.AfterStart(runCtx, resolved, uid)
 	}
@@ -163,6 +173,9 @@ func (s *Supervisor) wait(proc Process, done chan struct{}) {
 			s.cancel()
 		}
 		s.proc, s.log, s.cancel = nil, nil, nil
+		if s.PidFile != "" {
+			_ = os.Remove(s.PidFile)
+		}
 		s.mu.Unlock()
 		if s.Hooks.AfterExit != nil {
 			s.Hooks.AfterExit(spec, s.Policy.Config.UID)
@@ -171,6 +184,15 @@ func (s *Supervisor) wait(proc Process, done chan struct{}) {
 		s.mu.Unlock()
 	}
 	close(done)
+}
+
+// writePidFile records pid in path (temporary file + rename).
+func writePidFile(path string, pid int) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // StopCore stops the process gracefully, killing it after StopGrace.

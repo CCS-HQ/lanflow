@@ -31,13 +31,62 @@ const (
 	PlistPath  = "/Library/LaunchDaemons/" + Label + ".plist"
 	LogDir     = "/Library/Logs/Lanflow Helper"
 	LogPath    = LogDir + "/helper.log"
+	// PidPath records the Mihomo the helper runs, in a directory only root
+	// writes, so the next helper finds a core this one left behind.
+	PidPath = ConfigDir + "/core.pid"
 )
+
+// installer holds what Install touches outside this process, so tests
+// run it against a temporary directory and a fake launchctl.
+type installer struct {
+	helperDir, helperBin, coreBin string
+	configDir, configPath         string
+	plistPath, logDir             string
+
+	euid       func() int
+	self       func() (string, error)
+	launchctl  func(ctx context.Context, args ...string) error
+	chown      func(path string, uid, gid int) error
+	waitSocket func(ctx context.Context, d time.Duration) error
+}
+
+func systemInstaller() *installer {
+	return &installer{
+		helperDir: HelperDir, helperBin: HelperBin, coreBin: CoreBin,
+		configDir: ConfigDir, configPath: ConfigPath,
+		plistPath: PlistPath, logDir: LogDir,
+		euid: os.Geteuid,
+		self: func() (string, error) {
+			self, err := os.Executable()
+			if err != nil {
+				return "", err
+			}
+			if real, err := filepath.EvalSymlinks(self); err == nil {
+				self = real
+			}
+			return self, nil
+		},
+		launchctl:  launchctl,
+		chown:      os.Chown,
+		waitSocket: waitForSocket,
+	}
+}
 
 // Install copies the helper (the running executable) and the core into
 // HelperDir, records the config and (re)loads the LaunchDaemon. Must run
 // as root.
 func Install(ctx context.Context, o InstallOptions, logf Logf) error {
-	if os.Geteuid() != 0 {
+	return systemInstaller().install(ctx, o, logf)
+}
+
+// install prepares every file under a temporary name first (the core copy
+// is checked against o.CoreSHA256 there), and only then stops the running
+// helper and moves the files into place. A failure before that point
+// changes nothing; a failure after it puts the previous files back and
+// loads the previous LaunchDaemon again, so a failed upgrade does not
+// leave TUN without a helper.
+func (in *installer) install(ctx context.Context, o InstallOptions, logf Logf) (err error) {
+	if in.euid() != 0 {
 		return errors.New("安装权限组件需要管理员权限")
 	}
 	if err := o.check(); err != nil {
@@ -50,65 +99,102 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) error {
 	if err != nil {
 		return err
 	}
-	if err := checkDowngrade(ConfigPath, o); err != nil {
+	if err := checkDowngrade(in.configPath, o); err != nil {
 		return err
 	}
-	self, err := os.Executable()
+	self, err := in.self()
 	if err != nil {
 		return err
 	}
-	self, _ = filepath.EvalSymlinks(self)
-
-	// Stop a previous instance first so the files are not in use.
-	_ = launchctl(ctx, "bootout", "system/"+Label)
-
-	if err := os.MkdirAll(HelperDir, 0o755); err != nil {
-		return err
-	}
-	if self != HelperBin {
-		logf("copy %s -> %s", self, HelperBin)
-		if err := copyFile(self, HelperBin, 0o755); err != nil {
-			return fmt.Errorf("复制权限组件失败: %w", err)
-		}
-	}
-	src, _ := filepath.EvalSymlinks(o.CoreBin)
-	if src == "" {
-		src = o.CoreBin
-	}
-	logf("copy %s -> %s", src, CoreBin)
-	if err := copyFile(src, CoreBin, 0o755); err != nil {
-		return fmt.Errorf("复制 Mihomo 内核失败: %w", err)
-	}
-	for _, p := range []string{HelperDir, HelperBin, CoreBin} {
-		if err := os.Chown(p, 0, 0); err != nil {
+	for _, d := range []string{in.helperDir, in.configDir, in.logDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
 	}
-	sum, err := FileSHA256(CoreBin)
+
+	var files fileSwap
+	defer func() {
+		if err != nil {
+			files.rollback()
+		}
+	}()
+	// stage owns a prepared file by root:wheel and queues it for dst.
+	stage := func(tmp, dst string) error {
+		files.add(tmp, dst)
+		return in.chown(tmp, 0, 0)
+	}
+	if self != in.helperBin {
+		logf("copy %s -> %s", self, in.helperBin)
+		tmp, _, err := stageFile(self, in.helperDir, 0o755, "")
+		if err != nil {
+			return fmt.Errorf("复制权限组件失败: %w", err)
+		}
+		if err := stage(tmp, in.helperBin); err != nil {
+			return err
+		}
+	}
+	src := filepath.Clean(o.CoreBin)
+	logf("copy %s -> %s (sha256 %s)", src, in.coreBin, o.CoreSHA256)
+	tmp, sum, err := stageFile(src, in.helperDir, 0o755, o.CoreSHA256)
 	if err != nil {
+		return fmt.Errorf("复制 Mihomo 内核失败: %w", err)
+	}
+	if err := stage(tmp, in.coreBin); err != nil {
 		return err
 	}
-	cfg := Config{Version: ConfigVersion, Core: CoreBin, CoreSource: src, SHA256: sum, DataDir: dataDir, UID: o.UID, HelperVersion: o.Version}
-	if err := os.MkdirAll(ConfigDir, 0o755); err != nil {
-		return err
-	}
-	if err := SaveConfig(ConfigPath, cfg, 0o644); err != nil {
+	cfg, err := encodeConfig(Config{Version: ConfigVersion, Core: in.coreBin, CoreSource: src, SHA256: sum, DataDir: dataDir, UID: o.UID, HelperVersion: o.Version})
+	if err != nil {
 		return fmt.Errorf("写入配置失败: %w", err)
 	}
-	_ = os.Chown(ConfigDir, 0, 0)
-	_ = os.Chown(ConfigPath, 0, 0)
-	if err := os.MkdirAll(LogDir, 0o755); err != nil {
-		return err
+	for _, f := range []struct {
+		data []byte
+		dst  string
+		what string
+	}{{cfg, in.configPath, "配置"}, {[]byte(plist()), in.plistPath, "LaunchDaemon"}} {
+		tmp, err := stageBytes(filepath.Dir(f.dst), f.data, 0o644)
+		if err != nil {
+			return fmt.Errorf("写入%s失败: %w", f.what, err)
+		}
+		if err := stage(tmp, f.dst); err != nil {
+			return err
+		}
 	}
-	if err := os.WriteFile(PlistPath, []byte(plist()), 0o644); err != nil {
-		return fmt.Errorf("写入 LaunchDaemon 失败: %w", err)
+	for _, d := range []string{in.helperDir, in.configDir} {
+		if err := in.chown(d, 0, 0); err != nil {
+			return err
+		}
 	}
-	_ = os.Chown(PlistPath, 0, 0)
-	if err := launchctl(ctx, "bootstrap", "system", PlistPath); err != nil {
+
+	// Everything is ready: stop the previous instance and switch.
+	_, statErr := os.Lstat(in.plistPath)
+	hadService := statErr == nil
+	_ = in.launchctl(ctx, "bootout", "system/"+Label)
+	restore := func() {
+		files.rollback()
+		if hadService {
+			if rerr := in.launchctl(ctx, "bootstrap", "system", in.plistPath); rerr != nil {
+				logf("restore the previous helper: %v", rerr)
+			} else {
+				logf("the previous helper runs again")
+			}
+		}
+	}
+	if err := files.commit(); err != nil {
+		restore()
+		return fmt.Errorf("替换权限组件文件失败: %w", err)
+	}
+	if err := in.launchctl(ctx, "bootstrap", "system", in.plistPath); err != nil {
+		restore()
 		return fmt.Errorf("加载 LaunchDaemon 失败: %w", err)
 	}
 	logf("installed; waiting for socket")
-	return waitForSocket(ctx, 10*time.Second)
+	if err := in.waitSocket(ctx, 10*time.Second); err != nil {
+		_ = in.launchctl(ctx, "bootout", "system/"+Label)
+		restore()
+		return err
+	}
+	files.finish()
+	return nil
 }
 
 // Uninstall unloads the LaunchDaemon (which stops Mihomo via the helper's
@@ -121,7 +207,7 @@ func Uninstall(ctx context.Context, logf Logf) error {
 		logf("bootout: %v", err)
 	}
 	var firstErr error
-	for _, p := range []string{PlistPath, HelperBin, CoreBin, ConfigPath, protocol.SocketPath} {
+	for _, p := range []string{PlistPath, HelperBin, CoreBin, ConfigPath, PidPath, protocol.SocketPath} {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
 			firstErr = err
 		}
@@ -256,6 +342,10 @@ func Run(ctx context.Context, version string, logf Logf) error {
 	}
 	sup := NewSupervisor(NewPolicy(cfg))
 	sup.Logf = logf
+	// A helper that crashed or was killed left its Mihomo running as root,
+	// where nobody can stop it: end it before serving.
+	sup.PidFile = PidPath
+	reapOrphan(PidPath, cfg.Core, systemProcs(), logf)
 	l, err := Listen(cfg.UID)
 	if err != nil {
 		return fmt.Errorf("监听 %s 失败: %w", protocol.SocketPath, err)

@@ -28,7 +28,8 @@ func withPEM(der []byte, fn func(path string) error) error {
 	return fn(f.Name())
 }
 
-func run(name string, args ...string) error {
+// run runs a command; tests replace it (never the real trust store).
+var run = func(name string, args ...string) error {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %s: %v: %s", name, args[0], err, strings.TrimSpace(string(out)))

@@ -5,8 +5,10 @@
 package har
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -31,6 +33,10 @@ type content struct {
 type postData struct {
 	MimeType string `json:"mimeType"`
 	Text     string `json:"text"`
+	// Encoding "base64" (as in content; an extension HAR readers such as
+	// the browsers' accept): the body is not text, or its
+	// Content-Encoding could not be undone.
+	Encoding string `json:"encoding,omitempty"`
 	Comment  string `json:"comment,omitempty"`
 }
 
@@ -88,75 +94,150 @@ type creator struct {
 	Version string `json:"version"`
 }
 
-type log struct {
-	Version string  `json:"version"`
-	Creator creator `json:"creator"`
-	Entries []entry `json:"entries"`
-}
-
 // Build returns the HAR document of the decrypted requests among ds.
 func Build(ds []model.CaptureFlowDetail, withBodies bool, version string) ([]byte, error) {
-	l := log{Version: "1.2", Creator: creator{Name: "Lanflow", Version: version}, Entries: []entry{}}
+	var buf bytes.Buffer
+	w := NewWriter(&buf, version)
 	for _, d := range ds {
-		f := d.Flow
-		if f.Method == "" || !f.Has(model.FlowDecrypted) {
-			continue
+		if err := w.Add(d, withBodies); err != nil {
+			return nil, err
 		}
-		httpVer := "HTTP/1.1"
-		if f.Proto == "h2" {
-			httpVer = "HTTP/2"
-		}
-		scheme := f.Scheme
-		if scheme == "" {
-			scheme = "https"
-		}
-		host := f.Host
-		if !(scheme == "https" && f.Port == 443 || scheme == "http" && f.Port == 80) && f.Port > 0 {
-			host = host + ":" + itoa(f.Port)
-		}
-		path := redact.Path(f.Path)
-		e := entry{
-			StartedDateTime: f.Start.UTC().Format(time.RFC3339Nano),
-			Time:            float64(f.DurationMs),
-			Request: request{Method: f.Method, URL: scheme + "://" + host + path, HTTPVersion: httpVer,
-				Cookies: []nv{}, Headers: headers(d.ReqHeader), QueryString: query(path), HeadersSize: -1, BodySize: d.ReqBodySize},
-			Response: response{Status: f.Status, HTTPVersion: httpVer, Cookies: []nv{}, Headers: headers(d.RespHeader),
-				HeadersSize: -1, BodySize: d.RespBodySize, RedirectURL: ""},
-			Timings: timings{Send: 0, Wait: float64(d.Timing.TTFBMs), Receive: float64(max(0, d.Timing.EndMs-d.Timing.TTFBMs))},
-			Lanflow: lanflowExt{Process: f.Process, ProcessPath: f.ProcessPath, Attribution: f.Attribution, Selector: f.Selector, Flags: f.Flags, TLS: d.TLS},
-		}
-		e.Response.Content = content{Size: d.RespBodySize, MimeType: f.ContentType}
-		if withBodies {
-			if len(d.ReqBody) > 0 || d.ReqBodySize > 0 {
-				ct := hv(d.ReqHeader, "content-type")
-				body, _ := redact.Decode(d.ReqBody, hv(d.ReqHeader, "content-encoding"))
-				pd := &postData{MimeType: ct, Text: string(redact.Body(body, ct))}
-				if d.ReqBodySize > int64(len(d.ReqBody)) {
-					pd.Comment = "truncated"
-				}
-				e.Request.PostData = pd
-			}
-			if len(d.RespBody) > 0 {
-				body, ok := redact.Decode(d.RespBody, hv(d.RespHeader, "content-encoding"))
-				if !ok {
-					e.Response.Content.Text = base64.StdEncoding.EncodeToString(d.RespBody)
-					e.Response.Content.Encoding = "base64"
-				} else if utf8.Valid(body) {
-					e.Response.Content.Text = string(redact.Body(body, f.ContentType))
-				} else {
-					e.Response.Content.Text = base64.StdEncoding.EncodeToString(body)
-					e.Response.Content.Encoding = "base64"
-				}
-				if d.RespBodySize > int64(len(d.RespBody)) {
-					e.Response.Content.Comment = "truncated"
-				}
-			}
-		} else {
-			e.Response.Content.Comment = "bodies not exported"
-		}
-		l.Entries = append(l.Entries, e)
 	}
-	return json.MarshalIndent(map[string]any{"log": l}, "", "  ")
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// Writer writes a HAR document entry by entry, so an export holds one
+// record's bodies at a time and never the whole document.
+type Writer struct {
+	w   io.Writer
+	n   int
+	err error
+}
+
+// NewWriter starts a HAR document on w.
+func NewWriter(w io.Writer, version string) *Writer {
+	hw := &Writer{w: w}
+	c, _ := json.Marshal(creator{Name: "Lanflow", Version: version})
+	hw.write([]byte("{\n  \"log\": {\n    \"version\": \"1.2\",\n    \"creator\": "))
+	hw.write(c)
+	hw.write([]byte(",\n    \"entries\": ["))
+	return hw
+}
+
+func (w *Writer) write(b []byte) {
+	if w.err == nil {
+		_, w.err = w.w.Write(b)
+	}
+}
+
+// Add writes d as an entry; records that are not decrypted requests are
+// left out. Entries reports how many were written.
+func (w *Writer) Add(d model.CaptureFlowDetail, withBodies bool) error {
+	e, ok := build(d, withBodies)
+	if !ok || w.err != nil {
+		return w.err
+	}
+	b, err := json.MarshalIndent(e, "      ", "  ")
+	if err != nil {
+		return err
+	}
+	if w.n > 0 {
+		w.write([]byte(","))
+	}
+	w.write([]byte("\n      "))
+	w.write(b)
+	w.n++
+	return w.err
+}
+
+// Entries is the number of entries written so far.
+func (w *Writer) Entries() int { return w.n }
+
+// Close ends the document.
+func (w *Writer) Close() error {
+	if w.n > 0 {
+		w.write([]byte("\n    "))
+	}
+	w.write([]byte("]\n  }\n}\n"))
+	return w.err
+}
+
+// build makes the entry of a decrypted request.
+func build(d model.CaptureFlowDetail, withBodies bool) (entry, bool) {
+	f := d.Flow
+	if f.Method == "" || !f.Has(model.FlowDecrypted) {
+		return entry{}, false
+	}
+	httpVer := "HTTP/1.1"
+	if f.Proto == "h2" {
+		httpVer = "HTTP/2"
+	}
+	scheme := f.Scheme
+	if scheme == "" {
+		scheme = "https"
+	}
+	host := f.Host
+	if !(scheme == "https" && f.Port == 443 || scheme == "http" && f.Port == 80) && f.Port > 0 {
+		host = host + ":" + itoa(f.Port)
+	}
+	path := redact.Path(f.Path)
+	e := entry{
+		StartedDateTime: f.Start.UTC().Format(time.RFC3339Nano),
+		Time:            float64(f.DurationMs),
+		Request: request{Method: f.Method, URL: scheme + "://" + host + path, HTTPVersion: httpVer,
+			Cookies: []nv{}, Headers: headers(d.ReqHeader), QueryString: query(path), HeadersSize: -1, BodySize: d.ReqBodySize},
+		Response: response{Status: f.Status, HTTPVersion: httpVer, Cookies: []nv{}, Headers: headers(d.RespHeader),
+			HeadersSize: -1, BodySize: d.RespBodySize, RedirectURL: ""},
+		Timings: timings{Send: 0, Wait: float64(d.Timing.TTFBMs), Receive: float64(max(0, d.Timing.EndMs-d.Timing.TTFBMs))},
+		Lanflow: lanflowExt{Process: f.Process, ProcessPath: f.ProcessPath, Attribution: f.Attribution, Selector: f.Selector, Flags: f.Flags, TLS: d.TLS},
+	}
+	e.Response.Content = content{Size: d.RespBodySize, MimeType: f.ContentType}
+	if !withBodies {
+		e.Response.Content.Comment = "bodies not exported"
+		return e, true
+	}
+	if len(d.ReqBody) > 0 || d.ReqBodySize > 0 {
+		ct := hv(d.ReqHeader, "content-type")
+		pd := &postData{MimeType: ct}
+		pd.Text, pd.Encoding, pd.Comment = bodyText(d.ReqBody, hv(d.ReqHeader, "content-encoding"), ct)
+		if d.ReqBodySize > int64(len(d.ReqBody)) {
+			pd.Comment = joinComment("truncated", pd.Comment)
+		}
+		e.Request.PostData = pd
+	}
+	if len(d.RespBody) > 0 {
+		c := &e.Response.Content
+		c.Text, c.Encoding, c.Comment = bodyText(d.RespBody, hv(d.RespHeader, "content-encoding"), f.ContentType)
+		if d.RespBodySize > int64(len(d.RespBody)) {
+			c.Comment = joinComment("truncated", c.Comment)
+		}
+	}
+	return e, true
+}
+
+// bodyText is a body as HAR text: decoded and masked when it is text; as
+// base64 of the decoded bytes when it is binary (as a string it would lose
+// every byte that is not UTF-8); as base64 of the bytes as sent when the
+// Content-Encoding (br, zstd) cannot be undone here.
+func bodyText(raw []byte, encoding, contentType string) (text, enc, comment string) {
+	body, ok := redact.Decode(raw, encoding)
+	switch {
+	case !ok:
+		return base64.StdEncoding.EncodeToString(raw), "base64", "content-encoding " + strings.TrimSpace(encoding) + " not decoded"
+	case !utf8.Valid(body):
+		return base64.StdEncoding.EncodeToString(body), "base64", ""
+	}
+	return string(redact.Body(body, contentType)), "", ""
+}
+
+func joinComment(a, b string) string {
+	if b == "" {
+		return a
+	}
+	return a + "; " + b
 }
 
 func headers(h []model.KV) []nv {

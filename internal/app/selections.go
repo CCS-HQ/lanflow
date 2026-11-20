@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -99,11 +98,18 @@ func (s *Service) restoreSelections() {
 		if g.Type != model.GroupSelect && g.Name != "GLOBAL" {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+		// Cancelled by Shutdown (this runs under opMu, which Shutdown waits
+		// for), and given up at the first timeout: a controller that does
+		// not answer one group will not answer the next ones either.
+		ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 		err := s.d.ctrl.SelectProxy(ctx, g.Name, name)
+		gaveUp := ctx.Err() != nil
 		cancel()
 		if err != nil {
 			s.alog.Warnf("restore selection %s -> %s: %v", g.Name, name, err)
+			if gaveUp {
+				break
+			}
 			continue
 		}
 		changed++

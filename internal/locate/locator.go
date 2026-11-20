@@ -3,13 +3,12 @@ package locate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
+	"lanflow/internal/fsx"
 	"lanflow/internal/geo"
 	"lanflow/internal/model"
 	"lanflow/internal/netx"
@@ -28,10 +27,13 @@ type cacheEntry struct {
 	ProbeRTT time.Duration `json:",omitempty"`
 }
 
+// cacheFlushEvery is the shortest time between two writes of the cache
+// file: probing every node of a subscription stores hundreds of results in
+// a row, and each write is the whole file.
+const cacheFlushEvery = 2 * time.Second
+
 type locator struct {
 	cachePath string
-	mmdbPath  string
-	asnPath   string
 	traceURL  string
 
 	now func() time.Time
@@ -44,18 +46,26 @@ type locator struct {
 	mu     sync.Mutex // guards cache
 	loaded bool
 	cache  map[string]cacheEntry
+	// The file is written outside mu (readers are not held up by the disk)
+	// and at most once per flushEvery: a result stored sooner is written by
+	// a timer when the interval is over.
+	flushEvery time.Duration
+	lastFlush  time.Time
+	flushTimer *time.Timer
+
+	writeMu sync.Mutex // one writer of the file at a time, in order
 
 	probeMu sync.Mutex // one probe at a time
 
-	dbOnce sync.Once
-	dbs    databases
+	geoDB, asnDB database
 }
 
 func newLocator(cachePath, mmdbPath, asnPath string) *locator {
 	l := &locator{
 		cachePath:    cachePath,
-		mmdbPath:     mmdbPath,
-		asnPath:      asnPath,
+		geoDB:        database{path: mmdbPath},
+		asnDB:        database{path: asnPath},
+		flushEvery:   cacheFlushEvery,
 		traceURL:     TraceURL,
 		now:          time.Now,
 		proxyClient:  netx.ViaPort,
@@ -124,11 +134,12 @@ func (l *locator) loadLocked() {
 	}
 }
 
-// store saves a probe result and rewrites the cache file atomically,
-// dropping expired entries on the way.
+// store saves a probe result, dropping expired entries on the way, and
+// rewrites the cache file atomically: at once when the last write is
+// flushEvery or more ago (a write error is then returned), otherwise by a
+// timer at the end of the interval.
 func (l *locator) store(e cacheEntry) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.loadLocked()
 	for k, v := range l.cache {
 		if !l.valid(v) {
@@ -137,34 +148,47 @@ func (l *locator) store(e cacheEntry) error {
 	}
 	l.cache[e.Node] = e
 	if l.cachePath == "" {
+		l.mu.Unlock()
 		return nil
 	}
-	data, err := json.MarshalIndent(l.cache, "", "  ")
-	if err != nil {
-		return err
+	now := l.now()
+	if since := now.Sub(l.lastFlush); !l.lastFlush.IsZero() && since >= 0 && since < l.flushEvery {
+		if l.flushTimer == nil {
+			l.flushTimer = time.AfterFunc(l.flushEvery-since, func() { l.flush() })
+		}
+		l.mu.Unlock()
+		return nil
 	}
-	return writeAtomic(l.cachePath, data)
+	l.mu.Unlock()
+	return l.flush()
 }
 
-func writeAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+// flush writes the cache file.
+func (l *locator) flush() error {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	l.mu.Lock()
+	if l.flushTimer != nil {
+		l.flushTimer.Stop()
+		l.flushTimer = nil
 	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	l.lastFlush = l.now()
+	data, err := json.MarshalIndent(l.cache, "", "  ")
+	l.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	_, werr := tmp.Write(data)
-	cerr := tmp.Close()
-	if err := errors.Join(werr, cerr); err != nil {
-		os.Remove(tmpName)
-		return err
+	return fsx.WriteFile(l.cachePath, data, 0o600)
+}
+
+// reset forgets every cached probe.
+func (l *locator) reset() error {
+	l.mu.Lock()
+	l.loaded, l.cache = true, map[string]cacheEntry{}
+	path := l.cachePath
+	l.mu.Unlock()
+	if path == "" {
+		return nil
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	return nil
+	return l.flush()
 }

@@ -17,6 +17,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/colwidth"
 	"lanflow/internal/view/env"
 )
 
@@ -36,10 +37,18 @@ type Page struct {
 	paused   bool
 	frozen   []model.LogEntry
 	list     ui.ListState
-	endCount int // how many entries there were when the list last showed its end
 	menuOpen bool
-	source   int  // 0 = the core's log, 1 = Lanflow's own
-	loaded   bool // level/source restored from API.UIState
+	// track numbers the entries of each source (0 core, 1 app), so a line
+	// keeps its identity as older ones leave the full buffer; endSeq is
+	// the number after the last entry there was when the list last
+	// showed its end.
+	// showed its end, per source.
+	track  [2]tracker
+	endSeq [2]uint64
+	// vis caches which entries the level filter and the search show.
+	vis    visCache
+	source int  // 0 = the core's log, 1 = Lanflow's own
+	loaded bool // level/source restored from API.UIState
 	// wrap breaks long lines over several rows instead of cutting them
 	// at the window's edge (⋯ 自动换行).
 	wrap bool
@@ -54,6 +63,71 @@ func (p *Page) entries() []model.LogEntry {
 		return p.e.API.AppLogs()
 	}
 	return p.e.API.Logs()
+}
+
+// tracker numbers the entries of a log that only gives its newest ones
+// (API.Logs: at most 1000, oldest first, no sequence numbers): base is the
+// number of all[0], so all[i] is entry base+i for as long as it is held.
+// It finds how many entries left the front by lining the previous
+// snapshot up with the new one.
+type tracker struct {
+	prev []model.LogEntry
+	base uint64
+}
+
+func sameEntry(a, b model.LogEntry) bool {
+	return a.Time.Equal(b.Time) && a.Level == b.Level && a.Payload == b.Payload
+}
+
+// follow takes the log as it is now and returns the number of all[0].
+// When no part of the previous snapshot is found at the start of all (the
+// log was cleared, or everything held was replaced), the numbers go on
+// after the previous ones, so that none is used twice.
+func (k *tracker) follow(all []model.LogEntry) uint64 {
+	prev := k.prev
+	k.prev = all
+	if len(prev) == 0 {
+		return k.base
+	}
+	// Most builds find the log as it was (a scroll, the pointer): the same
+	// length between the same two ends is taken as that, without going
+	// through every entry.
+	if n := len(all); n == len(prev) && sameEntry(prev[0], all[0]) && sameEntry(prev[n-1], all[n-1]) {
+		return k.base
+	}
+	// The smallest shift d for which prev[d:] is the start of all.
+	for d := 0; d < len(prev); d++ {
+		rest := prev[d:]
+		if len(rest) > len(all) || !sameEntry(rest[0], all[0]) || !sameEntry(rest[len(rest)-1], all[len(rest)-1]) {
+			continue
+		}
+		same := true
+		for i := range rest {
+			if !sameEntry(rest[i], all[i]) {
+				same = false
+				break
+			}
+		}
+		if same {
+			k.base += uint64(d)
+			return k.base
+		}
+	}
+	k.base += uint64(len(prev))
+	return k.base
+}
+
+// visCache is the entries shown, as indexes into the log, for the log,
+// level and search it was made for.
+type visCache struct {
+	ok          bool
+	source      int
+	base        uint64
+	n           int
+	level       int
+	query       string
+	first, last model.LogEntry
+	idx         []int
 }
 
 // New returns the page.
@@ -110,16 +184,24 @@ func levelOptions() []string {
 func (p *Page) View(c *ui.Context) {
 	e, t := p.e, c.Theme()
 	p.restore()
-	all := p.entries()
-	if p.paused {
-		if p.frozen == nil {
-			p.frozen = all
-		}
+	// Paused, the log is neither read nor numbered again: the frozen copy
+	// and its numbers stand.
+	var all []model.LogEntry
+	if p.paused && p.frozen != nil {
 		all = p.frozen
 	} else {
+		all = p.entries()
+		p.track[p.source].follow(all)
 		p.frozen = nil
+		if p.paused {
+			p.frozen = all
+			if p.frozen == nil {
+				p.frozen = []model.LogEntry{}
+			}
+		}
 	}
-	vis := p.visible(all)
+	base := p.track[p.source].base
+	vis := p.visible(all, base)
 
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("日志"), "", func() { p.tools(c, all) })
@@ -140,18 +222,24 @@ func (p *Page) View(c *ui.Context) {
 				}
 				return
 			}
-			p.list.Label = func(i int) string { return vis[i].Payload }
+			// A line is its entry, not its row: when the buffer is full
+			// every new entry drops the oldest, and the list stays on the
+			// lines being read instead of sliding under them.
+			p.list.Key = func(i int) any { return base + uint64(vis[i]) }
+			p.list.Label = func(i int) string { return all[vis[i]].Payload }
+			levelW := levelWidth(c)
 			ui.List(c.Key("list"), &p.list, len(vis), func(i int) {
-				p.line(c, t, vis[i])
+				p.line(c, t, all[vis[i]], levelW)
 			}).Fill().Font("monospace").FontSize(12).Selectable().KeepScrollbars(true).Label(i18n.T("日志"))
 			atEnd := p.list.AtEnd() || len(vis) == 0
+			end := base + uint64(len(all))
 			if atEnd {
-				p.endCount = len(all)
+				p.endSeq[p.source] = end
 			}
 			if !atEnd {
 				label := i18n.T("回到底部")
-				if len(all) > p.endCount {
-					label += i18n.T("（有新日志）")
+				if end > p.endSeq[p.source] {
+					label = i18n.T("回到底部（有新日志）")
 				}
 				ui.Button(c, "").Children(func() {
 					e.Kit.Icon(c, "down", 13)
@@ -274,18 +362,30 @@ func revealLogFile(dir, name string) {
 	_ = mygo.Shell.OpenPath(dir)
 }
 
-func (p *Page) visible(all []model.LogEntry) []model.LogEntry {
+// visible returns the indexes in all of the entries the level filter and
+// the search show. base numbers all[0] (tracker): while the log, the level
+// and the search are the same, the answer of the last build is returned.
+func (p *Page) visible(all []model.LogEntry, base uint64) []int {
 	min := p.minLevel()
 	q := strings.ToLower(strings.TrimSpace(p.query))
-	out := make([]model.LogEntry, 0, len(all))
-	for _, l := range all {
+	vc := &p.vis
+	if vc.ok && vc.source == p.source && vc.base == base && vc.n == len(all) && vc.level == min && vc.query == q &&
+		(len(all) == 0 || (sameEntry(vc.first, all[0]) && sameEntry(vc.last, all[len(all)-1]))) {
+		return vc.idx
+	}
+	out := make([]int, 0, len(all))
+	for i, l := range all {
 		if levelRank[l.Level] < min {
 			continue
 		}
 		if q != "" && !strings.Contains(strings.ToLower(l.Payload), q) {
 			continue
 		}
-		out = append(out, l)
+		out = append(out, i)
+	}
+	*vc = visCache{ok: true, source: p.source, base: base, n: len(all), level: min, query: q, idx: out}
+	if len(all) > 0 {
+		vc.first, vc.last = all[0], all[len(all)-1]
 	}
 	return out
 }
@@ -320,7 +420,7 @@ func lineColors(level string, t *ui.Theme) (text, time ui.Color) {
 	return t.Text, t.TextMuted
 }
 
-func (p *Page) line(c *ui.Context, t *ui.Theme, l model.LogEntry) {
+func (p *Page) line(c *ui.Context, t *ui.Theme, l model.LogEntry, levelW float32) {
 	color, timeColor := lineColors(l.Level, t)
 	row := ui.Row(c).MinHeight(22).Gap(10).PaddingX(16)
 	if p.wrap {
@@ -330,7 +430,7 @@ func (p *Page) line(c *ui.Context, t *ui.Theme, l model.LogEntry) {
 	}
 	row.Children(func() {
 		ui.Text(c, l.Time.Format("15:04:05")).TextColor(timeColor).FontFeatures("tnum").Unselectable().Shrink(0)
-		ui.Text(c, levelName(l.Level)).Width(levelWidth()).TextColor(color).Unselectable().Shrink(0).SingleLine()
+		ui.Text(c, levelName(l.Level)).Width(levelW).TextColor(color).Unselectable().Shrink(0).SingleLine()
 		msg := env.Highlight(c, l.Payload, strings.TrimSpace(p.query), color).Grow(1).Shrink(1).MinWidth(0)
 		if !p.wrap {
 			msg.SingleLine()
@@ -349,11 +449,14 @@ func (p *Page) Topics() []app.Topic {
 	return []app.Topic{app.TopicLogs}
 }
 
-// levelWidth is the width of the level column: two Chinese characters, or
-// "Warning" in the monospaced font.
-func levelWidth() float32 {
-	if strings.HasPrefix(i18n.Lang(), "zh") {
-		return 28
+// levelWidth is the width of the level column: that of the widest level
+// name in the language shown, measured in the list's font (monospace
+// resolves to another face on each platform, so no fixed width fits
+// "Warning" everywhere).
+func levelWidth(c *ui.Context) float32 {
+	names := make([]string, len(levels))
+	for i, l := range levels {
+		names[i] = levelName(l)
 	}
-	return 52
+	return colwidth.Text(c, "monospace", 12, 2, names...)
 }

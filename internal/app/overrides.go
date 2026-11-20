@@ -129,30 +129,41 @@ func (s *Service) SaveOverrideEntry(in model.Override) (out model.Override, err 
 	} else {
 		in.Source, in.URL = model.OverrideLocal, ""
 	}
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
-	var prev model.Override
-	if in.ID != "" {
+	// lookup finds the entry in being replaced. Only the legacy IDs may be
+	// created by name: "global" and a subscription's ID (settings import).
+	lookup := func() (model.Override, error) {
+		if in.ID == "" {
+			return model.Override{}, nil
+		}
 		old, ok := s.d.store.GetOverride(in.ID)
 		if !ok {
-			// Only the legacy IDs may be created by name: "global" and a
-			// subscription's ID (settings import).
 			if _, isSub := s.d.store.Get(in.ID); in.ID != "global" && !isSub {
-				return in, errOverrideMissing
+				return old, errOverrideMissing
 			}
 		}
-		prev = old
-	}
-	if in.ID == "global" {
-		in.Global = true
+		return old, nil
 	}
 	if in.Source == model.OverrideURL && strings.TrimSpace(in.Text) == "" {
+		// Download before opMu is taken: it may take fetchTimeout, and
+		// opMu holds up every start, stop, switch and settings change.
+		if _, err := lookup(); err != nil {
+			return in, err
+		}
 		text, err := s.fetchOverride(in.URL)
 		if err != nil {
 			return in, err
 		}
 		in.Text = text
 		in.UpdatedAt = s.d.now()
+	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	prev, err := lookup() // again under the lock: it may have gone meanwhile
+	if err != nil {
+		return in, err
+	}
+	if in.ID == "global" {
+		in.Global = true
 	}
 	if in.ID == "" || in.Text != prev.Text || in.UpdatedAt.IsZero() {
 		in.UpdatedAt = s.d.now()
@@ -218,18 +229,27 @@ func (s *Service) MoveOverrideEntry(id string, delta int) error {
 // UpdateOverrideEntry re-downloads a URL entry (API).
 func (s *Service) UpdateOverrideEntry(id string) (err error) {
 	defer func() { s.logOp("update override "+id, err) }()
+	was, ok := s.d.store.GetOverride(id)
+	if !ok {
+		return errOverrideMissing
+	}
+	if was.Source != model.OverrideURL || was.URL == "" {
+		return errors.New(i18n.T("这条覆写不是从链接导入的，无法更新。"))
+	}
+	// Download without opMu (see SaveOverrideEntry), then take the entry
+	// as it is now: edits made during the download stay.
+	text, err := s.fetchOverride(was.URL)
+	if err != nil {
+		return err
+	}
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	o, ok := s.d.store.GetOverride(id)
 	if !ok {
 		return errOverrideMissing
 	}
-	if o.Source != model.OverrideURL || o.URL == "" {
-		return errors.New(i18n.T("这条覆写不是从链接导入的，无法更新。"))
-	}
-	text, err := s.fetchOverride(o.URL)
-	if err != nil {
-		return err
+	if o.Source != model.OverrideURL || o.URL != was.URL {
+		return errors.New(i18n.T("这条覆写在下载期间被修改了，请重新更新。"))
 	}
 	o.Text = text
 	o.UpdatedAt = s.d.now()

@@ -35,8 +35,10 @@ type importDialog struct {
 	err      string
 	result   string // the imported subscription's name
 	doneAt   time.Time
-	// pendingResult is set by the import goroutine, taken by the view.
-	pendingResult *importResult
+	// session numbers the import this dialog started (Page.impSeq), so
+	// the result of an import started by an earlier dialog is not taken
+	// for this one's.
+	session int
 }
 
 // editDialog is the state of 编辑订阅 (docs/design.md §6.2).
@@ -265,7 +267,9 @@ func (p *Page) importView(c *ui.Context) {
 				ui.Text(c, d.err).FontSize(12).TextColor(t.Danger).Role(ui.RoleAlert)
 			}
 			ui.Row(c).Gap(8).Justify(ui.End).Margin(6, 0, 0, 0).Children(func() {
-				if ui.Button(c, i18n.T("取消")).Clicked() {
+				// The download cannot be stopped once started: 取消 would
+				// only hide a dialog whose import still lands.
+				if ui.Button(c, i18n.T("取消")).Disabled(loading).Clicked() {
 					d.open = false
 				}
 				b := ui.PrimaryButton(c, "").Label(i18n.T("开始导入")).Disabled(loading)
@@ -308,6 +312,9 @@ func (p *Page) doImport() {
 		return
 	}
 	d.phase, d.step, d.err = phaseLoading, 0, ""
+	p.impSeq++
+	d.session = p.impSeq
+	session := d.session
 	name, ua, viaProxy, use := strings.TrimSpace(d.name), strings.TrimSpace(d.ua), d.viaProxy, d.use
 	first := !p.e.API.Status().HasSubscriptions
 	p.async(func() {
@@ -318,13 +325,14 @@ func (p *Page) doImport() {
 		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		p.imp.pendingResult = &importResult{sub: sub, err: err, startErr: startErr, first: first, use: use}
+		p.impResults = append(p.impResults, &importResult{session: session, sub: sub, err: err, startErr: startErr, first: first, use: use})
 		p.e.Redraw()
 	})
 }
 
 // importResult is what the import goroutine hands back to the view.
 type importResult struct {
+	session  int // importDialog.session of the dialog that started it
 	sub      model.Subscription
 	err      error
 	startErr error
@@ -335,19 +343,33 @@ type importResult struct {
 // finishImport applies the import result on the UI thread.
 func (p *Page) finishImport(c *ui.Context) {
 	p.mu.Lock()
-	r := p.imp.pendingResult
-	p.imp.pendingResult = nil
+	results := p.impResults
+	p.impResults = nil
 	p.mu.Unlock()
-	if r == nil {
-		return
+	for _, r := range results {
+		p.applyImport(c, r)
 	}
+}
+
+// applyImport shows one import's result: in the dialog that started it,
+// or, when that dialog is gone or another one took its place (a deep link
+// opened a new one meanwhile), as a toast only, leaving the dialog shown
+// as the user has it.
+func (p *Page) applyImport(c *ui.Context, r *importResult) {
 	d := &p.imp
+	mine := d.open && d.phase == phaseLoading && d.session == r.session
 	if r.err != nil {
-		d.phase, d.err = phaseError, r.err.Error()
+		if mine {
+			d.phase, d.err = phaseError, r.err.Error()
+		} else {
+			p.e.Toast(r.err.Error(), true)
+		}
 		return
 	}
-	d.phase, d.step, d.result, d.doneAt = phaseDone, 2, r.sub.Name, c.Now()
-	c.After(400 * time.Millisecond)
+	if mine {
+		d.phase, d.step, d.result, d.doneAt = phaseDone, 2, r.sub.Name, c.Now()
+		c.After(400 * time.Millisecond)
+	}
 	switch {
 	case r.startErr != nil:
 		p.e.Toast(i18n.Tf("已导入 %s，但内核启动失败：%s", r.sub.Name, r.startErr.Error()), true)

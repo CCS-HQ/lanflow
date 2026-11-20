@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/egoist/mygo/ui"
 
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/colwidth"
 	"lanflow/internal/view/env"
 )
 
@@ -49,9 +51,10 @@ type Page struct {
 	tab    int
 	loaded bool // tab restored from API.UIState
 
-	dnsName  string
-	dnsType  string
-	querying bool
+	dnsName string
+	dnsType string
+	// querying is set by query on the UI thread and cleared by its job.
+	querying atomic.Bool
 
 	addOpen         bool
 	addName, addURL string
@@ -379,7 +382,7 @@ func (p *Page) pathRow(c *ui.Context, t *ui.Theme, x model.ExitInfo) {
 				ui.Text(c, text).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(text)
 			}
 		case model.PathChain:
-			ui.Text(c, i18n.Tf("链式代理 · %d 跳", x.ChainHops)).FontSize(12).SingleLine()
+			ui.Text(c, i18n.Tn(x.ChainHops, "链式代理 · %d 跳", x.ChainHops)).FontSize(12).SingleLine()
 		case model.PathSuspicious:
 			ui.Text(c, i18n.T("⚠ 位置存疑")).FontSize(12).TextColor(t.Warning).SingleLine().Shrink(0)
 			if x.PathNote != "" {
@@ -419,7 +422,7 @@ func (p *Page) sitesSection(c *ui.Context, t *ui.Theme, sites []model.SiteCheck,
 				p.removeSite(s.URL)
 			}
 		}
-		ui.Table(c.Key("sites"), &p.sites, env.I18nColumns(siteCols), len(sites), func(row, col int) {
+		ui.Table(c.Key("sites"), &p.sites, colwidth.Fit(c, env.I18nColumns(siteCols)), len(sites), func(row, col int) {
 			s := sites[row]
 			switch siteCols[col].ID {
 			case "name":
@@ -693,10 +696,11 @@ func (p *Page) dnsBox(c *ui.Context, t *ui.Theme, running bool, res *model.DNSRe
 			}
 			ui.Select(c.Key("dnstype"), &p.dnsType, dnsTypes).Label(i18n.T("记录类型"))
 			label := i18n.T("查询")
-			if p.querying {
+			querying := p.querying.Load()
+			if querying {
 				label = i18n.T("查询中…")
 			}
-			ui.PrimaryButton(c, label).Disabled(!running || p.querying || strings.TrimSpace(p.dnsName) == "").OnClick(p.query).
+			ui.PrimaryButton(c, label).Disabled(!running || querying || strings.TrimSpace(p.dnsName) == "").OnClick(p.query).
 				Tooltip(i18n.T("查询经由内核的解析器；Fake-IP 模式下同时显示应用实际拿到的地址和解析到的真实地址"))
 		})
 		switch {
@@ -780,11 +784,10 @@ func sameAnswers(a, b []string) bool {
 func (p *Page) query() {
 	e := p.e
 	name := strings.TrimSpace(p.dnsName)
-	if name == "" || p.querying {
+	qtype := p.dnsType
+	if name == "" || !p.querying.CompareAndSwap(false, true) {
 		return
 	}
-	qtype := p.dnsType
-	p.querying = true
 	p.mu.Lock()
 	p.dnsErr, p.dnsRes = "", nil
 	p.mu.Unlock()
@@ -792,7 +795,7 @@ func (p *Page) query() {
 		res, err := e.API.DNSQuery(name, qtype)
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		p.querying = false
+		p.querying.Store(false)
 		if err != nil {
 			p.dnsErr = err.Error()
 		} else {
