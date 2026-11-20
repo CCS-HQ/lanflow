@@ -60,7 +60,7 @@ gh attestation verify lanflow-<版本>-arm64.dmg --repo Owlbay/lanflow
 | `internal/view/...` | 界面：外壳与各页面 |
 | `internal/rpc`、`internal/app/remote` | 本机接口（JSON-RPC 服务端、权限分级、审计与撤销）与生成的远程客户端、方法清单 |
 | `internal/ctl`、`internal/mcp`、`skills/lanflow` | `lanflow ctl`、`lanflow mcp` 与配套的 Claude skill |
-| `scripts/` | 下载内核、准备打包资源 |
+| `scripts/` | 下载内核、准备打包资源与许可证材料、构建应用、虚拟机测试 |
 
 技术方案见 [architecture.md](docs/architecture.md)、[advanced.md](docs/advanced.md)、[exit-map.md](docs/exit-map.md)。
 
@@ -81,72 +81,85 @@ go tool mygo dev
 LANFLOW_FAKE=1 go tool mygo dev
 ```
 
-测试与检查（与 CI 相同）：
+测试与检查：
 
 ```sh
 go vet ./... && go tool mygo vet .
-CGO_ENABLED=0 go test ./...
-go test -race ./...                   # 需要 cgo（macOS 自带的工具链即可）
+CGO_ENABLED=0 go test -shuffle=on ./...
+go test -race -shuffle=on ./...       # 需要 cgo（macOS 自带的工具链即可）
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 go mod tidy -diff
 ```
 
 `internal/app`、`internal/core` 中的端到端测试使用 `bin/mihomo`，`internal/locate` 的部分测试使用 `bin/geo/`；没有这些文件时自动跳过，其余测试不需要网络。端到端测试不会改动系统代理；改动真实系统设置的测试需显式开启（见下文 `LANFLOW_LIVE_SYSPROXY`，以及 `scripts/vm-e2e.sh` 在虚拟机里运行的 `LANFLOW_LIVE_E2E`）。
 
-CI（`.github/workflows/ci.yml`）在 PR 和推送到 main 时于 macOS、Windows 上运行以上检查（`-race` 只在 macOS 上跑），并先用 `fetch-core.sh` 下载内核以运行端到端测试；仓库变量 `CI_SKIP_CORE=1` 可跳过下载。
+CI（`.github/workflows/ci.yml`）在 PR 和推送到 main 时运行，也可以手动触发：
+
+- **测试**（macOS、Windows）：`go mod tidy -diff`、`go vet`、`mygo vet`、govulncheck，并先用 `fetch-core.sh` 下载内核以运行端到端测试（仓库变量 `CI_SKIP_CORE=1` 可跳过下载）。测试每个平台跑一遍，都带 `-shuffle=on`：macOS 带 `-race`，Windows 不带。失败时完整的测试输出（含界面测试打印的页面元素位置）作为 `test-output-<系统>` 产物保留 14 天；输出里的 `-shuffle=<种子>` 可用来在本地复现同样的顺序。
+- **静态检查与交叉编译**（Linux）：对 linux/amd64 和 windows/arm64 执行 `go vet` 与 `go build`；staticcheck（目前只报告、不阻断）；核对 `THIRD-PARTY-NOTICES.md` 写的 Mihomo 版本与 `fetch-core.sh` 一致，并列全了编入程序的 Go 模块。
+- **权限组件版本**：组件代码有改动而 `cmd/lanflow-helper/VERSION` 没变时报错。
+
+每个作业都设了超时。
 
 ## 打包
 
 ```sh
-scripts/prepare-resources.sh          # 内核、权限组件、地理数据库 → resources/
-go tool mygo build                    # build/<平台>/Lanflow.app 与 .dmg
+scripts/prepare-resources.sh darwin arm64     # 内核、权限组件、地理数据库、许可证材料 → resources/
+scripts/build-app.sh darwin arm64             # build/darwin-arm64/Lanflow.app 与 .dmg
 ```
 
-Windows：`scripts/prepare-resources.sh windows amd64` 后在 Windows 上执行 `go tool mygo build`。
+平台参数可换成 `darwin amd64`；Windows 安装程序要在 Windows 上（Git Bash）用 `windows amd64` 执行这两步。
+
+要用 `scripts/build-app.sh` 而不是直接 `go tool mygo build`：`prepare-resources.sh` 会把权限组件的版本和（macOS 上）它的 SHA-256 写到 `bin/<平台>/app-ldflags`，`build-app.sh` 通过 `MYGO_LDFLAGS` 把它们链接进应用，安装 TUN 权限组件前据此核对。直接构建出的应用没有这层校验，与发布版不一致。
+
+`prepare-resources.sh` 同时生成 `resources/<平台>/licenses/`（由 `scripts/collect-licenses.sh` 完成），随应用一起打包：Mihomo 的 GPL-3.0 许可证全文（`fetch-core.sh` 从 Mihomo 仓库的对应 tag 下载并校验）、指向该版本源代码的说明、地理数据库的来源与署名，以及编入程序的每个 Go 模块的许可证文件（从本机 Go module cache 复制）。清单见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+
+没有设置 `MYGO_UPDATER_PRIVATE_KEY` 时，构建只产出应用和安装包，不产出更新包与更新清单（见下文「应用自动更新」）。
 
 ### 发布
 
-把 `mygo.json` 的 `version` 改为新版本号并提交，然后推送同名 tag：
+1. 改版本号，三处保持一致（发布流程会核对前两处，不一致即失败）：
+   - `mygo.json` 的 `version`；
+   - `internal/view/settings/page.go` 的 `appVersion` 常量（未打包运行时「关于」里显示的版本）；
+   - 权限组件的代码或它的依赖有改动时，另把 `cmd/lanflow-helper/VERSION` 加一（`scripts/check-helper-version.sh` 会检查；已安装的权限组件只在版本号不同时才会被替换）。
+2. 升级了内核固定版本（`scripts/fetch-core.sh` 的 `PINNED_VERSION`）时，同步修改 `internal/app/coredl.go`、`internal/app/coresums.go` 和 `THIRD-PARTY-NOTICES.md` 里的版本号与链接（测试和 CI 会核对）。
+3. 提交并推送到 main，等这个提交的 CI 通过。
+4. 在这个提交上打同名 tag 并推送：
 
-```sh
-git tag v0.1.0 && git push origin v0.1.0
-```
+   ```sh
+   git tag v0.1.8 && git push origin v0.1.8
+   ```
 
-GitHub Actions（`.github/workflows/release.yml`）会校验 tag 与版本号一致，在 macOS 和 Windows 上运行 vet 与测试，构建 macOS arm64 / amd64 的 `.dmg` 和 Windows 安装程序，附上 SBOM（`lanflow-<tag>.spdx.json`）和各二进制的 `go version -m` 构建信息，生成 `SHA256SUMS.txt` 与构建来源证明（attestation），并创建带自动更新说明的 Release。带 `-` 的 tag（如 `v0.2.0-beta.1`）发布为预发布版。发布流程不使用 Go 构建缓存，所用 action 固定到 commit SHA，由 Dependabot 更新。
+GitHub Actions（`.github/workflows/release.yml`）随后：
+
+- **校验**：tag 与上述版本号一致；tag 指向的提交在 main 上；该提交有一次成功的 CI 运行（还在运行就等待，最多 45 分钟；没有或失败则终止——可以在 tag 上手动触发 CI 后重跑）；更新签名密钥 `MYGO_UPDATER_PRIVATE_KEY` 已配置；权限组件版本检查通过。
+- **地理数据库**：上游只有每天滚动更新的 `latest`，所以在校验作业里只下载一次，macOS 和 Windows 两个构建作业使用同一份并按 SHA-256 核对；三个文件的 SHA-256 写进 Release 说明、附件 `lanflow-<tag>-geodata.sha256` 和各平台的构建信息。
+- **构建**：macOS 与 Windows 各自 `go vet`、`mygo vet`，准备资源后运行测试（此时有内核，端到端测试针对将要发布的内核运行），再用 `scripts/build-app.sh` 构建 macOS arm64 / amd64 的 `.dmg` 和 Windows 安装程序，以及签名的更新包、增量包和更新清单。竞态检测、staticcheck、govulncheck 和交叉编译不在这里重复，依赖上面要求的 CI 结果。macOS 构建会核对包内的权限组件、地理数据库和许可证材料。
+- **发布**：附上 SBOM（`lanflow-<tag>.spdx.json`）、各二进制的 `go version -m` 构建信息、`THIRD-PARTY-NOTICES.md`，生成 `SHA256SUMS.txt` 与构建来源证明（attestation），创建 Release（更新说明由 GitHub 自动生成），最后上传更新清单——清单一上传，已安装的应用就能看到新版本。
+
+带 `-` 的 tag（如 `v0.2.0-beta.1`）发布为预发布版。发布流程不使用 Go 构建缓存，所用 action 固定到 commit SHA，由 Dependabot 更新。安装包目前没有 Apple Developer ID 签名、公证和 Windows 代码签名（macOS 为 ad hoc 签名）。
 
 ### 应用自动更新
 
-澜流用 MyGo 的签名更新（`mygo.Updater`）：「设置 › 常规 › 关于」里的「检查更新」和「下载并重启」，以及每天启动时的一次自动检查（可在同一处关闭）。`mygo.json` 目前**没有** `updates` 块，所以当前构建会显示「此版本未配置更新源」，不会报错。接入更新源只需三步，代码不用改：
+澜流用 MyGo 的签名更新（`mygo.Updater`）：「设置 › 常规 › 关于」里的「检查更新」和「下载并重启」，以及每天启动时的一次自动检查（可在同一处关闭）。
 
-1. 生成签名密钥（只做一次）：
+更新源已经配置好，在 `mygo.json` 的 `updates` 块里：
 
-   ```sh
-   go tool mygo keygen        # 写出 mygo-update.key（私钥）和 mygo-update.pub（公钥），并打印位置
-   ```
+```json
+"updates": {
+  "publicKey": "<ed25519 公钥>",
+  "github": "Owlbay/lanflow"
+}
+```
 
-   私钥**不要**放进仓库：保存在密码管理器，并作为 CI 的 secret（`MYGO_UPDATER_PRIVATE_KEY`）。已安装的应用只接受用它签名的更新，丢了就无法再推送更新，泄露则任何人都能向用户下发代码。
+- 已安装的应用读取该仓库最新正式 Release（不含草稿和预发布版）里的 `update-<平台>.json`，按其中的地址下载更新包或增量包，并用 `publicKey` 验证签名后才安装。
+- 对应的私钥是仓库 secret `MYGO_UPDATER_PRIVATE_KEY`，发布流程用它为更新包和清单签名。私钥**不要**放进仓库，另在密码管理器里留一份：丢了就无法再向已安装的应用推送更新，泄露则任何人都能向用户下发代码。需要重新生成时用 `go tool mygo keygen`，但换了公钥之后，旧版本不会接受新密钥签名的更新。
+- 本地构建若要产出更新包，在构建时提供私钥：`MYGO_UPDATER_PRIVATE_KEY="$(cat /path/to/mygo-update.key)" scripts/build-app.sh darwin arm64`。
+- 开发构建（`mygo dev`、`go run`）和由包管理器安装的副本不会自更新；去掉 `updates` 块的构建在「关于」里显示「此版本未配置更新源」。
+- 更新窗口里的更新说明来自仓库根目录的 `CHANGELOG.md` 中对应版本的小节（`## 0.2.0`）。仓库目前没有这个文件，所以更新清单里不带更新说明，说明只在 GitHub 的 Release 页面上；若以后添加该文件，每个发布的版本都必须有对应小节，否则构建失败。
 
-2. 在 `mygo.json` 里加上公钥和发布位置，二选一：
-
-   ```json
-   {
-     "version": "0.2.0",
-     "updates": {
-       "publicKey": "<mygo-update.pub 的内容>",
-       "github": "<owner>/<repo>"
-     }
-   }
-   ```
-
-   `github` 指向一个公开仓库，发布版 tag 为 `v0.2.0` 这样的形式（`mygo build -upload` 会上传到该版本的草稿 release，发布后即生效）。用自己的 HTTPS 服务器或 S3/R2 时改为 `"url": "https://downloads.example.com/lanflow"`，并把构建产物（`*.tar.gz`、`*.delta`、`update-<平台>.json`）上传到该目录，清单文件最后上传。
-
-3. 构建时提供私钥，`mygo build` 会为每个平台写出签名清单与增量更新包：
-
-   ```sh
-   MYGO_UPDATER_PRIVATE_KEY="$(cat /path/to/mygo-update.key)" go tool mygo build
-   ```
-
-   更新日志取自 `CHANGELOG.md` 中对应版本的 `## 0.2.0` 小节（文件存在时必须有该小节）。开发构建（`mygo dev`、`go run`）和由包管理器安装的副本不会自更新。详见 MyGo 文档 `docs/updates.md`。
+改用自己的服务器、S3/R2 存放更新，以及清单格式、增量更新等细节，见 MyGo 文档：<https://github.com/egoist/mygo/blob/main/docs/updates.md>。
 
 ## 配置同步
 
@@ -209,7 +222,7 @@ agent 可以直接编辑 `lanflow.yaml`，或用 `lanflow ctl config sync apply 
 
 ## 已知限制
 
-- Windows 版代码已交叉编译并通过静态检查，尚未在真实 Windows 上运行。
+- Windows 版的测试（含内核端到端测试和界面测试）在 CI 的 Windows 机器上运行，尚未在真实 Windows 桌面上人工验证。
 - TUN 已在 macOS 26 虚拟机中实测（`scripts/vm-tun-test.sh <虚拟机名>`）：安装权限组件、开启 TUN、无代理设置的请求被 TUN 接管、关闭后路由恢复、卸载无残留。图形界面里的管理员授权弹窗尚未实测。
 - 「自动设置系统 DNS」目前只支持 macOS；Windows 上 DNS 若指向局域网地址，查询不经过 TUN，只能按 IP 和嗅探分流。
 - aTrust 兼容尚未在装有 aTrust 的机器上实测；Windows 上只按进程名让 aTrust 自身流量直连，不读取它的路由和内网域名。
@@ -220,7 +233,11 @@ agent 可以直接编辑 `lanflow.yaml`，或用 `lanflow ctl config sync apply 
 
 澜流本身以 [MIT 许可证](LICENSE) 发布。
 
-Mihomo 为 GPL-3.0，随包分发时附带其许可证与源码信息。地图陆地数据来自 Natural Earth（公有领域）；ASN 数据库来自 MaxMind GeoLite2，需注明出处。
+安装包里另有第三方组件，清单与许可证见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)，许可证全文在安装包内的 `licenses/` 文件夹（macOS：`Lanflow.app/Contents/Resources/licenses/`）：
+
+- **Mihomo** 内核为 GPL-3.0，以独立程序随包分发，未作修改；包内附有许可证全文和对应版本源代码的地址（当前为 [v1.19.33](https://github.com/MetaCubeX/mihomo/tree/v1.19.33)）。
+- **地理数据库**来自 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat)。This product includes GeoLite2 Data created by MaxMind, available from <https://www.maxmind.com>.
+- 地图陆地数据来自 Natural Earth（公有领域）。
 
 参考：[MyGo](https://github.com/egoist/mygo)、[Mihomo](https://github.com/MetaCubeX/mihomo)、[Mihomo API](https://wiki.metacubex.one/api/)。
 

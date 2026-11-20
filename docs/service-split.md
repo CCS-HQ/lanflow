@@ -45,11 +45,20 @@
 | --- | --- | --- | --- | --- |
 | 读状态 | `Status`、`Proxies`、`Rules`、`Settings`（脱敏） | ✓ | ✓ | ✓ |
 | 敏感读 | 订阅链接、连接明细、日志原文、解密内容 | ✓ | 需 `--reveal` 且界面确认 | 默认拒绝，需按会话授权 |
-| 写配置 | `SaveSettings`、`SelectProxy`、`AddCustomRule`、订阅增删 | ✓ | ✓（`--dry-run` 先给 diff） | 需首次授权，每次写入记审计 |
+| 写配置 | `SaveSettings`、`SelectProxy`、`AddCustomRule`、订阅增删 | ✓ | 在终端里运行：✓（`--dry-run` 先给 diff）；不在终端里（脚本、agent 调用）：与 MCP 相同 | 需首次授权（本次 / 始终 / 拒绝），每次写入记审计 |
+| 高影响写 | 导入或切换订阅、覆写、内核启停、系统代理、TUN、`ApplyConfigFile`（预览除外） | ✓ | 在终端里运行：✓；否则每次运行确认一次（仅本次 / 始终允许 / 拒绝），「始终允许」单独记为 `lanflow ctl (high impact)` | 每个连接确认一次（允许 / 拒绝），「始终允许」不覆盖 |
 | 危险操作 | 安装/卸载 helper、根证书、删除全部订阅、导出备份 | ✓ | 需界面确认 | 不开放 |
 
 - 客户端在握手时声明身份（`ui`、`ctl`、`mcp:<名称>`）；服务按身份套用上表。同一用户的进程本就能读写数据目录，这里防的是 agent 越权和误操作，不是防恶意本地程序。
-- 首次有新 agent 写配置时，托盘弹通知请用户允许（本次 / 始终 / 拒绝），结果存在设置里，可在「设置 › 高级」撤销。
+- 身份只是连接自己的说法，服务另外核对对端进程的可执行文件（`internal/rpc/peer.go`：macOS `LOCAL_PEERPID` + `proc_pidpath`，Linux `SO_PEERCRED` + `/proc/<pid>/exe`，Windows 管道客户端 PID + `QueryFullProcessImageName`）。界面、`lanflow ctl`、`lanflow mcp` 都是澜流自己的可执行文件，所以：
+  - `ui` 身份只接受来自这份可执行文件的连接，其他程序自称 `ui` 时握手被拒绝（错误带服务的 PID，另一份澜流的界面据此按「版本不同」的流程替换服务）；
+  - ctl 的「在终端里运行」（握手的 `Interactive`：标准输入和输出都是终端）只在对端是这份可执行文件时才算数；
+  - 记住的「始终允许」同样只对这份可执行文件的连接生效：直接连套接字、借用已授权名称的程序仍会被询问，它得到的「始终允许」只对当前连接有效、不保存。记住的「拒绝」对所有连接生效。
+- 这层校验挡的是：agent 或脚本绕开 `lanflow ctl` / `lanflow mcp` 直连套接字并自称界面、自称终端里的 ctl，或冒用已获「始终允许」的名称，从而跳过上表。不挡的是恶意本地程序：它可以在自己控制下运行澜流的可执行文件（伪终端、继承的套接字、注入代码），也能直接读写数据目录。其他平台（非 macOS / Linux / Windows）不识别对端进程，同一用户的连接都视为澜流自己。
+- 首次有新 agent 写配置时，托盘弹通知请用户允许（本次 / 始终 / 拒绝），结果存在设置里，可在「设置 › 高级」撤销。不在终端里运行的 ctl 同样处理，结果记在固定名称 `lanflow ctl` 下（MCP 客户端不能用这个名称）。
+- 高影响写（`rpc.HighImpact`：`ImportSubscriptionURL`、`ImportSubscriptionFile`、`UseSubscription`、`SaveOverride`、`SaveOverrideEntry`、`DeleteOverrideEntry`、`StartCore`、`StopCore`、`RestartCore`、`SetSystemProxy`、`SetTUN`、非预览的 `ApplyConfigFile`）会替换正在使用的配置或断网：为切换节点给出的「始终允许」不覆盖它们，每个连接确认一次（允许 / 拒绝，拒绝后该连接不再询问）；已记住「拒绝」写入的 agent 直接拒绝。不在终端里运行的 `lanflow ctl` 每次运行都是一个新连接，只按连接确认的话脚本（定时任务、启动器动作）永远无法无人值守，所以它的高影响写可以选「始终允许」，单独记在 `Settings.AgentGrants` 的 `lanflow ctl (high impact)` 名下（`rpc.CtlHighGrant`，只对澜流自己的可执行文件生效，可在 设置 › 高级 › Agent 接入 撤销）；MCP 没有这个选项。代价是：用户一旦对它选了「始终允许」，能运行 shell 的 agent 也能经 `lanflow ctl` 执行这些操作而不再询问。
+- MCP 不能让澜流读取它任选的本地文件：`ImportSubscriptionFile` 不提供（服务端同样拒绝）；`ApplyConfigFile` 的路径只能留空（同步文件本身）或是同步文件所在目录里的 `.yaml` / `.yml`（解析符号链接后判断）。ctl 不受这两条限制。
+- 授权弹窗和审计记录都带对端进程的 PID 与可执行文件路径（已知时）。
 - 审计日志 `logs/audit.log`：时间、客户端、方法、参数摘要（脱敏）、结果；`ctl undo` 用它回滚最近一次配置写入。
 - 所有返回给 ctl/MCP 的设置和订阅都走诊断导出已有的脱敏逻辑（`applog.Redact`）。
 
@@ -97,12 +106,12 @@ S1 在现有单进程里加了本机接口，界面仍直接调用进程内的 `
 - 协议：参数是按声明顺序的 JSON 数组，结果是去掉 error 后的返回值数组；`hello` 必须是第一条消息，协议版本（`rpc.ProtocolVersion`）不一致即拒绝，澜流版本不一致只记日志。`app.ErrHelperRequired` 以 `data.kind = "helper-required"` 传回并在客户端还原。请求并发处理，事件在独立 goroutine 发送，慢客户端不拖住服务。
 - 方法清单：`internal/rpc/levels.go` 是权限表的唯一来源，生成器把它和 `api.go` 合成 `manifest_gen.go`（名称、参数名与类型、结果类型、级别、文档）。API 新增方法而 `levels.go` 没有对应条目时，生成器和 `internal/app/remote` 的测试都会失败；生成文件过期也会被测试发现。
 - 权限：在四级之外加了「仅界面」级（`TakeNotices`、UI 状态、`ResolveRecovery`、`DismissProxyHint`、`PatchUIState`），任何 agent 都不能调用。只测量、不改配置的动作（测速、检测、DNS 查询、刷新网络、泄漏检查）归为「读」。删除订阅、重置统计、切换/安装内核、备份与恢复、WebDAV 密码归为「危险」。
-- 授权：MCP 首次写入、MCP 敏感读、ctl `--reveal` 敏感读、ctl 危险操作都经界面弹窗（同时发系统通知并把窗口拉到前台）。写入的「始终允许 / 拒绝」存进 `Settings.AgentGrants`，「仅本次」只对当前连接有效；敏感读只按连接授权。等待超过 1 分钟视为拒绝（「等待界面确认超时」；S2 起由服务端计时，弹窗卡住也会按时返回）。没有界面可问时（`Prompt` 为空）一律拒绝并说明原因。
+- 授权：MCP 首次写入、不在终端里运行的 ctl 首次写入、两者的高影响写（第 4 节）、MCP 敏感读、ctl `--reveal` 敏感读、ctl 危险操作都经界面弹窗（同时发系统通知并把窗口拉到前台）。写入的「始终允许 / 拒绝」存进 `Settings.AgentGrants`，「仅本次」只对当前连接有效；敏感读只按连接授权。等待超过 1 分钟视为拒绝（「等待界面确认超时」；S2 起由服务端计时，弹窗卡住也会按时返回）。没有界面可问时（`Prompt` 为空）一律拒绝并说明原因。
 - 整体写设置：agent 读到的设置已脱敏，整体写回会把掩码存进去，所以 `SaveSettings`、`ApplyDNS`、`ApplySniffer` 对 agent 拒绝，改用新增的 `PatchSettings(patch, dryRun)`：按字段名（不区分大小写）合并 JSON 补丁，未知字段报错，`UI`、`AgentGrants`、`CorePath`、`CoreVersion`、`WebDAV`、`ConnHiddenColumns` 不可改；`dryRun` 返回脱敏后设置的行级差异（前后各 2 行上下文）。`EditSubscription` 收到空链接时保留原链接。
 - 其他 agent 方法：`Undo`、`AuditLog(n)`、`Methods`（清单，供兼容检查）、`PatchUIState`（`UpdateUIState` 的远程形式，仅界面）。
 - 审计与撤销：ctl/MCP 的写入和被拒的非读调用写入日志目录的 `audit.log`（JSON 行，参数经 `applog.Redact`，2 MB 轮转一份）。写入前按方法快照：设置（撤销时保留 UI 状态与授权）、自定义规则（删新增、补回删除的、再按原顺序移动）、覆写列表、规则启停、系统代理开关、代理组选择、当前订阅、订阅编辑、导入的订阅（撤销即删除）。撤销栈在内存里，最多 20 条，只覆盖本次运行。
 - 脱敏：agent 收到的每个结果都先转成 JSON 再对所有字符串做 `applog.Redact`（图标字节除外）；订阅的 `URL` 清空；设置去掉 UI 状态和授权，代理认证的密码打码。
-- MCP：工具名是方法名的 snake_case；提供读、敏感读、写三级，去掉整体写设置、图标、目录路径、aTrust 文件导入导出和诊断包导出。参数的 JSON Schema 由 `app.API` 的反射类型生成。连接按需建立，澜流重启后自动重连；单次调用最长等 3 分钟（包含等用户授权）。
+- MCP：工具名是方法名的 snake_case；提供读、敏感读、写三级，去掉整体写设置、图标、目录路径、aTrust 文件导入导出、诊断包导出和从本地文件导入订阅；高影响写的工具说明里注明每个会话需确认一次，并标为 `destructiveHint`。参数的 JSON Schema 由 `app.API` 的反射类型生成。连接按需建立，澜流重启后自动重连；单次调用最长等 3 分钟（包含等用户授权）。
 - 测试：`internal/rpc`（往返、握手、对端 uid 校验、权限与授权、事件、补丁预览与撤销、脱敏）、`internal/app/remote`（清单覆盖与生成文件新鲜度）、`apigen`（漏标即失败）、`internal/ctl`、`internal/mcp`（工具清单、一次完整的 `route_domain` 预览 → 应用 → 验证 → 撤销）、`internal/view`（授权弹窗）。
 - 未做：大数据的增量参数（`since`/`limit`）；托盘里的授权入口（S2 拆出服务进程后再做）；Windows 管道与对端校验只经交叉编译和 `go vet`，未在真机运行。
 
@@ -123,7 +132,7 @@ S1 在现有单进程里加了本机接口，界面仍直接调用进程内的 `
 - **macOS 的 Dock / Finder**：服务进程是同一 bundle 的 `NSApplication`，LaunchServices 视其为「正在运行的 Lanflow」，所以在 Finder、Dock、Spotlight 打开 Lanflow 时不会启动新进程，而是激活服务进程；服务在 `OnActivate` 中拉起界面（`OnOpenURL` 同理，深链接转交界面）。界面进程是普通前台应用，有 Dock 图标。
 - **关窗**：`CloseToTray`（默认开）时关窗 = 界面进程退出，服务、内核、连接不受影响；关掉该设置时关窗 = 退出澜流（与单进程一致）。窗口快捷键在窗口位于前台时关掉窗口（即退出界面进程），否则拉起或显示。
 - **退出澜流**：界面里的 ⌘Q / 应用菜单退出、以及托盘「退出澜流」都走原有确认（系统代理开着时 `Shell.AskQuit`），确认后界面调 `QuitService`，服务按原逻辑恢复系统代理、停内核，并向界面发 `ui quit` 让它直接退出。托盘退出时有界面就让界面确认（`ui ask-quit`），没有界面则用原生对话框确认（`Background.ConfirmQuit`，文字与窗口内相同）。SIGTERM 不确认，直接走同一退出路径。
-- **agent 授权**：服务进程的 `Prompt` 改为 `Background.AskAgentConsent`：发系统通知，并在托盘菜单顶部加「待授权：<agent>…」，点通知或菜单项弹原生对话框（写入：始终允许 / 仅本次 / 拒绝；其他：允许 / 拒绝；关闭对话框 = 拒绝）。超时与撤回逻辑不变。单进程模式仍用窗口内的弹窗。
+- **agent 授权**：服务进程的 `Prompt` 改为 `Background.AskAgentConsent`：发系统通知，并在托盘菜单顶部加「待授权：<agent>…」，点通知或菜单项弹原生对话框（写入：始终允许 / 仅本次 / 拒绝；ctl 的高影响写同样可选始终允许；其他（含 MCP 的高影响写）：允许 / 拒绝；关闭对话框 = 拒绝）。超时与撤回逻辑不变。单进程模式仍用窗口内的弹窗。
 - **提醒（Notice）**：`TakeNotices` 只能被取走一次，而服务进程需要 `System` 提醒发系统通知、界面需要其余提醒做 toast/对话框。`split.Notices` 包住服务：每次 `TopicNotice` 由服务进程取出，新提醒交给 `Background.SystemNotice`，同时排队留给界面的 `TakeNotices`（最多 20 条，超过 2 分钟的 toast 丢弃）。
 
 ### 本机接口新增
@@ -147,7 +156,7 @@ S1 在现有单进程里加了本机接口，界面仍直接调用进程内的 `
 
 ### 开机启动与迁移（S3）
 
-- 「开机时启动」改为启动服务进程（`internal/autostart`）：macOS 写 `~/Library/LaunchAgents/lanflow.service.plist`（`<exe> --service --login`，`RunAtLoad`，不 `KeepAlive`，限 Aqua 会话）；Windows 写当前用户 Run 键的 `lanflow.service` 值（`"<exe>" --service --login`），并像 mygo 一样清掉任务管理器里的禁用标记。内容相同时不重写；app 移动位置后服务下次启动时改写。macOS 开发构建（不在 .app 里）不写。
+- 「开机时启动」改为启动服务进程（`internal/autostart`）：macOS 写 `~/Library/LaunchAgents/lanflow.service.plist`（`<exe> --service --login`，`RunAtLoad`，不 `KeepAlive`，限 Aqua 会话）；Windows 写当前用户 Run 键的 `lanflow.service` 值（`"<exe>" --service --login`），并像 mygo 一样清掉任务管理器里的禁用标记；Linux 及其他 Unix 桌面写 XDG autostart 条目 `$XDG_CONFIG_HOME/autostart/lanflow.service.desktop`（`xdg.go`）。内容相同时不重写；app 移动位置后服务下次启动时改写。macOS 开发构建（不在 .app 里）不写。
 - 服务启动时第一次应用设置时迁移：mygo 的旧登录项（macOS `SMAppService` 主程序登录项或 macOS 12 的旧 launch agent，Windows 的 `--mygo-opened-at-login` Run 值）若存在就移除，然后按 `OpenAtLogin` 写新的。
 - 登录启动的服务（`--login`）在 `SilentStart` 关闭时顺带打开界面，与拆分前登录后显示窗口一致。迁移前的最后一次登录仍由旧登录项打开界面进程：它照常拉起服务；`SilentStart` 开着时界面直接退出。
 - **首次启动**：界面发现没有服务，拉起服务再连接。**升级**：界面握手发现服务版本不同，弹窗「需要重启澜流后台服务」，确认后 `QuitService`，等旧进程退出后由重连逻辑拉起新服务（内核会短暂停止，系统代理随 `AutoSystemProxy` 恢复）。macOS 上替换 app 后从 Finder 打开会先激活旧服务，旧服务按磁盘上的路径拉起的已经是新版本界面，于是同样走这个提示。**旧的单进程版本仍在运行**：它的本机接口没有 `AttachUI`，界面提示先退出旧版本（`split.ErrOldService`）。

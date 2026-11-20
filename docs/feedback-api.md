@@ -168,10 +168,11 @@ Cloudflare Workers 免费版请求体上限为 100 MB，KV 单个值上限 25 MB
 
 客户端在**生成报告时**就完成脱敏，预览里看到的就是将要发送的全部内容：
 
-- 链接只保留协议和主机名，路径与查询参数（订阅令牌所在）替换为 `***`；`token=`、`password=`、`secret=`、`uuid=` 等形式的值掩码（`applog.Redact`）。
+- 链接只保留协议和主机名（任意协议，不限 http/ws），用户信息、路径与查询参数（订阅令牌所在）替换为 `***`；节点分享链接（`ss://`、`vmess://`、`vless://`、`trojan://`、`hysteria2://`、`tuic://` 等）整条掩码；`Authorization` / `Proxy-Authorization`、`Cookie` / `Set-Cookie` 头以及单独出现的 `Bearer …`、`Basic …` 凭据掩码；键名以 `token`、`secret`、`password`、`passwd`、`passphrase` 结尾（如 `access_token`），或为 `pass`、`auth`、`auth-str`、`key`（含 `private-key`、`api_key` 这类前缀形式）、`uuid`、`psk`、`sid` 的值掩码，`key=value`、`key: value`、YAML 与 JSON（`"key":"value"`，含转义后嵌在字符串里的）写法都识别；用同步口令加密的 `enc:v1:…` 密文掩码（`applog.Redact`，`internal/applog/redact.go`）。
 - 配置中的节点服务器、认证信息、UUID、密钥、证书全部替换为 `***`。
 - **公网 IP**（IPv4 与 IPv6）替换为 `x.x.x.x` / `x:x:x:x`；局域网、回环、链路本地、CGNAT、Mihomo fake-ip（198.18.0.0/15）地址保留，便于排查局域网问题。
 - 不收集连接明细、访问过的域名、规则与域名列表、Wi-Fi 名称、订阅链接。
+- 报告附带的运行时配置与设置里，内容是域名、地址、名称、凭据或本机路径的列表只保留条数（`<omitted: N items>`，`feedback_redact.go` 的 `privateKeys` / `privatePairs`，键名忽略大小写与 `-`、`_`）：规则与规则集（`rules`、`sub-rules`、`rule-providers`、`payload`）、`hosts`、`nameserver-policy`、`proxy-server-nameserver-policy`、`fake-ip-filter`、`authentication`、`skip-auth-prefixes`、`lan-allowed-ips`、`lan-disallowed-ips`、嗅探的 `skip-domain` / `force-domain` / `skip-src-address` / `skip-dst-address`、系统代理的 `bypass`、TUN 的 `route-address` / `route-exclude-address` / `include-uid` / `include-package` / `exclude-package`，`dns.fallback-filter` 下的 `domain` 与 `ipcidr`；设置里对应的 `DNS.Policy`、`Advanced.TUNRouteAddress`、`Advanced.TUNRouteExcludeAddress`、`Advanced.DNSFallbackFilter` 的 `Domain` / `IPCIDR`，自定义规则、Wi-Fi 规则、aTrust、WebDAV、agent 授权与界面状态各节，以及内核路径 `CorePath` 和同步文件夹 `Sync.Dir`（本机路径，带用户名）。其中本次新增的是 `proxy-server-nameserver-policy`、`lan-allowed-ips`、`lan-disallowed-ips`、`skip-auth-prefixes`、`fallback-filter` 的两项、`DNS.Policy`、两个 `TUNRoute*Address`、`CorePath` 与 `Sync.Dir`。保留的列表只有解析器地址、快捷键、TUN 劫持端口和网卡名（`reportKeptLists`）；测试保证 `model.Settings` 里新增的列表必须归入其中一类。
 - 访问令牌（`Authorization`）只在请求头里，不进入报告。
 - `contact` 是用户主动填写的，会原样发送。
 - 用户的描述也经过同样的脱敏（误贴的订阅链接会被截掉）。

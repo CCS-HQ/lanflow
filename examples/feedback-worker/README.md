@@ -8,7 +8,8 @@
 - 配置了 `REPORT_TOKEN` 时校验 `Authorization: Bearer <token>`（常量时间比较）。
 - 按 `Content-Length` 和实际读到的字节数检查大小（默认 10 MB），超过返回 413。
 - 按 `X-Lanflow-Report-Id` 去重：已存在返回 200，不再写入。
-- 按客户端 IP 每小时限流（默认 10 份，KV 计数，近似），超过返回 429 和 `Retry-After`。
+- 按客户端 IP 每小时限流（默认 10 份，KV 计数，近似），超过返回 429 和 `Retry-After`；只有通过校验并已保存的报告才计数，格式不对的请求不消耗配额。
+- 内部异常只写入 Worker 日志，返回给客户端的 500 不带异常信息。
 - 元数据存 KV（`report:<id>`，默认保留 90 天），诊断包存 R2（`reports/<日期>/<id>.tar.gz`）。
 
 ## 部署

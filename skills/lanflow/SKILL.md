@@ -5,7 +5,7 @@ description: Manage the Lanflow (澜流) proxy client running on this computer t
 
 # Lanflow (澜流)
 
-Lanflow is a desktop proxy client built on Mihomo (Clash Meta). It runs on the user's Mac or PC; you reach it through the `lanflow` MCP server (preferred) or the `lanflow ctl` command line. Both talk to the running app over a private local socket. If a call says Lanflow is not running, ask the user to open it — do not try to start it yourself.
+Lanflow is a desktop proxy client built on Mihomo (Clash Meta). It runs on the user's Mac or PC; you reach it through the `lanflow` MCP server (preferred) or the `lanflow ctl` command line. Both talk to the running app over a private local socket and pass the same permission checks: `lanflow ctl` run by you (not by a person at a terminal) asks the user before writing exactly as the MCP tools do, so it is never a way around a refusal. If a call says Lanflow is not running, ask the user to open it — do not try to start it yourself.
 
 ## Tools
 
@@ -21,11 +21,22 @@ Names are the MCP tool names; `lanflow ctl` equivalents in brackets.
 - Measurements that change nothing: `test_proxy_delay`, `test_group_delay`, `test_all_delays`, `test_sites`, `run_leak_check`, `dns_query`, `probe_ip`, `probe_unlock`, `refresh_network`.
 
 **Change (asks the user the first time, audited, undoable)**
+
+The user answers in Lanflow: just this time, always, or deny. "Always" covers the small changes only.
 - `select_proxy` [`ctl proxies select <group> <node>`], `set_mode` [`ctl mode set rule|global|direct`], `set_main_group`.
 - `save_custom_rule`, `delete_custom_rule`, `move_custom_rule` [`ctl rule add <TYPE> <payload> <target> [--dry-run]`].
 - `patch_settings` [`ctl config set <Path> <value> [--dry-run]`, `ctl config apply <file> [--dry-run]`] — change settings field by field, e.g. `{"Mode":"rule","DNS":{"TakeOver":true}}`. `dryRun: true` returns the diff only.
-- Subscriptions: `import_subscription_url` [`ctl sub add <url> [--name] [--use]`], `use_subscription` [`ctl sub use`], `update_subscription` / `update_all_subscriptions` [`ctl sub update [--all]`].
+- `update_subscription` / `update_all_subscriptions` [`ctl sub update [--all]`].
+
+**High-impact changes (the user confirms once per session, even after "always"; with `lanflow ctl`, every command)**
+- Subscriptions: `import_subscription_url` [`ctl sub add <url|-> [--name] [--use]`; `-` reads the link from standard input], `use_subscription` [`ctl sub use`].
+- Overrides: `save_override`, `save_override_entry`, `delete_override_entry`.
 - Core and switches: `start_core`, `stop_core`, `restart_core`, `set_system_proxy`, `set_tun`.
+- `apply_config_file` without `dryRun` (see lanflow.yaml below).
+
+Say what you are about to do before calling one of these, so the confirmation in Lanflow does not surprise the user. There is no tool that imports a subscription from a local file; the user does that in Lanflow.
+
+**Undo and audit**
 - `undo` [`ctl undo`] — reverts the latest write (settings, custom rules, overrides, node selection, current subscription). `audit_log` [`ctl audit`] lists recent writes.
 
 **Composite (prefer these)**
@@ -39,7 +50,7 @@ Sensitive reads (`connections`, `logs`, `subscription_raw`, `runtime_config`) ne
 
 1. **Look**: `status` (and `diagnose` when something is wrong). Read names exactly as returned — node and group names are often Chinese with emoji.
 2. **Preview**: use `dry_run` / `dryRun` (or `--dry-run`) and show the user the diff for any settings or rule change that is not a plain node switch.
-3. **Apply**: make the smallest change that does the job. The first write from you makes Lanflow ask the user (just this time / always / deny); if denied, stop and tell the user — do not retry or look for another route.
+3. **Apply**: make the smallest change that does the job. The first write from you makes Lanflow ask the user (just this time / always / deny), and each session's first high-impact change asks again (allow / deny; through `lanflow ctl` the user may also allow those for good); the request shows your process, and the audit log records it. If denied, stop and tell the user — do not retry or look for another route (switching between the MCP tools and `lanflow ctl` does not change the answer).
 4. **Verify**: `test_rule` for routing, `test_proxy_delay` / `switch_node` for nodes, `diagnose_site` or `test_sites` for reachability. Report what changed and that `undo` reverts it.
 
 ## Common requests
@@ -55,7 +66,7 @@ Sensitive reads (`connections`, `logs`, `subscription_raw`, `runtime_config`) ne
 
 When the user has turned on 配置同步 (Settings › General › Configuration sync), the whole configuration also lives in one declarative file, `lanflow.yaml`, in the sync folder. `config_sync_status` [`ctl config sync status`] gives its `Path`, whether the last change loaded, and the error with its line when it did not.
 
-You may edit that file directly (settings, `overrides`, `customRules`, `subscriptions`); the structure is described by `docs/schema/lanflow.schema.json`, and a missing key means the default value. Lanflow notices the change within a few seconds, validates it (the file's own rules and `mihomo -t` on the composed config) and loads it — hot, by reloading the core, or by restarting it, as each change needs. An invalid change is refused and nothing changes; read `config_sync_status` afterwards and fix the line it names. To preview first, write your version to another file and call `apply_config_file {path, dryRun: true}` [`ctl config sync apply <file> --dry-run`], which returns the diff; without `dryRun` it loads that file the same way (undoable).
+You may edit that file directly (settings, `overrides`, `customRules`, `subscriptions`); the structure is described by `docs/schema/lanflow.schema.json`, and a missing key means the default value. Lanflow notices the change within a few seconds, validates it (the file's own rules and `mihomo -t` on the composed config) and loads it — hot, by reloading the core, or by restarting it, as each change needs. An invalid change is refused and nothing changes; read `config_sync_status` afterwards and fix the line it names. To preview first, write your version to another `.yaml` file in the same folder as `lanflow.yaml` and call `apply_config_file {path, dryRun: true}` [`ctl config sync apply <file> --dry-run`], which returns the diff; without `dryRun` it loads that file the same way (undoable; a high-impact change, so the user confirms it). Through MCP the path must be empty (the sync file itself) or a `.yaml` file in that folder; other paths are refused.
 
 - Keep `format: 1`. Subscription links are written `keychain:sub-<id>`, or `enc:v1:…` when the user encrypts them with a sync passphrase; never replace a reference or an `enc:` value with the real link, never edit or move `enc:` values or the `encryption` block, and never put links, passwords or tokens into the file. The passphrase is entered in Lanflow's window only.
 - Machine-local items (TUN, the core path, interface names, UI state, agent grants, the sync setting) are not in the file and are ignored if you add them.

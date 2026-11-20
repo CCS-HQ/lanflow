@@ -36,6 +36,7 @@
 
 - 只在 `mode: rule` 生效；全局 / 直连模式下显示「暂停（仅规则模式生效）」。
 - 每次开关都要 reload 并 `DELETE /connections`：**已验证** reload 不切断在途连接（4 秒请求在 `PUT /configs?force=true` 后仍返回 200），不主动断开的话已解密长连接会一直留在解密层。
+- 开着解密时改动选择（去掉某个主机或程序、加入跳过列表、暂停记录）同理：agent 在应用新选择时（`Agent.Apply` → `closeStale`）对每条已解密（或已记录的明文）连接按新配置重新判定一次，不再符合的主动断开两侧套接字，否则它会留在解密层并继续被记录，直到客户端自己关闭；仍符合的连接不受影响。连接建立过程中选择发生变化的，登记后再判一次，不符合即丢弃。
 - 同一用户下的代码视为完全受信，本设计不对其做承诺（见 §8）。
 
 ## 3. 架构
@@ -172,6 +173,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | 内存 | 独立 `GOMEMLIMIT`；拷贝缓冲用 `sync.Pool`；并发解密连接上限 256，超出透传并标记（每连接约 100–150 KB） |
 | 私钥 | 只在 agent 进程内使用，GUI 进程不加载 |
 | 崩溃 | agent 退出时 GUI 立即 reload 去掉规则并 `DELETE /connections`；澜流启动时发现残留抓包配置先 reload 去掉 |
+| 随父进程退出 | agent 的标准输入是与拉起它的澜流进程之间的管道，一旦关闭（澜流正常退出，或崩溃、被强杀）agent 立即停止监听、删除溢写文件并退出，不会独自留下。取舍：澜流崩溃而内核仍在运行时，运行时配置里的抓包规则还指向已经不在的 agent 端口，**选中的主机 / 程序在澜流重新启动并 reload 去掉规则之前连不上**（未选中的流量不受影响）。单条连接或解析器里的故障只结束那条连接（或它的记录），不结束进程 |
 | 入口加固 | 常量时间比较口令；CONNECT 头限长与超时；拒绝目标为 agent 端口或回流端口本身的 CONNECT（不能一概拒绝回环：hosts 可合法映射到 127.0.0.1） |
 
 ### 5.2 连接处理
@@ -217,8 +219,9 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | 无凭据库 | 拒绝启用解密，不落盘明文私钥（`internal/app/backup.go` 的混淆文件回退不可用于此） |
 | 叶子 | SAN = SNI，精确名不签通配；`now-1h ~ now+7d`；会话内单独 P-256 叶子密钥；LRU 1024 张，按主机 singleflight |
 | 信任安装 | macOS `security add-trusted-cert -r trustRoot -p ssl -k ~/Library/Keychains/login.keychain-db`（用户域，只在 GUI 进程调用；helper 不新增证书命令）；Windows `CertAddEncodedCertificateToStore(CurrentUser\Root)`（系统强制确认框） |
-| 信任状态 | 用 CA 现签 `trust-check.lanflow.invalid` 叶子，按系统根 `Verify` 的结果为准，**不看命令退出码**（MDM 拒绝、GPO 关闭用户根时调用可能「成功」但不生效）；同时扫描 `O=Lanflow` 的旧证书提示清理 |
-| 自动移除 | **关闭解密 7 天后自动移除信任并销毁私钥**；下次开启重新生成（多一次授权弹窗） |
+| 信任状态 | 用 CA 签 `trust-check.lanflow.invalid` 叶子，按系统根 `Verify` 的结果为准，**不看命令退出码**（MDM 拒绝、GPO 关闭用户根时调用可能「成功」但不生效）。这张信任叶子的有效期与根证书一致（`ca.TrustLeaf`，不是普通叶子的 7 天）：它存在 `<DataDir>/capture/` 下，在根的整个有效期内反复拿来验证，先于根过期会被误报为「根证书未受信任」。agent 每次启动回报 Ready 时都重签一张，服务换上最新的并重新判定；存着的叶子缺失或已过期（旧版本签的 7 天叶子）而判定为未信任时，先让 agent 重签再判 |
+| 旧证书扫描 | 只有服务层方法：`CaptureLeftoverRoots`（`trust.Leftovers`）列出用户信任库里除当前根以外的澜流根证书的 SHA-1。**界面尚未接线**：它不在 `app.API` 里，没有页面调用，也就还没有「提示清理」。已做的是替换时的清理：根证书被新根取代（重新生成，或旧根将过期时 agent 自动新建）时，旧根的信任与私钥随即移除 |
+| 自动移除 | **关闭解密 7 天后自动移除信任并销毁私钥**；下次开启重新生成（多一次授权弹窗）。移除失败（系统每次可能要授权，用户可能拒绝）按退避重试：2、4、8、16 小时，之后每天一次 |
 | 重新生成 | 新 CA → 安装信任 → 移除旧信任与私钥 → 清空叶子缓存 → 断开解密连接 |
 | 卸载 | macOS 设置页「移除根证书并删除私钥」；Windows 卸载程序调用 `lanflow ca-remove`，但提权安装程序的 CurrentUser 可能是管理员，故提示用户先在应用内移除，或下次登录时清理 |
 | 排除 | 私钥不写日志、不进 WebDAV 备份（`backup.go`）、不进诊断包；「导出 CA」只导出证书 PEM |
@@ -244,7 +247,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | --- | --- | --- |
 | 记录环形缓冲 | 5000 条（每条约 2–4 KB） | 可调 1000–50000 |
 | 单个正文上限 | 请求/响应各 1 MiB，超出截断并标「原大小 N」 | 64 KiB–16 MiB |
-| 溢写 | **已实现（提前到 M1）**：正文内存上限 64 MiB，超出后把最早完成记录的正文封存到 `<DataDir>/capture/spill/session-<id>.bin`，0600，AES-256-GCM 密钥只在 agent 内存，上限 512 MiB（满了丢弃正文并标记），退出即删；崩溃残留下次启动清理 | — |
+| 溢写 | **已实现（提前到 M1）**：正文内存上限 64 MiB，超出后把最早完成记录的正文封存到 `<DataDir>/capture/spill/session-<时间>-<序号>.bin`，0600，AES-256-GCM 密钥只在 agent 内存，各段合计上限 512 MiB（满了丢弃正文并标记），退出即删；崩溃残留下次启动清理。**分段回收**：溢写分成若干段文件（每段为上限的 1/16）；记录按从旧到新离开环形缓冲，与正文溢写的顺序相同，所以一段里的记录全部离开后整段删除、空间重新可用（正在写的那一段清空而不删）。此前是单个只增不减的文件，写满后再也存不了正文。已离开缓冲的记录不再保留或计入其连接之后写入的内容 | — |
 | 持久化 | 无，退出即清空 | M3：加密会话文件（口令派生密钥） |
 
 `Flow{ID, Seq, Start, Timing, ConnID, UpstreamConnID, Process, ProcessPath, Attribution(certain|ambiguous|unknown), Selector, Method, Host, Path, Status, ReqHeader, RespHeader, ReqBody, RespBody, TLS, Proto, Error, Flags(pinned|ech|passthrough|ws|truncated)}`。透传连接也生成一条连接级记录，便于看到「哪些没能解密」。
