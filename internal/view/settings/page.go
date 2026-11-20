@@ -140,7 +140,7 @@ type dialogText struct {
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	return &Page{e: e, upd: mygoUpdater{}, relaunch: mygo.App.Relaunch}
+	return &Page{e: e, upd: mygoUpdater{}, relaunch: func() { mygo.App.Relaunch() }}
 }
 
 // View draws the whole content area including the header.
