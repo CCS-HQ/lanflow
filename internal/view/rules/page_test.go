@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -103,7 +104,14 @@ func TestSortAndDisable(t *testing.T) {
 		t.Fatalf("second click should sort descending: %+v", p.sort)
 	}
 	if err := tt.Click("停用"); err != nil {
-		t.Fatal(err)
+		// Where the page put things, for a failure on another platform's
+		// fonts.
+		var where []string
+		for _, s := range []string{"自定义规则", "订阅规则", "MATCH", "停用", "规则集", "anti-ad"} {
+			r, ok := tt.Find(s)
+			where = append(where, fmt.Sprintf("%s=%v%+v", s, ok, r))
+		}
+		t.Fatalf("%v; %s", err, strings.Join(where, " "))
 	}
 	disabled := 0
 	for _, r := range f.Rules() {

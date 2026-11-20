@@ -350,6 +350,8 @@ func TestNavigationArgOpensOverride(t *testing.T) {
 	if !tt.HasText("更新到 v1.19.34") {
 		t.Fatalf("update button missing: %q", tt.Texts())
 	}
+	// The kernel tab is taller than the window with Windows' fonts.
+	scrollTo(t, tt, "DAT")
 	if err := tt.Click("DAT"); err != nil {
 		t.Fatal(err)
 	}
@@ -596,5 +598,23 @@ func TestAppUpdateFlow(t *testing.T) {
 	tt5 := ui.NewTester(p5.View, 1000, 1200)
 	if !tt5.HasText("不会自动检查，可随时手动检查") {
 		t.Fatalf("auto check off: %q", tt5.Texts())
+	}
+}
+
+// scrollTo scrolls the page until text is inside the window, so a click
+// does not depend on the platform's font metrics.
+func scrollTo(t *testing.T, tt *ui.Tester, text string) {
+	t.Helper()
+	h := tt.Image().Bounds().Dy()
+	for i := 0; i < 8; i++ {
+		r, ok := tt.Find(text)
+		if !ok {
+			t.Fatalf("find %q: %q", text, tt.Texts())
+		}
+		if r.Y >= 0 && r.Y+r.H <= float32(h)-20 {
+			return
+		}
+		tt.Scroll(r.X, float32(h)/2, 0, 300)
+		tt.Frame()
 	}
 }
