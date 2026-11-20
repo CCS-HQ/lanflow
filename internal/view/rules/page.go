@@ -383,7 +383,7 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r model.Rule, col int, q string)
 	case "type":
 		fade(env.Highlight(c, r.Type, q, muted).SingleLine().Tooltip(r.Type))
 	case "payload":
-		ui.Row(c).Gap(6).AlignItems(ui.Center).FillWidth().Children(func() {
+		ui.Row(c).Gap(6).Children(func() {
 			if r.Payload == "" {
 				fade(ui.Text(c, "—").TextColor(muted))
 			} else {
