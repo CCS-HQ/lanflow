@@ -30,6 +30,10 @@ type Page struct {
 	filter int       // 0 全部, 1 自定义, 2 订阅
 	sort   ui.SortOrder
 	table  ui.ListState
+	// sorted is the order the table last showed: a new one scrolls it
+	// back to the first row, which would otherwise stay part hidden
+	// under the header where the old first row was.
+	sorted ui.SortOrder
 	form   ruleform.Form
 
 	// 测试… dialog
@@ -357,6 +361,10 @@ func (p *Page) subSection(c *ui.Context, t *ui.Theme, rules []model.Rule) {
 			}
 			ui.Text(c, msg).TextColor(t.TextMuted).Padding(16).TextAlign(ui.Center)
 		} else {
+			if p.sort != p.sorted {
+				p.sorted = p.sort
+				p.table.ScrollTo(0, ui.Start)
+			}
 			p.table.Key = func(i int) any { return rows[i].Index }
 			p.table.Label = func(i int) string { return rows[i].Type + " " + rows[i].Payload }
 			ui.Table(c.Key("table"), &p.table, env.I18nColumns(columns), len(rows), func(row, col int) {

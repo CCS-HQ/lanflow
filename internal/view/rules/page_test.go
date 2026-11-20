@@ -1,10 +1,8 @@
 package rules
 
 import (
-	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -91,7 +89,7 @@ func TestSortAndDisable(t *testing.T) {
 	f := fake.NewInstant()
 	e, _ := testEnv(f)
 	p := New(e)
-	tt := ui.NewTester(p.View, 1000, 800)
+	tt := ui.NewTester(p.View, 1000, 640)
 	if err := tt.Click("命中"); err != nil {
 		t.Fatal(err)
 	}
@@ -104,18 +102,11 @@ func TestSortAndDisable(t *testing.T) {
 	if !p.sort.Descending {
 		t.Fatalf("second click should sort descending: %+v", p.sort)
 	}
-	// Let the rows settle in their new order before clicking in them.
-	tt.Advance(time.Second)
-	tt.Frame()
+	// A new order shows from the first row: the table scrolls (the
+	// window is too short for all rows), and the first row must not stay
+	// part hidden under the header.
 	if err := tt.Click("停用"); err != nil {
-		// Where the page put things, for a failure on another platform's
-		// fonts.
-		var where []string
-		for _, s := range tt.Texts() {
-			r, _ := tt.Find(s)
-			where = append(where, fmt.Sprintf("%q%+v", s, r))
-		}
-		t.Fatalf("%v; %s", err, strings.Join(where, " "))
+		t.Fatal(err)
 	}
 	disabled := 0
 	for _, r := range f.Rules() {
