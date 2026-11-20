@@ -142,6 +142,7 @@ func TestStoreSpillSpaceIsReclaimed(t *testing.T) {
 // something to spill is then not repeated on every update.
 func TestStoreSpillScanBacksOff(t *testing.T) {
 	s := newStore(100, 1<<20, 8<<10, t.TempDir(), 0)
+	t.Cleanup(s.close) // before the directory goes: Windows keeps an open file
 	r := s.add(model.CaptureFlow{})
 	s.appendBody(r, true, bytes.Repeat([]byte{'a'}, 9<<10)) // over the limit, unfinished
 	if s.spillFloor <= s.memUsed {

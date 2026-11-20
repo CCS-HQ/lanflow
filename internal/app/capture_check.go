@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"lanflow/internal/capture/agent"
@@ -341,7 +342,19 @@ func probeUpstream(r *captureRun, host string, port int, useTLS bool) *probeErr 
 	// the core answers the CONNECT before dialing: a target that cannot be
 	// reached shows as the connection closing right after
 	closed := func(err error) bool {
-		return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "reset by peer") || strings.Contains(err.Error(), "broken pipe")
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+			errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) {
+			return true
+		}
+		// Windows words the same thing its own way (wsarecv: "An
+		// established connection was aborted…", "…forcibly closed…").
+		msg := err.Error()
+		for _, s := range []string{"reset by peer", "broken pipe", "connection was aborted", "forcibly closed"} {
+			if strings.Contains(msg, s) {
+				return true
+			}
+		}
+		return false
 	}
 	if !useTLS {
 		fmt.Fprintf(c, "HEAD / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", host)
