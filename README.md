@@ -128,7 +128,7 @@ scripts/build-app.sh darwin arm64             # build/darwin-arm64/Lanflow.app �
 4. 在这个提交上打同名 tag 并推送：
 
    ```sh
-   git tag v0.1.8 && git push origin v0.1.8
+   git tag v0.1.9 && git push origin v0.1.9
    ```
 
 GitHub Actions（`.github/workflows/release.yml`）随后：

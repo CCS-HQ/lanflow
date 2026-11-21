@@ -1,7 +1,7 @@
 {
   "name": "Lanflow",
   "identifier": "com.example.lanflow",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "urlSchemes": ["lanflow", "clash"],
   "out": "build",
   "updates": {
