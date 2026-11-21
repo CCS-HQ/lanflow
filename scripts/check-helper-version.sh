@@ -13,13 +13,45 @@ if [ -z "$PREV" ]; then
   exit 0
 fi
 # The helper's own packages, from the build graph (cmd/lanflow-helper and
-# what it imports from this module), plus go.mod/go.sum for its dependencies.
+# what it imports from this module).
 paths=()
 while read -r dir; do
   paths+=("${dir#"$PWD"/}")
 done < <(go list -deps -f '{{if not .Standard}}{{if eq .Module.Path "lanflow"}}{{.Dir}}{{end}}{{end}}' ./cmd/lanflow-helper | sed '/^$/d')
-paths+=(go.mod go.sum)
 changed="$(git diff --name-only "$PREV" "$REF" -- "${paths[@]}" | grep -v -e '^cmd/lanflow-helper/VERSION$' -e '_test\.go$' || true)"
+
+# Its dependencies: the modules the helper is built from on each system, at
+# the versions go.mod selects, and the Go version. Only those count: go.mod
+# also changes for modules the helper never links (the UI framework), and
+# such a change must not force every user to reinstall the helper.
+helper_deps() { # <checkout>
+  (
+    cd "$1"
+    sed -n 's/^go \([0-9][0-9.]*\).*/go \1/p; s/^toolchain \(.*\)/toolchain \1/p' go.mod
+    for goos in darwin windows linux; do
+      GOOS="$goos" GOFLAGS=-mod=mod go list -deps \
+        -f '{{if not .Standard}}{{with .Module}}{{if ne .Path "lanflow"}}{{.Path}} {{.Version}}{{end}}{{end}}{{end}}' \
+        ./cmd/lanflow-helper
+    done | sed '/^$/d' | sort -u
+  )
+}
+tmp="$(mktemp -d)"
+cleanup() {
+  git worktree remove --force "$tmp/prev" >/dev/null 2>&1 || true
+  git worktree remove --force "$tmp/ref" >/dev/null 2>&1 || true
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+git worktree add --quiet --detach "$tmp/prev" "$PREV"
+git worktree add --quiet --detach "$tmp/ref" "$REF"
+deps_prev="$(helper_deps "$tmp/prev")"
+deps_ref="$(helper_deps "$tmp/ref")"
+if [ "$deps_prev" != "$deps_ref" ]; then
+  deps_diff="$(diff <(printf '%s\n' "$deps_prev") <(printf '%s\n' "$deps_ref") | grep '^[<>]' || true)"
+  changed="${changed:+$changed
+}helper dependencies ($PREV < > $REF):
+$deps_diff"
+fi
 if [ -z "$changed" ]; then
   echo "helper unchanged since $PREV"
   exit 0
