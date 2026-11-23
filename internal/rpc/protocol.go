@@ -19,7 +19,12 @@ import (
 
 // ProtocolVersion changes whenever the wire format or the meaning of a
 // method changes; client and server must agree (no cross-version support).
-const ProtocolVersion = 1
+//
+// 2: UpdateSettings (settings saved as a patch). A window of this
+// version saves settings with nothing else, so it must not stay on a
+// service without the method: the handshake fails and the window replaces
+// that service (internal/split, protocolMismatch).
+const ProtocolVersion = 2
 
 // Level is how much a method may change or reveal (docs/service-split.md §4).
 type Level string

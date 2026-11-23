@@ -31,6 +31,7 @@ const (
 // cannot rewrite it.
 func pidExe(pid int) (string, error) {
 	buf := make([]byte, procPIDPathMax)
+	//lint:ignore SA1019 x/sys/unix has no proc_pidpath wrapper, and cgo is not used here.
 	_, _, errno := unix.Syscall6(unix.SYS_PROC_INFO, procInfoCallPIDInfo, uintptr(pid), procPIDPathInfo, 0,
 		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 	if errno != 0 {

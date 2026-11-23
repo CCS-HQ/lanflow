@@ -150,12 +150,6 @@ func (c *recordingConn) Read(b []byte) (int, error) {
 	return n, err
 }
 
-func (u *upstream) conns() int {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return len(u.raw)
-}
-
 // plainEcho is an HTTP/1 server on TCP that records the request bytes it
 // sees in plaintext (for the byte-identity check behind TLS termination).
 type plainTLS struct {
@@ -347,7 +341,6 @@ type rig struct {
 	in     profile.Input
 	mixed  int
 	clPool *x509.CertPool
-	names  []string
 }
 
 type rigOpts struct {

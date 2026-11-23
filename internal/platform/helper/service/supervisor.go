@@ -65,7 +65,22 @@ type Supervisor struct {
 	// PidFile, when set, records the running process's pid (removed when
 	// it exits) so the next helper can end a core this one left behind.
 	PidFile string
+	// WorkDir is the directory Mihomo runs in: the helper's own, which
+	// only root/SYSTEM can write (see stage.go). Run sets it; a supervisor
+	// without one starts nothing.
+	WorkDir string
+	// PrepareWorkDir creates and checks WorkDir before every use. Nil
+	// means the platform default.
+	PrepareWorkDir func(dir string) error
 
+	// stageMu serializes starts and stage requests: one at a time works
+	// on WorkDir. It is taken before mu and held while files are read,
+	// checked and copied, which takes time a config can stretch; mu, which
+	// status, stop and ping need, is held only to look at or change the
+	// fields below.
+	stageMu  sync.Mutex
+	starting bool // a start is preparing WorkDir
+	aborted  bool // a stop arrived while it did
 	mu       sync.Mutex
 	proc     Process
 	spec     protocol.Spec
@@ -99,18 +114,41 @@ func (s *Supervisor) Status() protocol.Response {
 	return r
 }
 
-// StartCore validates spec and spawns Mihomo. It fails when a process is
-// already running.
+// StartCore validates spec, copies its config (and data files) into
+// WorkDir and spawns Mihomo there. It fails when a process is already
+// running.
 func (s *Supervisor) StartCore(ctx context.Context, spec protocol.Spec) error {
+	s.stageMu.Lock()
+	defer s.stageMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.proc != nil {
+		s.mu.Unlock()
 		return errors.New("Mihomo 内核已在权限组件中运行，请先停止")
 	}
+	s.starting, s.aborted = true, false
+	s.mu.Unlock()
+	// Validation hashes the core and staging copies files: neither holds
+	// mu. Only this start can set proc meanwhile (stageMu).
 	resolved, err := s.Policy.Validate(spec)
+	var config string
+	if err == nil {
+		// The core gets the helper's directory and the copy of the config
+		// in it; resolved keeps the user's paths (log, controller, hooks).
+		config, err = s.stage(resolved, true)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.starting = false
 	if err != nil {
 		return err
 	}
+	if s.aborted {
+		// A stop that arrived while the start was preparing must not be
+		// followed by a running core.
+		return errors.New("启动 Mihomo 的请求已被停止请求取消")
+	}
+	run := resolved
+	run.WorkDir, run.Config = s.WorkDir, config
 	uid := s.Policy.Config.UID
 	openLog := s.Hooks.OpenLog
 	if openLog == nil {
@@ -122,9 +160,9 @@ func (s *Supervisor) StartCore(ctx context.Context, spec protocol.Spec) error {
 	}
 	cmd := Command{
 		Path:   resolved.Bin,
-		Args:   append([]string{"-d", resolved.WorkDir, "-f", resolved.Config}, controllerArgs(resolved.Controller)...),
-		Dir:    resolved.WorkDir,
-		Env:    append(baseEnv(uid, resolved), resolved.Env...),
+		Args:   append([]string{"-d", run.WorkDir, "-f", run.Config}, controllerArgs(run.Controller)...),
+		Dir:    run.WorkDir,
+		Env:    append(baseEnv(uid, run), run.Env...),
 		Output: logw,
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -186,6 +224,27 @@ func (s *Supervisor) wait(proc Process, done chan struct{}) {
 	close(done)
 }
 
+// StageConfig copies the user's config into WorkDir again, checked and
+// cleaned as at start, and returns the copy's path: what the app passes
+// to the running core's reload, which only loads a file inside the core's
+// work directory. Provider files the new config names are copied too.
+func (s *Supervisor) StageConfig(spec protocol.Spec) (string, error) {
+	s.stageMu.Lock()
+	defer s.stageMu.Unlock()
+	s.mu.Lock()
+	running, user := s.proc != nil, s.spec // the run's validated paths
+	s.mu.Unlock()
+	if !running {
+		return "", errors.New("Mihomo 内核没有在权限组件中运行")
+	}
+	config, err := s.Policy.ValidateConfig(spec.Config)
+	if err != nil {
+		return "", err
+	}
+	user.Config = config // only the config is new
+	return s.stage(user, false)
+}
+
 // writePidFile records pid in path (temporary file + rename).
 func writePidFile(path string, pid int) error {
 	tmp := path + ".tmp"
@@ -201,6 +260,9 @@ func (s *Supervisor) StopCore(ctx context.Context) error {
 	s.mu.Lock()
 	proc, done := s.proc, s.done
 	if proc == nil {
+		if s.starting {
+			s.aborted = true
+		}
 		s.mu.Unlock()
 		return nil
 	}
@@ -261,6 +323,18 @@ func NewHandler(s *Supervisor, version string) protocol.Handler {
 			return s.Status()
 		case protocol.OpStatus:
 			return s.Status()
+		case protocol.OpStage:
+			if req.Spec == nil {
+				return protocol.Response{Error: "stage 请求缺少 spec"}
+			}
+			path, err := s.StageConfig(*req.Spec)
+			if err != nil {
+				s.Logf("stage refused: %v", err)
+				return protocol.Response{Error: err.Error()}
+			}
+			resp := s.Status()
+			resp.ConfigPath = path
+			return resp
 		default:
 			return protocol.Response{Error: fmt.Sprintf("未知操作: %q", req.Op)}
 		}

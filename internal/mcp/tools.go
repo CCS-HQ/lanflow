@@ -43,7 +43,7 @@ func offered(m rpc.Method) bool {
 		return false
 	}
 	switch m.Name {
-	case "OnChange", "SaveSettings", "ApplyDNS", "ApplySniffer", "IconData", "ProcessIcon", "Methods",
+	case "OnChange", "SaveSettings", "UpdateSettings", "ApplyDNS", "ApplySniffer", "IconData", "ProcessIcon", "Methods",
 		"ConfigDir", "LogDir", "ExportATrustConfig", "ImportATrustConfig", "ExportDiagnostics", "SaveFeedback",
 		"ImportSubscriptionFile":
 		return false

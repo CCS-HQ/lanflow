@@ -34,6 +34,9 @@ const (
 	// PidPath records the Mihomo the helper runs, in a directory only root
 	// writes, so the next helper finds a core this one left behind.
 	PidPath = ConfigDir + "/core.pid"
+	// WorkDir is where the helper runs Mihomo (stage.go): root's own, 0700,
+	// inside ConfigDir, which only root writes.
+	WorkDir = ConfigDir + "/work"
 )
 
 // installer holds what Install touches outside this process, so tests
@@ -198,7 +201,8 @@ func (in *installer) install(ctx context.Context, o InstallOptions, logf Logf) (
 }
 
 // Uninstall unloads the LaunchDaemon (which stops Mihomo via the helper's
-// shutdown) and removes every installed file. Must run as root.
+// shutdown) and removes every installed file, the core's work directory
+// (inside ConfigDir) included. Must run as root.
 func Uninstall(ctx context.Context, logf Logf) error {
 	if os.Geteuid() != 0 {
 		return errors.New("移除权限组件需要管理员权限")
@@ -345,6 +349,7 @@ func Run(ctx context.Context, version string, logf Logf) error {
 	// A helper that crashed or was killed left its Mihomo running as root,
 	// where nobody can stop it: end it before serving.
 	sup.PidFile = PidPath
+	sup.WorkDir = WorkDir
 	reapOrphan(PidPath, cfg.Core, systemProcs(), logf)
 	l, err := Listen(cfg.UID)
 	if err != nil {

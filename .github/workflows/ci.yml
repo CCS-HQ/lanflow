@@ -88,16 +88,15 @@ jobs:
             echo "::endgroup::"
           done
 
-      # Reported, not yet required: staticcheck is new here and the first
-      # findings have not been gone through. TODO: remove continue-on-error
-      # once the tree is clean.
+      # The tool is built for the runner first: under GOOS=windows `go run`
+      # would build a staticcheck.exe this machine cannot start.
       - name: staticcheck
-        continue-on-error: true
         run: |
+          GOBIN="$RUNNER_TEMP/bin" go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           status=0
           for goos in darwin windows linux; do
             echo "::group::GOOS=${goos}"
-            GOOS="$goos" go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./... || status=1
+            GOOS="$goos" "$RUNNER_TEMP/bin/staticcheck" ./... || status=1
             echo "::endgroup::"
           done
           exit "$status"

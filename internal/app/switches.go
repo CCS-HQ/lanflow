@@ -10,6 +10,7 @@ import (
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/platform/helper"
+	"lanflow/internal/platform/sysproxy"
 )
 
 // SetSystemProxy points the system proxy at the core (starting it first if
@@ -98,7 +99,7 @@ func (s *Service) checkOtherTUN() error {
 	if ours {
 		return nil // the TUN we see is our own
 	}
-	ctx, cancel := s.ctrlCtx(nil, 3*time.Second)
+	ctx, cancel := s.svcCtx(3 * time.Second)
 	defer cancel()
 	if s.d.stray != nil {
 		if found, tun := s.d.stray.Find(ctx, s.workDir); found && tun {
@@ -125,7 +126,7 @@ func (s *Service) releaseProxy() error {
 	}
 	cur, err := s.d.sys.Get()
 	if err == nil && !proxyIsOurs(cur, m, port) {
-		s.removeMarker() // not ours any more: leave it as it is
+		s.abandonProxy(m, port) // not ours any more: leave it as it is
 		return nil
 	}
 	if len(m.Saved) > 0 {
@@ -143,6 +144,32 @@ func (s *Service) releaseProxy() error {
 	}
 	s.removeMarker()
 	return nil
+}
+
+// dialUpReleaser is the optional part of the system proxy that knows about
+// per-connection settings (Windows dial-up / VPN entries).
+type dialUpReleaser interface {
+	ReleaseDialUp(saved sysproxy.Saved, host string, port int, pac string) error
+}
+
+func (realSysProxy) ReleaseDialUp(saved sysproxy.Saved, host string, port int, pac string) error {
+	return sysproxy.ReleaseDialUp(saved, host, port, pac)
+}
+
+// abandonProxy drops Lanflow's claim on a system proxy that someone else
+// has changed: the setting Get reports is left as it is and the marker is
+// removed. On Windows the dial-up / VPN entries Lanflow also wrote may
+// still point at it, and with the marker the snapshot would be lost, so
+// those that still do are put back first (sysproxy.ReleaseDialUp; a no-op
+// on other systems).
+func (s *Service) abandonProxy(m proxyMarker, port int) {
+	if m.Port > 0 {
+		port = m.Port
+	}
+	if r, ok := s.d.sys.(dialUpReleaser); ok {
+		_ = r.ReleaseDialUp(m.Saved, "127.0.0.1", port, m.PAC)
+	}
+	s.removeMarker()
 }
 
 // ResolveRecovery answers the "recovery" notice: restore = turn the leftover
@@ -250,7 +277,7 @@ func (s *Service) InstallTUNHelper() (err error) {
 	if bin == "" {
 		return errors.New(i18n.T("未找到 Mihomo 内核，无法安装权限组件。请先在设置 › 内核中选择内核文件。"))
 	}
-	ctx, cancel := s.ctrlCtx(nil, 2*time.Minute)
+	ctx, cancel := s.svcCtx(2 * time.Minute)
 	defer cancel()
 	err = s.d.helper.Install(ctx, helper.InstallOptions{HelperBin: s.opt.helperBinary(), CoreBin: bin, DataDir: s.opt.DataDir})
 	s.refreshHelper()
@@ -271,7 +298,7 @@ func (s *Service) UninstallTUNHelper() (err error) {
 			return err
 		}
 	}
-	ctx, cancel := s.ctrlCtx(nil, 2*time.Minute)
+	ctx, cancel := s.svcCtx(2 * time.Minute)
 	defer cancel()
 	err = s.d.helper.Uninstall(ctx)
 	s.refreshHelper()
@@ -303,7 +330,7 @@ func (s *Service) SetMode(m model.Mode) (err error) {
 	})
 	if s.running() {
 		mode := string(m)
-		ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+		ctx, cancel := s.svcCtx(ctrlTimeout)
 		err := s.d.ctrl.PatchConfigs(ctx, controller.ConfigPatch{Mode: &mode})
 		cancel()
 		if err != nil {
@@ -356,7 +383,7 @@ func (s *Service) ensureGlobalExit() {
 	if target == "" {
 		return
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+	ctx, cancel := s.svcCtx(ctrlTimeout)
 	err := s.d.ctrl.SelectProxy(ctx, "GLOBAL", target)
 	cancel()
 	if err != nil {

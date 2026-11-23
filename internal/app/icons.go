@@ -226,7 +226,7 @@ func (s *Service) fetchIcon(c *iconCache, ref string) {
 }
 
 func (s *Service) downloadIcon(ref string) ([]byte, error) {
-	ctx, cancel := s.ctrlCtx(nil, iconTimeout)
+	ctx, cancel := s.svcCtx(iconTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ref, nil)
 	if err != nil {

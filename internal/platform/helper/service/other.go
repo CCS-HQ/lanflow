@@ -11,6 +11,7 @@ import (
 const (
 	LogDir  = "/var/log/lanflow-helper"
 	LogPath = LogDir + "/helper.log"
+	WorkDir = "/var/lib/lanflow-helper/work"
 )
 
 var errUnsupported = errors.New("当前平台不支持权限组件")

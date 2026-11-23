@@ -20,6 +20,14 @@
 //     installer refuses a copy with another digest, or no digest at all.
 //   - Work dir, config and log paths must be inside the installing user's
 //     Lanflow data directory recorded at install time.
+//   - Mihomo never runs on those user-owned paths. The helper runs it in
+//     a work directory of its own that only root/SYSTEM can write
+//     (service.WorkDir), on a copy of the config that it read without
+//     following a link, checked and cleaned (no controller or web UI
+//     keys, provider paths inside the work directory); databases and
+//     provider files are copied in the same way. A hot reload goes
+//     through the helper again (protocol.OpStage, core.ConfigStager).
+//     The log file and the controller endpoint stay the user's.
 //   - Install/uninstall prompt for administrator rights: osascript
 //     "do shell script … with administrator privileges" (macOS),
 //     ShellExecute "runas" of the helper binary with an install verb (Windows).
@@ -74,6 +82,8 @@ func Uninstall(ctx context.Context) error { return uninstall(ctx) }
 // NewRunner returns a core.Runner that starts Mihomo through the helper.
 // Stop asks the helper to stop it; Exited reports unexpected exits that the
 // helper reports (poll Status every second if push is not implemented).
+// The runner is also a core.ConfigStager: the helper's core runs on a copy
+// of the config, so a reload must stage it first.
 func NewRunner() core.Runner { return newRunner() }
 
 // CoreRunning reports whether the helper runs Mihomo (for this user's

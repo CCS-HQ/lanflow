@@ -9,7 +9,10 @@
 //     (Windows); no TCP controller port, no secret.
 //   - Who launches the process is abstracted by Runner: ExecRunner starts it
 //     as the current user (system proxy mode); the platform helper provides a
-//     privileged Runner (TUN mode) via package platform/helper.
+//     privileged Runner (TUN mode) via package platform/helper. That one
+//     runs the core in a work directory of its own on a copy of the config
+//     (ConfigStager); spec.WorkDir and spec.Config are then only where it
+//     copies from.
 //   - Manager owns lifecycle: one start/stop at a time, readiness (GET
 //     /version over the controller succeeds), unexpected-exit detection.
 package core
@@ -43,6 +46,24 @@ type Runner interface {
 	// called. The channel is replaced on every Start; read it after Start.
 	Exited() <-chan error
 }
+
+// ConfigStager is a Runner whose core does not load spec.Config itself:
+// the privileged helper runs Mihomo in a directory of its own, on a copy
+// of the config it has checked. Before a hot reload such a runner must be
+// asked to copy the config again; the path it returns (inside the core's
+// work directory) is the one to give the controller, which refuses any
+// file outside that directory.
+//
+// StageConfig returns ErrStageUnsupported when the helper is one from
+// before it had a work directory of its own (0.1.3 and older, still
+// running the core the app took over after an upgrade): that core runs on
+// spec.Config itself and reloads it as it always did.
+type ConfigStager interface {
+	StageConfig(ctx context.Context, spec Spec) (path string, err error)
+}
+
+// ErrStageUnsupported: see ConfigStager.
+var ErrStageUnsupported = errors.New("权限组件不支持预处理配置")
 
 // NewExecRunner returns a Runner that starts Mihomo as the current user.
 func NewExecRunner() Runner { return newExecRunner() }

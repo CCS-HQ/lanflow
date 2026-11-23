@@ -1,12 +1,11 @@
 // Package settings is the 设置 page (docs/design.md §5.8): seven tabs — 常规,
 // 代理, DNS, 嗅探, 覆写, 内核, 高级. 常规/代理/内核 apply at once through
-// SaveSettings; DNS, 嗅探 and 高级 collect edits and apply them with the
+// UpdateSettings; DNS, 嗅探 and 高级 collect edits and apply them with the
 // sticky 应用 bar; 覆写 edits YAML overrides (§6.9) and shows the runtime
 // config (§6.10).
 package settings
 
 import (
-	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -25,7 +24,7 @@ import (
 )
 
 // appVersion is shown in 关于.
-const appVersion = "0.1.9"
+const appVersion = "0.1.10"
 
 const (
 	tabGeneral = iota
@@ -54,7 +53,7 @@ type Page struct {
 	bypass   dialogText
 	atrust   atrustDialog // aTrust 兼容 › 配置… (atrust.go)
 	checking bool
-	saving   bool           // a SaveSettings job is running; switches wait for it
+	saving   bool           // a settings save is running or queued; switches wait for it
 	caches   cacheState     // 缓存 row of 数据 (caches.go)
 	menuBar  menuBarPreview // 菜单栏 preview (menubar.go)
 
@@ -113,6 +112,10 @@ type Page struct {
 	saveQ    []saveReq
 	saveBusy bool
 	draft    *model.Settings
+	// shown is what current last returned: the snapshot a control's
+	// callback changed, and so the base of the save it asks for.
+	shown    model.Settings
+	hasShown bool
 
 	// State that jobs change is written on the UI thread, in the done
 	// function of Env.Then, and read by the view without a lock. mu guards
@@ -259,18 +262,23 @@ func (p *Page) flushToast() {
 	}
 }
 
-// current returns the settings to show: the draft being saved, else the API's.
+// current returns the settings to show: the draft being saved, else the
+// API's. It is the snapshot the controls change and hand to save, so it is
+// remembered (shown) as what the next save's change is measured against.
 func (p *Page) current() model.Settings {
+	s := p.e.API.Settings()
 	if d := p.draft; d != nil {
-		return *d
+		s = *d
 	}
-	return p.e.API.Settings()
+	p.shown, p.hasShown = s, true
+	return s
 }
 
-// saveReq is one queued SaveSettings; done runs on the UI thread.
+// saveReq is one queued save: the change from base, what the controls
+// showed, to s, what one of them made of it. done runs on the UI thread.
 type saveReq struct {
 	s    model.Settings
-	base model.Settings // what s was built on: the difference is this request's change
+	base model.Settings
 	done func(err error)
 }
 
@@ -291,56 +299,39 @@ func (p *Page) save(s model.Settings, ok string, onErr func(error)) {
 	})
 }
 
-// saveThen queues a save of s, a whole Settings value, and calls done on
-// the UI thread with its outcome. Saves are whole snapshots, so they run
-// one at a time and in the order made: two at once could land in either
-// order and the older would undo the newer. s becomes the draft, which
-// the controls show and build their next snapshot on (current), so a
-// change made while another is being saved contains it; the draft goes
-// only when no save is left, as the API's settings then hold all of them.
-// When a save fails, its change is taken out of the snapshots queued
-// behind it (dropFailed), which would otherwise carry it along and fail
-// the same way, losing their own change with it.
+// saveThen queues a save of s, a snapshot of the settings with a control's
+// change in it, and calls done on the UI thread with its outcome. Only
+// what s changes against the snapshot the controls showed (shown) is saved
+// (API.UpdateSettings merges it into the stored settings), so a save
+// never puts back what another page, the tray, an agent or the
+// configuration sync stored meanwhile. Saves still run one at a time and
+// in the order made: two changes of one option must land in that order.
+// s becomes the draft, which the controls show and build their next
+// snapshot on; the draft goes only when no save is left, as the API's
+// settings then hold all of them.
 func (p *Page) saveThen(s model.Settings, done func(err error)) {
 	cp := s
-	base := p.current()
+	if !p.hasShown {
+		p.current()
+	}
+	// Not current(): a save that finished between the frame that drew the
+	// control and its callback has changed what current returns, and the
+	// difference would count as this control's change.
+	base := p.shown
 	p.draft = &cp
 	p.saveQ = append(p.saveQ, saveReq{s: cp, base: base, done: done})
 	p.pumpSaves()
 }
 
-// dropFailed takes the change of the failed request out of the requests
-// still queued: every value failed changed (against what it was built on)
-// that a later snapshot still has goes back to the stored settings' value.
-func (p *Page) dropFailed(failed saveReq) {
-	if len(p.saveQ) == 0 {
-		return
+// redraft makes the draft anew after a save failed: the stored settings
+// with the changes still queued. The failed change is in none of them
+// (each request holds only its own), so the controls stop showing it.
+func (p *Page) redraft() {
+	d := p.e.API.Settings()
+	for _, q := range p.saveQ {
+		d = model.MergeSettings(d, q.base, q.s)
 	}
-	stored := p.e.API.Settings()
-	for i := range p.saveQ {
-		q := &p.saveQ[i]
-		revertChange(reflect.ValueOf(&q.s).Elem(), reflect.ValueOf(failed.s), reflect.ValueOf(failed.base), reflect.ValueOf(stored))
-		revertChange(reflect.ValueOf(&q.base).Elem(), reflect.ValueOf(failed.s), reflect.ValueOf(failed.base), reflect.ValueOf(stored))
-	}
-	last := p.saveQ[len(p.saveQ)-1].s
-	p.draft = &last
-}
-
-// revertChange sets q, wherever failed differs from base and q still has
-// failed's value, to stored's. Structs are gone through field by field,
-// so one changed option of a section does not take back the others.
-func revertChange(q, failed, base, stored reflect.Value) {
-	if q.Kind() == reflect.Struct && q.Type() != reflect.TypeOf(time.Time{}) {
-		for i := 0; i < q.NumField(); i++ {
-			if q.Field(i).CanSet() {
-				revertChange(q.Field(i), failed.Field(i), base.Field(i), stored.Field(i))
-			}
-		}
-		return
-	}
-	if !reflect.DeepEqual(failed.Interface(), base.Interface()) && reflect.DeepEqual(q.Interface(), failed.Interface()) {
-		q.Set(stored)
-	}
+	p.draft = &d
 }
 
 // pumpSaves starts the oldest queued save unless one is running.
@@ -350,13 +341,13 @@ func (p *Page) pumpSaves() {
 	}
 	p.saveBusy = true
 	req := p.saveQ[0]
-	p.e.Then(func() error { return p.e.API.SaveSettings(req.s) }, func(err error) {
+	p.e.Then(func() error { return p.e.API.UpdateSettings(req.base, req.s) }, func(err error) {
 		p.saveBusy = false
 		p.saveQ = p.saveQ[1:]
 		if len(p.saveQ) == 0 {
 			p.saveQ, p.draft = nil, nil
 		} else if err != nil {
-			p.dropFailed(req)
+			p.redraft()
 		}
 		if req.done != nil {
 			req.done(err)
@@ -633,7 +624,7 @@ func (p *Page) kernel(c *ui.Context, t *ui.Theme, s model.Settings, st model.Sta
 					if s.CorePath != "" && s.CoreVersion == "" {
 						ui.Button(c, i18n.T("恢复内置")).Disabled(dl.Active).OnClick(func() { p.useCore("") })
 					}
-					ui.Button(c, i18n.T("更改…")).Disabled(dl.Active).OnClick(func() { p.chooseCore(s) })
+					ui.Button(c, i18n.T("更改…")).Disabled(dl.Active).OnClick(p.chooseCore)
 				})
 			})
 			lvlOpts := []string{i18n.T("调试"), i18n.T("信息"), i18n.T("警告"), i18n.T("错误"), i18n.T("静默")}
@@ -687,13 +678,24 @@ func (p *Page) checkUpdate(current string) {
 	})
 }
 
+// pickCoreFile is the system's file dialog for a Mihomo binary (a
+// variable so that tests can answer it).
+var pickCoreFile = func() ([]string, error) {
+	return mygo.Dialog.Open(mygo.OpenDialogOptions{Title: i18n.T("选择 Mihomo 内核文件"), Message: i18n.T("选择一个 Mihomo 可执行文件；留空则使用内置内核。")})
+}
+
 // chooseCore opens the system's file dialog for a Mihomo binary. The
 // dialog runs its own loop, so it is called on the UI thread.
-func (p *Page) chooseCore(s model.Settings) {
-	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Title: i18n.T("选择 Mihomo 内核文件"), Message: i18n.T("选择一个 Mihomo 可执行文件；留空则使用内置内核。")})
+func (p *Page) chooseCore() {
+	paths, err := pickCoreFile()
 	if err != nil || len(paths) == 0 {
 		return
 	}
+	// The snapshot is taken now, not before the dialog: it stays open as
+	// long as the user likes, frames are drawn and settings saved behind
+	// it, and a snapshot from before would count all of that as this
+	// control's change and take it back.
+	s := p.current()
 	s.CorePath = paths[0]
 	s.CoreVersion = "" // a hand-picked file is not one of the installed versions
 	p.save(s, i18n.T("已更换内核文件，重启内核后生效"), nil)

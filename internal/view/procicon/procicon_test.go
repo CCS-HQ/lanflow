@@ -45,8 +45,10 @@ func TestSource(t *testing.T) {
 		t.Fatal("an empty path asked the API")
 	}
 	// Unknown yet: asked again every build, since the icon may land.
-	if c.Source("/Applications/A.app") != nil || c.Source("/Applications/A.app") != nil {
-		t.Fatal("icon out of nothing")
+	for range 2 {
+		if c.Source("/Applications/A.app") != nil {
+			t.Fatal("icon out of nothing")
+		}
 	}
 	if api.calls["/Applications/A.app"] != 2 {
 		t.Fatalf("asked %d times while unknown, want 2", api.calls["/Applications/A.app"])
@@ -66,8 +68,10 @@ func TestSource(t *testing.T) {
 	}
 	// Bytes that are no image: given up on, not asked again.
 	api.data["/Applications/B.app"] = []byte("not a png")
-	if c.Source("/Applications/B.app") != nil || c.Source("/Applications/B.app") != nil {
-		t.Fatal("icon out of garbage")
+	for range 2 {
+		if c.Source("/Applications/B.app") != nil {
+			t.Fatal("icon out of garbage")
+		}
 	}
 	if api.calls["/Applications/B.app"] != 1 {
 		t.Fatalf("asked %d times about garbage, want 1", api.calls["/Applications/B.app"])

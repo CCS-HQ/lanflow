@@ -254,7 +254,7 @@ func (s *Service) ProbeIP(target string, online bool) error {
 }
 
 func (s *Service) probeIP(target string, online bool) {
-	ctx, cancel := s.ctrlCtx(nil, probeIPTimeout)
+	ctx, cancel := s.svcCtx(probeIPTimeout)
 	defer cancel()
 	s.probeExitMu.Lock()
 	defer s.probeExitMu.Unlock()
@@ -463,7 +463,7 @@ func (s *Service) ProbeUnlock(target string) error {
 }
 
 func (s *Service) probeUnlock(target string) {
-	ctx, cancel := s.ctrlCtx(nil, probeUnlockTimeout)
+	ctx, cancel := s.svcCtx(probeUnlockTimeout)
 	defer cancel()
 	s.probeExitMu.Lock()
 	defer s.probeExitMu.Unlock()
@@ -545,7 +545,7 @@ func (s *Service) ProbeRegion(country string, withUnlock bool) error {
 }
 
 func (s *Service) probeRegion(country string, nodes []string, withUnlock bool) {
-	ctx, cancel := s.ctrlCtx(nil, probeRegionTimeout)
+	ctx, cancel := s.svcCtx(probeRegionTimeout)
 	defer cancel()
 
 	update := func(i int, fn func(n *model.RegionNode)) {

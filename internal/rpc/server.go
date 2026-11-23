@@ -553,8 +553,12 @@ func (s *Server) invoke(name string, args []reflect.Value) ([]any, error) {
 // settings structs they would write back hold redacted values.
 var agentRefused = map[string]string{
 	"SaveSettings": "agent 不能整体保存设置（读到的设置已脱敏）：请用 PatchSettings（lanflow ctl config set）只改需要的字段",
-	"ApplyDNS":     "agent 不能整体替换 DNS 设置：请用 PatchSettings 修改 DNS 下的字段",
-	"ApplySniffer": "agent 不能整体替换嗅探设置：请用 PatchSettings 修改 Sniffer 下的字段",
+	// UpdateSettings takes two whole settings structs: an agent would build
+	// them from the redacted ones it reads, and its PatchSettings is where
+	// locked fields and high-impact changes are checked.
+	"UpdateSettings": "agent 不能用整份设置提交修改（读到的设置已脱敏）：请用 PatchSettings（lanflow ctl config set）只改需要的字段",
+	"ApplyDNS":       "agent 不能整体替换 DNS 设置：请用 PatchSettings 修改 DNS 下的字段",
+	"ApplySniffer":   "agent 不能整体替换嗅探设置：请用 PatchSettings 修改 Sniffer 下的字段",
 }
 
 func (s *Server) callAPI(ss *session, m Method, params json.RawMessage) (any, error) {
@@ -605,7 +609,7 @@ func (s *Server) callAPI(ss *session, m Method, params json.RawMessage) (any, er
 	}
 	if prep != nil {
 		if restore, desc := prep(res); restore != nil {
-			s.undo.push(undoEntry{client: id.String(), method: m.Name, desc: desc, restore: restore})
+			s.undo.push(undoEntry{client: id.String(), method: m.Name, desc: desc, high: isHighImpact(m.Name, args), restore: restore})
 		}
 	}
 	return redactResults(m.Name, res), nil

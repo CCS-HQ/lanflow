@@ -1,5 +1,7 @@
 package core
 
+//lint:file-ignore U1000 some of this file is used on other platforms only.
+
 import (
 	"context"
 	"errors"

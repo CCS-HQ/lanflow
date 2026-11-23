@@ -304,3 +304,41 @@ func TestTabPersists(t *testing.T) {
 		t.Fatalf("unknown key should open 概况: %q", tt.Texts())
 	}
 }
+
+// TestSiteEditsKeepOtherSettings: adding or removing a site saves the
+// list alone. The job used to save the whole settings as the page read
+// them on the UI thread, so whatever another page, the tray or an agent
+// stored before the job ran was put back.
+func TestSiteEditsKeepOtherSettings(t *testing.T) {
+	f := fake.NewInstant()
+	e, _ := testEnv(f)
+	var jobs []func() error
+	e.Run = func(job func() error, _ string) { jobs = append(jobs, job) }
+	p := New(e)
+	sites := len(f.Settings().Sites)
+
+	p.addName, p.addURL = "Example", "https://example.org"
+	p.addSite()
+	p.removeSite(f.Settings().Sites[0].URL)
+	if len(jobs) != 2 {
+		t.Fatalf("%d jobs, want 2", len(jobs))
+	}
+	// Another writer, before the jobs run.
+	other := f.Settings()
+	other.Mode, other.LogLevel = model.ModeGlobal, "debug"
+	if err := f.SaveSettings(other); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range jobs {
+		if err := job(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := f.Settings()
+	if len(got.Sites) != sites || got.Sites[len(got.Sites)-1].URL != "https://example.org" {
+		t.Fatalf("sites after adding one and removing one: %+v", got.Sites)
+	}
+	if got.Mode != model.ModeGlobal || got.LogLevel != "debug" {
+		t.Fatalf("editing the sites undid another writer: mode %s, log level %q", got.Mode, got.LogLevel)
+	}
+}

@@ -3,24 +3,32 @@
 package sysproxy
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 
 	"golang.org/x/sys/windows/registry"
 )
 
-func snapshot() (Saved, error) {
+func snapshot() (Saved, error) { return winSnapshot(winReal{}) }
+
+func restore(s Saved) error { return winRestore(winReal{}, s) }
+
+func releaseDialUp(s Saved, host string, port int, pac string) error {
+	return winReleaseDialUp(winReal{}, s, host, port, pac)
+}
+
+// legacySnapshot records the LAN's registry values.
+func (winReal) legacySnapshot() (windowsSaved, error) {
 	k, err := openSettings(registry.QUERY_VALUE)
 	if err != nil {
-		return nil, err
+		return windowsSaved{}, err
 	}
 	defer k.Close()
 	saved := windowsSaved{OS: "windows"}
 	if v, _, err := k.GetIntegerValue("ProxyEnable"); err == nil {
 		saved.Enable = &v
 	} else if !errors.Is(err, registry.ErrNotExist) {
-		return nil, fmt.Errorf("读取 ProxyEnable 失败：%w", err)
+		return windowsSaved{}, fmt.Errorf("读取 ProxyEnable 失败：%w", err)
 	}
 	if v, _, err := k.GetStringValue("ProxyServer"); err == nil {
 		saved.Server = &v
@@ -32,14 +40,11 @@ func snapshot() (Saved, error) {
 		saved.AutoConfig = &v
 	}
 	saved.HasAutoConfig = true
-	return json.Marshal(saved)
+	return saved, nil
 }
 
-func restore(s Saved) error {
-	var saved windowsSaved
-	if err := json.Unmarshal(s, &saved); err != nil || saved.OS != "windows" {
-		return errors.New("保存的系统代理设置无法识别")
-	}
+// legacyRestore puts the LAN's registry values back; the caller notifies.
+func (winReal) legacyRestore(saved windowsSaved) error {
 	k, err := openSettings(registry.SET_VALUE)
 	if err != nil {
 		return err
@@ -72,5 +77,5 @@ func restore(s Saved) error {
 	if err := k.SetDWordValue("ProxyEnable", enable); err != nil {
 		return fmt.Errorf("恢复 ProxyEnable 失败：%w", err)
 	}
-	return notifySettingsChanged()
+	return nil
 }

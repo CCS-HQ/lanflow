@@ -216,7 +216,17 @@ type API interface {
 	// directory last changed, picking up the core's own scheduled updates
 	// (docs/design.md:526 外部资源 · 上次更新). Cheap read.
 	GeoDataInfo() model.GeoDataInfo
-	SaveSettings(s model.Settings) error // applies what changed; reloads the core when needed
+	// SaveSettings replaces every setting with s and applies what changed
+	// (reloading the core when needed). Settings stored since s was read
+	// are lost: it is for callers that mean the whole of s. A caller that
+	// changes a few options uses UpdateSettings (EditSettings).
+	SaveSettings(s model.Settings) error
+	// UpdateSettings saves the options that differ between base and next,
+	// base being the settings the caller read and next what it made of
+	// them, and applies them like SaveSettings. Every other option keeps
+	// the value stored now (model.MergeSettings), so two callers changing
+	// different options never undo each other.
+	UpdateSettings(base, next model.Settings) error
 	ApplyDNS(d model.DNSSettings) error
 	ApplySniffer(s model.SnifferSettings) error
 	// SaveOverride sets the text of the override entry key (an override ID;
@@ -428,4 +438,14 @@ type API interface {
 	// Shutdown restores the system proxy if Lanflow set it and stops the
 	// core. Called once when the app quits.
 	Shutdown()
+}
+
+// EditSettings changes a few settings: fn edits a copy of the current
+// ones and only what it changed is saved (API.UpdateSettings), whatever
+// else was stored in the meantime. fn must not block or call the API.
+func EditSettings(api API, fn func(*model.Settings)) error {
+	base := api.Settings()
+	next := model.CloneSettings(base)
+	fn(&next)
+	return api.UpdateSettings(base, next)
 }

@@ -1,5 +1,7 @@
 package sysdns
 
+//lint:file-ignore U1000 some of this file is used on other platforms only.
+
 import (
 	"bytes"
 	"context"

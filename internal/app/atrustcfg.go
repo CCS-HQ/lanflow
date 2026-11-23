@@ -214,9 +214,7 @@ func anyStrings(v any) []string {
 			out = append(out, fmt.Sprint(e))
 		}
 	case string:
-		for _, l := range strings.Split(x, "\n") {
-			out = append(out, l)
-		}
+		out = append(out, strings.Split(x, "\n")...)
 	case nil:
 	default:
 		out = append(out, fmt.Sprint(x))

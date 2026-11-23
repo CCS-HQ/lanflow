@@ -101,7 +101,7 @@ func (s *Service) restoreSelections() {
 		// Cancelled by Shutdown (this runs under opMu, which Shutdown waits
 		// for), and given up at the first timeout: a controller that does
 		// not answer one group will not answer the next ones either.
-		ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+		ctx, cancel := s.svcCtx(ctrlTimeout)
 		err := s.d.ctrl.SelectProxy(ctx, g.Name, name)
 		gaveUp := ctx.Err() != nil
 		cancel()

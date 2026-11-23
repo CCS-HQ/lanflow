@@ -198,7 +198,7 @@ func (p *Page) applyAdvanced() {
 	}
 	s.Advanced = a
 	p.applying = true
-	// Through the page's save queue: it is a whole Settings value too.
+	// Through the page's save queue, in order with the other saves.
 	p.saveThen(s, func(err error) {
 		p.applying = false
 		if err != nil {

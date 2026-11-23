@@ -46,12 +46,22 @@ Mihomo 子进程：代理协议、路由规则、DNS
 - 「允许局域网」关闭时，订阅自己带的监听也收敛到回环（`internal/profile/lan.go`，合成时在各覆写层之前对订阅层执行）：`listeners` 每一项的 `listen` 改为 `127.0.0.1`，`tunnels` 的本地地址、`dns.listen`（澜流接管 DNS 时由澜流自己写，不在此列）改成回环地址，本地地址无法识别的隧道和 `dns.listen` 直接移除，每处改动记一条告警。覆写是用户自己写的内容，保持原样；澜流后加的监听（探测、HTTPS 解密、高级选项）也不受影响。
 - 权限组件（`internal/platform/helper`、`cmd/lanflow-helper`）：
   - 安装必须带 `--core-sha256`。内核文件在用户可写的位置，应用在请求管理员授权前先算好它的 SHA-256，提权后的安装程序只接受摘要一致的副本（按写入的字节计算，授权期间文件被换掉即拒绝）；缺少或格式不对的摘要一律拒绝安装，不退回到「不校验」。`--core` 本身是符号链接也拒绝。
-  - 启动内核时，数据目录内的工作目录与配置文件路径不允许经过符号链接（Windows 上为任何重解析点），即使它此刻指向数据目录内部；数据目录之上的链接（如链接的主目录）是用户自己的布局，仍允许。这只是收窄而非堵死：检查之后用户仍可把目录换成链接，内核自己也会打开配置里的路径。
+  - 启动内核时，数据目录内的工作目录与配置文件路径不允许经过符号链接（Windows 上为任何重解析点），即使它此刻指向数据目录内部；数据目录之上的链接（如链接的主目录）是用户自己的布局，仍允许。这一步只是尽早给出看得懂的拒绝，真正的保护是下一条。
+  - 特权内核不在用户的文件上运行（helper 0.1.4 起，`service/stage.go`、`service/sanitize.go`）。helper 自己有一个只有 root/SYSTEM 可写的工作目录：macOS 是 `/Library/Application Support/Lanflow Helper/work`（0700），Windows 是 `%ProgramData%\Lanflow Helper\work`（DACL 只给 SYSTEM 和 Administrators）。每次启动：
+    - 用户的 `runtime.yaml` 以不跟随链接的方式读取（macOS 逐级 `O_NOFOLLOW`，且必须是属于安装用户、只有一个硬链接的普通文件；Windows 不跟随重解析点并核对句柄的最终路径），检查后写进该目录，内核以 `-d <该目录> -f <该目录>/runtime.yaml` 启动。
+    - 检查内容：去掉 `external-controller*`、`external-ui*`、`external-doh-server`、`secret`（控制接口只由命令行给出；澜流自己合成的配置本来就不带这些键，原样通过，一个字节不改）；`ntp.write-to-system` 也去掉（它让内核按配置里的 NTP 服务器改系统时钟）。这些键若是经顶层合并键 `<<` 带入的，无法单独去除，整份配置拒绝。`proxy-providers` / `rule-providers` 的 `path` 必须是工作目录内的相对路径，绝对路径或带 `..` 的配置直接拒绝启动；`path` 也不能是或位于 helper 自己的条目之下（`runtime.yaml`、地理数据库、`cache.db`，大小写不敏感）。配置上限 16 MB、检查限时 10 秒；检查按 `yaml.Node` 线性进行（35 万个键约 1 秒），别名与合并的展开量有上限。
+    - 地理数据库（`geoip.metadb`、`geosite.dat`、`geoip.dat`、`country.mmdb`、`ASN.mmdb`、`GeoLite2-ASN.mmdb`）与 provider 缓存文件（配置里 `path` 指到的文件，以及 `proxies/`、`rules/` 下的文件）从用户的工作目录复制进去，同样不跟随链接；只在该目录里没有、或用户那份更新时才复制，副本保留源文件的时间，所以几十 MB 的数据库不会每次启动都复制。不复制 `cache.db`、内核程序和日志。一次复制有上限（1024 个文件、768 MB、8 秒），超出的不复制、由内核自己下载；清洗后的配置在所有复制完成之后才写入，复制进来的文件无论以什么名字落地都盖不掉它。每次启动前清掉 30 天没动过、当前配置不引用、用户目录里也没有的旧文件，以及占了内核自有文件名的目录。读取、检查、复制都不占用 helper 的状态锁，期间 `status`/`stop`/`ping` 照常应答，此时到达的 `stop` 会取消这次启动。
+    - 不往回复制：特权内核运行期间写下的东西（`cache.db`、TUN 下更新的地理数据库、provider 文件）留在该目录，只供下一次特权运行使用。所以 TUN 模式下「更新地理数据库」更新的是 helper 目录里的那份，设置页显示的日期和「清理内核缓存」针对的仍是用户目录里的那份；节点选择由澜流自己记录并在每次启动后重新应用，不受影响。
+    - 热重载：特权内核只肯加载自己工作目录内的文件，所以应用先向 helper 发 `stage`（`protocol.OpStage`，`core.ConfigStager`），helper 重新复制并检查配置，返回副本路径，应用再让内核重载这个路径。helper 拒绝时内核不会被要求重载，继续用原来的配置；内核拒绝重载时，应用回滚 `runtime.yaml` 后再 `stage` 一次，helper 目录里的副本随之回到正在运行的那份。
+    - 日志仍写在用户数据目录的 `core/mihomo-tun.log`（helper 以不跟随链接的方式打开后把句柄交给内核）；控制接口的套接字/管道位置不变。
+    - 这道检查管的是「启动时的配置」。与安装用户同身份的进程本来就能连上控制接口换掉运行中的配置，helper 看不到；此时起作用的是工作目录归 root/SYSTEM 所有——内核自己「路径必须在工作目录内」的检查不会再被目录里的链接带到别处。
+    - 尚未处理：macOS 上控制接口的套接字仍由特权内核创建在用户自己的目录里（内核对该路径先删除、再监听、再改权限），用户在校验之后替换该目录仍是一个竞态窗口。
+  - 协议版本（`protocol.Version`）没有变：`stage` 是新增的操作，旧 helper 对它回答「未知操作」，应用据此改为让内核按用户目录里的 `runtime.yaml` 重载（升级后被接管的旧内核本来就运行在用户目录上），所以重装 helper 之前切换订阅、改规则照常可用。应用靠 helper 的版本号（`cmd/lanflow-helper/VERSION`）发现旧 helper 并提示重装；`status` 和 `stop` 在新旧版本之间照常可用，应用才能停掉旧 helper 还在运行的内核。
   - macOS：helper 把内核的 PID 记在只有 root 可写的目录里的 `core.pid`，内核退出时删除；helper 启动时若发现上一个 helper（崩溃或被强杀）留下的内核仍在运行、且确实是受管的内核程序，就结束它（先中断、超时再强杀），PID 已被其他进程占用则不动。
   - Windows：内核进程放进 `KILL_ON_JOB_CLOSE` 的 Job Object，helper 持有唯一句柄，helper 崩溃、被结束或没走完停止流程时系统随之结束内核；建不了 Job 时内核照常运行，只在日志里记一笔。
 - 真实后端创建失败时（`main.go` `backend`）不再退回模拟后端：记日志、弹原生错误对话框说明原因，然后以状态 1 退出。模拟后端只在 `LANFLOW_FAKE=1`（开发）时使用——否则界面会显示样例节点和流量、开关看似可用而实际没有代理，ctl 和 MCP 也会拿到同样的假数据。
 - 先接 GET /version、GET /proxies 和 PUT /proxies/{name}；再接 /configs、/traffic、/logs、/connections。按官方 API 文档确认方法和请求字段。
-- UI 线程不运行阻塞请求；后台请求通过明确的状态更新刷新 UI。退出时取消请求并回收自身子进程。页面自己的状态只在 UI 线程读写：后台任务经 `Env.RunThen`（或方法 `Env.Then`，`internal/view/env`）执行，任务本身只计算，结果由 `done` 回调在 UI 线程、下一次构建之前写回，视图读取时不需要锁；`Env.OnUI` 供任意 goroutine 把一段代码排到 UI 线程。设置页的保存在视图层串行（`internal/view/settings/page.go` `saveThen`）：每次保存都是整份设置的快照，并发保存可能以任意顺序落地、旧的覆盖新的，所以排队逐个执行，排队期间控件显示并基于最新的草稿继续修改。
+- UI 线程不运行阻塞请求；后台请求通过明确的状态更新刷新 UI。退出时取消请求并回收自身子进程。页面自己的状态只在 UI 线程读写：后台任务经 `Env.RunThen`（或方法 `Env.Then`，`internal/view/env`）执行，任务本身只计算，结果由 `done` 回调在 UI 线程、下一次构建之前写回，视图读取时不需要锁；`Env.OnUI` 供任意 goroutine 把一段代码排到 UI 线程。设置按补丁保存：页面调用 `API.UpdateSettings(base, next)`（`base` 是它读到的设置，`next` 是改过的；`app.EditSettings(api, func(*Settings))` 是读、改、提交的简写），服务在持有操作锁时只把两者不同的设置项合并进当前存储的设置（`model.MergeSettings`：由导出字段组成的结构体逐字段比较，列表、时间各算一项），再走与 `SaveSettings` 相同的校验、落盘和应用路径。因此两个页面、界面与 `lanflow ctl`／MCP、界面与配置同步同时各改各的设置项不会互相覆盖；同一个列表（如连通性网站）被两方同时修改时仍是后写的生效。`SaveSettings` 是整份替换，只留给确实要替换全部设置的场景（导入设置、加载配置文件，服务内部经 `saveSettingsFrom`）。设置页的保存仍在视图层排队逐个执行（`internal/view/settings/page.go` `saveThen`），保证同一设置项的先后两次修改按顺序落地；排队期间控件显示并基于草稿继续修改，某次保存失败时草稿按存储的设置加上仍在排队的修改重算。
 - 本地配置默认权限 0600，运行目录 0700；正式应用使用系统用户数据目录，避免把订阅和凭据存进代码仓库。
 
 ## 分阶段验收
@@ -83,7 +93,7 @@ Mihomo 子进程：代理协议、路由规则、DNS
 
 MyGo 为 MIT，Mihomo 仓库声明 GPL-3.0。随包分发内核时需准备相应许可证、版权与源码信息；使用独立进程不应被视为自动免除分发义务。
 
-现状：本项目以 MIT 发布（[LICENSE](../LICENSE)）。`scripts/prepare-resources.sh` 调用 `scripts/collect-licenses.sh`，把 Mihomo 的 GPL-3.0 全文、指向固定版本源代码的说明、地理数据库的来源与署名、编入程序的 Go 模块的许可证放进每个安装包的 `licenses/`；清单见 [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)，发布流程把它附到 Release 并核对包内文件。正式应用标识（`mygo.json` 的 `identifier` 仍是 `com.example.lanflow`）和 Developer ID 签名、公证尚未确定。
+现状：本项目以 MIT 发布（[LICENSE](../LICENSE)）。`scripts/prepare-resources.sh` 调用 `scripts/collect-licenses.sh`，把 Mihomo 的 GPL-3.0 全文、指向固定版本源代码的说明、地理数据库的来源与署名、编入程序的 Go 模块的许可证放进每个安装包的 `licenses/`；清单见 [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)，发布流程把它附到 Release 并核对包内文件。应用标识是 `com.lanflow.app`（`mygo.json` 的 `identifier`，与权限组件的 `com.lanflow.helper` 同一前缀）。0.1.9 及以前用的是占位标识 `com.example.lanflow`：系统凭据库里按旧标识存放的条目在第一次读取时迁到新标识（`main_secrets.go`），Windows 上旧安装程序留下的卸载项在新安装程序写入同一目录的卸载项后删除（`main_identifier_windows.go`）。数据目录按应用名而不是标识命名，不受影响。Developer ID 签名、公证尚未确定。
 
 ## 官方资料
 

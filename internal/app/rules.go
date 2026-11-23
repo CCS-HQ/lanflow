@@ -56,7 +56,7 @@ func (s *Service) refreshRules() {
 	if !s.running() {
 		return
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+	ctx, cancel := s.svcCtx(ctrlTimeout)
 	raw, err := s.d.ctrl.Rules(ctx)
 	cancel()
 	s.mu.Lock()
@@ -90,7 +90,7 @@ func (s *Service) refreshProviders() {
 	if !s.running() {
 		return
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+	ctx, cancel := s.svcCtx(ctrlTimeout)
 	raw, err := s.d.ctrl.RuleProviders(ctx)
 	cancel()
 	if err != nil {
@@ -251,7 +251,7 @@ func (s *Service) SetRuleDisabled(index int, disabled bool) error {
 	if !s.running() {
 		return errCoreNotRunning
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+	ctx, cancel := s.svcCtx(ctrlTimeout)
 	err := s.d.ctrl.DisableRules(ctx, map[int]bool{index: disabled})
 	cancel()
 	if err != nil {
@@ -276,7 +276,7 @@ func (s *Service) UpdateRuleProvider(name string) error {
 		s.mu.Unlock()
 		s.em.emit(TopicRules)
 	}()
-	ctx, cancel := s.ctrlCtx(nil, fetchTimeout)
+	ctx, cancel := s.svcCtx(fetchTimeout)
 	err := s.d.ctrl.UpdateRuleProvider(ctx, name)
 	cancel()
 	s.refreshProviders()
@@ -367,7 +367,7 @@ func (s *Service) TestRule(input string) (model.RuleMatch, error) {
 			continue
 		}
 		if open {
-			ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+			ctx, cancel := s.svcCtx(ctrlTimeout)
 			_ = s.d.ctrl.CloseConnection(ctx, m.ID)
 			cancel()
 		}

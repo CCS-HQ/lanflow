@@ -374,14 +374,13 @@ func (p *Page) pickCore() {
 	if err != nil || len(paths) == 0 {
 		return
 	}
-	// Settings are saved whole: read them in the job, right before the
-	// write, not before the dialog (which stays open as long as the user
-	// likes while other changes are saved).
+	// Only the two options are saved (app.EditSettings): the dialog stays
+	// open as long as the user likes while other settings change.
 	p.e.Run(func() error {
-		s := p.e.API.Settings()
-		s.CorePath = paths[0]
-		s.CoreVersion = "" // a hand-picked file is not one of the installed versions
-		return p.e.API.SaveSettings(s)
+		return app.EditSettings(p.e.API, func(s *model.Settings) {
+			s.CorePath = paths[0]
+			s.CoreVersion = "" // a hand-picked file is not one of the installed versions
+		})
 	}, i18n.T("已选择内核文件"))
 }
 

@@ -28,8 +28,31 @@ import (
 // SaveSettings is the path of settings made on this machine (the UI, ctl,
 // an agent); settings read from a sync file or an imported file go
 // through saveSettingsFrom(in, true).
+//
+// It replaces every setting: a caller that read the settings, changed an
+// option and saves the lot undoes whatever was stored in between. Callers
+// that change a few options use UpdateSettings.
 func (s *Service) SaveSettings(in model.Settings) error {
 	return s.saveSettingsFrom(in, false)
+}
+
+// UpdateSettings saves the options that differ between base and next and
+// leaves the others as they are stored now (model.MergeSettings): the
+// merge runs under opMu, on the settings SaveSettings would replace, and
+// the result takes the same path.
+func (s *Service) UpdateSettings(base, next model.Settings) error {
+	return s.saveSettingsWith(func(cur model.Settings) model.Settings {
+		return model.MergeSettings(cur, base, next)
+	}, false)
+}
+
+// NormalizeSettings is what the service stores when asked to save s:
+// invalid values replaced by defaults, and options that follow from
+// others set (a port equal to the mixed port cleared). The local
+// interface uses it to know all that a settings write of an agent
+// changed (internal/rpc, undo).
+func NormalizeSettings(s model.Settings) model.Settings {
+	return normalizeSettings(model.CloneSettings(s))
 }
 
 // settingsWarning is an error of SaveSettings that came after the
@@ -45,7 +68,13 @@ func (w *settingsWarning) Unwrap() error { return w.err }
 // made on this machine. A WebDAV server such settings bring is not
 // confirmed for automatic backups (backup.go, confirmWebDAVOrigin).
 func (s *Service) saveSettingsFrom(in model.Settings, remote bool) error {
-	in = normalizeSettings(in)
+	return s.saveSettingsWith(func(model.Settings) model.Settings { return in }, remote)
+}
+
+// saveSettingsWith saves what edit makes of the stored settings. edit
+// runs with opMu held, so no other save comes between reading the
+// settings and storing the result; it gets a copy and must not block.
+func (s *Service) saveSettingsWith(edit func(cur model.Settings) model.Settings, remote bool) error {
 	if remote {
 		s.adoptWebDAVOrigin() // record what was here before it changes
 	}
@@ -58,11 +87,12 @@ func (s *Service) saveSettingsFrom(in model.Settings, remote bool) error {
 	ours := s.state.weSetProxy
 	s.mu.Unlock()
 
+	in := normalizeSettings(edit(copySettings(old)))
 	if err := s.checkSettingsChange(old, in); err != nil {
 		return err
 	}
 	// persist first so a failed apply still keeps the user's choice
-	if err := s.storeSettings(in, running); err != nil {
+	if err := s.storeSettings(old, in, running); err != nil {
 		return err
 	}
 	if ch := changedSettings(old, in); len(ch) > 0 {
@@ -101,7 +131,7 @@ func (s *Service) saveSettingsFrom(in model.Settings, remote bool) error {
 		err = s.applySettingsHot(old, in)
 	}
 	if err != nil {
-		return s.revertSettings(old, err)
+		return s.revertSettings(old, in, err)
 	}
 	if err := s.followSystemProxy(old, in, ours, coexistChanged); err != nil {
 		return err
@@ -166,13 +196,17 @@ func (s *Service) checkSettingsChange(old, in model.Settings) error {
 	return nil
 }
 
-// storeSettings makes in the current settings in memory and on disk.
-func (s *Service) storeSettings(in model.Settings, running bool) error {
+// storeSettings makes in, which was made of old, the current settings in
+// memory and on disk. Settings changed without opMu since old was read
+// (updateSettings: a finished backup's time, the sync folder, the main
+// group) stay unless in changes them too.
+func (s *Service) storeSettings(old, in model.Settings, running bool) error {
 	s.mu.Lock()
+	in = model.MergeSettings(s.state.settings, old, in)
 	// The remembered UI state belongs to UpdateUIState: a settings page
 	// saving the snapshot it opened with must not roll back a sort order or
 	// view picked on another page since.
-	in.UI = copyUIState(s.state.settings.UI)
+	in.UI = s.state.settings.UI
 	s.state.settings = copySettings(in)
 	i18n.SetLang(in.Language)
 	if !running {
@@ -188,15 +222,16 @@ func (s *Service) storeSettings(in model.Settings, running bool) error {
 	return nil
 }
 
-// revertSettings restores old after applying the new settings failed, so
-// the UI shows what the core actually runs, and returns err.
-func (s *Service) revertSettings(old model.Settings, err error) error {
+// revertSettings takes the change from old to in back after applying it
+// failed, so the UI shows what the core actually runs, and returns err.
+func (s *Service) revertSettings(old, in model.Settings, err error) error {
 	s.mu.Lock()
-	old.UI = copyUIState(s.state.settings.UI)
-	s.state.settings = copySettings(old)
-	s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, old.MainGroup)
+	back := model.MergeSettings(s.state.settings, in, old)
+	back.UI = s.state.settings.UI
+	s.state.settings = copySettings(back)
+	s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, back.MainGroup)
 	s.mu.Unlock()
-	i18n.SetLang(old.Language)
+	i18n.SetLang(back.Language)
 	_ = s.persistSettings()
 	s.em.emit(TopicSettings, TopicProxies)
 	return err
@@ -236,7 +271,7 @@ func settingsPatch(old, in model.Settings) (patch controller.ConfigPatch, ok boo
 // changes and updates Status; opMu must be held.
 func (s *Service) applySettingsHot(old, in model.Settings) error {
 	if patch, ok := settingsPatch(old, in); ok {
-		ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+		ctx, cancel := s.svcCtx(ctrlTimeout)
 		err := s.d.ctrl.PatchConfigs(ctx, patch)
 		cancel()
 		if err != nil {
@@ -296,16 +331,18 @@ func needsReload(old, in model.Settings) bool {
 
 // ApplyDNS saves the DNS section and reloads.
 func (s *Service) ApplyDNS(d model.DNSSettings) error {
-	set := s.Settings()
-	set.DNS = d
-	return s.SaveSettings(set)
+	return s.saveSettingsWith(func(set model.Settings) model.Settings {
+		set.DNS = d
+		return set
+	}, false)
 }
 
 // ApplySniffer saves the sniffer section and reloads (or patches the switch).
 func (s *Service) ApplySniffer(sn model.SnifferSettings) error {
-	set := s.Settings()
-	set.Sniffer = sn
-	return s.SaveSettings(set)
+	return s.saveSettingsWith(func(set model.Settings) model.Settings {
+		set.Sniffer = sn
+		return set
+	}, false)
 }
 
 // overrideArgs builds composeArgs that substitute the text of the override
@@ -438,7 +475,7 @@ func (s *Service) UpdateGeoData() error {
 	if !s.running() {
 		return errors.New(i18n.T("请先启动内核，再更新地理数据库。"))
 	}
-	ctx, cancel := s.ctrlCtx(nil, 5*time.Minute)
+	ctx, cancel := s.svcCtx(5 * time.Minute)
 	defer cancel()
 	if err := s.d.ctrl.UpdateGeo(ctx); err != nil {
 		return fmt.Errorf(i18n.T("更新地理数据库失败：%v"), err)

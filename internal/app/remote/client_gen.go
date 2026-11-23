@@ -430,6 +430,11 @@ func (cl *Client) SaveSettings(s model.Settings) (err error) {
 	return
 }
 
+func (cl *Client) UpdateSettings(base model.Settings, next model.Settings) (err error) {
+	err = cl.call("UpdateSettings", []any{base, next})
+	return
+}
+
 func (cl *Client) ApplyDNS(d model.DNSSettings) (err error) {
 	err = cl.call("ApplyDNS", []any{d})
 	return

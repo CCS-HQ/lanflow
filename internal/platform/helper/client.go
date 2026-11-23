@@ -1,5 +1,7 @@
 package helper
 
+//lint:file-ignore U1000 some of this file is used on other platforms only.
+
 import (
 	"context"
 	"errors"
@@ -245,6 +247,30 @@ func (r *runner) Start(ctx context.Context, spec core.Spec) error {
 	go r.poll(pctx, r.exited)
 	return nil
 }
+
+// StageConfig asks the helper to copy spec.Config into its own work
+// directory again and returns the copy's path, which is what the running
+// core can reload (core.ConfigStager).
+func (r *runner) StageConfig(ctx context.Context, spec core.Spec) (string, error) {
+	cctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+	resp, err := r.c.Call(cctx, protocol.Request{Op: protocol.OpStage, Spec: toWire(spec)})
+	if err != nil {
+		if !isTransport(err) && strings.Contains(err.Error(), unknownOpText) {
+			return "", fmt.Errorf("%w: %v", core.ErrStageUnsupported, err)
+		}
+		return "", wrapTransport(err)
+	}
+	if resp.ConfigPath == "" {
+		return "", errors.New("权限组件没有返回配置路径，请重新安装权限组件")
+	}
+	return resp.ConfigPath, nil
+}
+
+// unknownOpText is how a helper answers an op it does not have (service.
+// NewHandler, unchanged since the first release): the only sign that the
+// helper is older than OpStage, since the protocol version is the same.
+const unknownOpText = "未知操作"
 
 // Adopt takes over the Mihomo the helper runs already (started for a
 // Lanflow service that has since crashed): it only begins polling.

@@ -155,7 +155,7 @@ func (s *Service) diagFiles(feedback, withLog bool) []diagFile {
 		add(l.name, []byte(applog.Redact(string(data))))
 	}
 
-	ctx, cancel := s.ctrlCtx(nil, 20*time.Second)
+	ctx, cancel := s.svcCtx(20 * time.Second)
 	defer cancel()
 	cmds := s.d.diagCommands
 	if cmds == nil {

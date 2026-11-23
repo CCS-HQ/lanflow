@@ -20,6 +20,14 @@ import (
 // Version is the protocol version. A server answers requests whose "v" is
 // equal to its own; a mismatch yields an error response so the app can ask
 // the user to reinstall the helper.
+//
+// It changes only when a request an older peer would accept means
+// something else. Additions (OpStage, Response.ConfigPath in helper 0.1.4)
+// keep it: the app already refuses a helper of another release
+// (helper.Check compares the helper's version) and asks to reinstall it,
+// while status and stop, which the app needs to end a core an older helper
+// still runs, go on working across releases. An older helper answers an op
+// it does not know with an error.
 const Version = 1
 
 // Endpoint names shared by client and service.
@@ -36,6 +44,12 @@ const (
 	OpStart  = "start"
 	OpStop   = "stop"
 	OpStatus = "status"
+	// OpStage copies Spec.Config into the helper's own work directory once
+	// more (checked and cleaned as at start) and answers with its path
+	// there, for the app to hand to the running core's reload: the core
+	// only loads files inside its work directory, which the user cannot
+	// write. The other Spec fields are ignored.
+	OpStage = "stage"
 )
 
 // maxLine bounds a single request/response line (the spec carries a few
@@ -43,6 +57,11 @@ const (
 const maxLine = 1 << 20
 
 // Spec is the wire form of core.Spec.
+//
+// WorkDir and Config name the user's files. The helper does not run the
+// core on them: it copies the config (and the databases and provider
+// files of WorkDir) into a work directory only root/SYSTEM can write and
+// runs the core there.
 type Spec struct {
 	Bin        string   `json:"bin"`
 	WorkDir    string   `json:"workDir"`
@@ -71,6 +90,8 @@ type Response struct {
 	Running   bool   `json:"running"`
 	ExitError string `json:"exitError,omitempty"`
 	PID       int    `json:"pid,omitempty"`
+	// Stage field: the config's copy in the helper's work directory.
+	ConfigPath string `json:"configPath,omitempty"`
 }
 
 // Err returns the response's error, or nil when OK.

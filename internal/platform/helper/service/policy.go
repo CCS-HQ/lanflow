@@ -30,8 +30,10 @@ func NewPolicy(c Config) *Policy {
 	return &Policy{Config: c, OwnerMatches: ownerMatches, CheckController: checkController}
 }
 
-// Validate checks spec and returns the spec the helper will actually run:
-// Bin replaced by the privileged copy and paths cleaned.
+// Validate checks spec and returns it with Bin replaced by the privileged
+// copy and paths cleaned. WorkDir and Config stay the user's: the
+// supervisor copies from them into its own work directory and runs the
+// core there (stage.go), it does not run the core on them.
 func (p *Policy) Validate(spec protocol.Spec) (protocol.Spec, error) {
 	out := spec
 	c := p.Config
@@ -75,14 +77,8 @@ func (p *Policy) Validate(spec protocol.Spec) (protocol.Spec, error) {
 	if err := refuseLinks(dataDir, spec.WorkDir, out.WorkDir, true, "工作目录"); err != nil {
 		return out, err
 	}
-	out.Config, err = p.insideDataDir(dataDir, spec.Config, "配置文件")
+	out.Config, err = p.checkConfig(dataDir, spec.Config)
 	if err != nil {
-		return out, err
-	}
-	if fi, err := os.Stat(out.Config); err != nil || !fi.Mode().IsRegular() {
-		return out, fmt.Errorf("配置文件不存在或不是普通文件: %s", spec.Config)
-	}
-	if err := refuseLinks(dataDir, spec.Config, out.Config, false, "配置文件"); err != nil {
 		return out, err
 	}
 	out.LogFile, err = p.insideDataDir(dataDir, spec.LogFile, "日志文件")
@@ -109,6 +105,32 @@ func (p *Policy) Validate(spec protocol.Spec) (protocol.Spec, error) {
 	return out, nil
 }
 
+// ValidateConfig checks a config path alone, as Validate does, and returns
+// it with symlinks resolved.
+func (p *Policy) ValidateConfig(config string) (string, error) {
+	dataDir, err := filepath.EvalSymlinks(p.Config.DataDir)
+	if err != nil {
+		return "", fmt.Errorf("数据目录不可用: %w", err)
+	}
+	return p.checkConfig(dataDir, config)
+}
+
+// checkConfig requires config to be a regular file inside dataDir that is
+// not reached through a link.
+func (p *Policy) checkConfig(dataDir, config string) (string, error) {
+	resolved, err := p.insideDataDir(dataDir, config, "配置文件")
+	if err != nil {
+		return "", err
+	}
+	if fi, err := os.Stat(resolved); err != nil || !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("配置文件不存在或不是普通文件: %s", config)
+	}
+	if err := refuseLinks(dataDir, config, resolved, false, "配置文件"); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
 // insideDataDir cleans path, resolves symlinks (of the deepest existing
 // prefix, so a not-yet-created log file still validates) and requires the
 // result to be dataDir or below it.
@@ -131,10 +153,10 @@ func (p *Policy) insideDataDir(dataDir, path, what string) (string, error) {
 
 // refuseLinks refuses a work dir or config that is reached through a
 // symbolic link (or, on Windows, any reparse point) inside the data
-// directory. Mihomo runs as root/SYSTEM on these paths, which the user
-// owns: a link there is how a root process gets pointed at another place,
-// so none is accepted, even one that resolves to somewhere inside the data
-// directory right now.
+// directory. The helper reads these paths as root/SYSTEM and the user
+// owns them: a link there is how a privileged process gets pointed at
+// another place, so none is accepted, even one that resolves to somewhere
+// inside the data directory right now.
 //
 // given is the path of the request and resolved its symlink-free form.
 // Links above the data directory (a linked home directory) are the
@@ -142,10 +164,10 @@ func (p *Policy) insideDataDir(dataDir, path, what string) (string, error) {
 // directory must name resolved literally. verifyNoLinks then walks the
 // resolved path without following links.
 //
-// This narrows the hole, it does not close it: the user can still swap a
-// directory for a link after this check, and Mihomo itself opens paths
-// from the user's config. See the helper package notes on a root-owned
-// work directory.
+// This is an early, readable refusal, not the protection: the user can
+// still swap a directory for a link after this check. What protects is
+// that every later read goes through openUserFile, which follows no link,
+// and that Mihomo runs in the helper's own directory (stage.go).
 func refuseLinks(dataDir, given, resolved string, dir bool, what string) error {
 	given = filepath.Clean(given)
 	below, ok := "", false

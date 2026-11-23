@@ -28,7 +28,7 @@ type gated struct {
 	only     map[string]map[int]bool // and these, whatever their number
 	inFlight int
 	maxSaves int
-	saves    []model.Settings // as SaveSettings got them, in order
+	saves    []model.Settings // as UpdateSettings got them (next), in order
 }
 
 func newGated() *gated {
@@ -90,14 +90,15 @@ func (g *gated) waitStarted(t *testing.T, name string, n int) {
 	}
 }
 
-func (g *gated) SaveSettings(s model.Settings) error {
+// UpdateSettings is how the page saves: the change from base to next.
+func (g *gated) UpdateSettings(base, next model.Settings) error {
 	g.mu.Lock()
 	g.inFlight++
 	g.maxSaves = max(g.maxSaves, g.inFlight)
-	g.saves = append(g.saves, s)
+	g.saves = append(g.saves, next)
 	g.mu.Unlock()
 	g.enter("save")
-	err := g.Fake.SaveSettings(s)
+	err := g.Fake.UpdateSettings(base, next)
 	g.mu.Lock()
 	g.inFlight--
 	g.mu.Unlock()
@@ -124,10 +125,9 @@ func asyncPage(t *testing.T, g *gated) (*Page, *envtest.Async, *ui.Tester, *rec)
 	return p, a, tt, r
 }
 
-// TestSavesRunOneAtATimeAndKeepLaterChanges: settings are saved as whole
-// snapshots, so a change made while another is being saved must contain
-// it, be saved after it, and the draft must stay until the last save is
-// done. Before, each save ran on its own goroutine and the first to
+// TestSavesRunOneAtATimeAndKeepLaterChanges: a change made while another
+// is being saved must show with it, be saved after it, and the draft must
+// stay until the last save is done. Before, each save ran on its own goroutine and the first to
 // finish cleared the draft: the controls fell back to the service's
 // settings, and the next change was built on a snapshot without the one
 // still in flight, which it then overwrote.

@@ -107,10 +107,6 @@ func (c *readCache) generation() uint64 {
 	return c.gen
 }
 
-func (c *readCache) put(method string, args []any, outs []any) {
-	c.putAt(c.generation(), method, args, outs)
-}
-
 func (c *readCache) putAt(gen uint64, method string, args []any, outs []any) {
 	vals := make([]reflect.Value, len(outs))
 	for i, o := range outs {

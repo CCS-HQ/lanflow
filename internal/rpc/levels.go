@@ -115,6 +115,7 @@ var methodLevels = map[string]Level{
 	"EffectiveSniffer": LevelRead,
 	"GeoDataInfo":      LevelRead,
 	"SaveSettings":     LevelWrite, // agents use settings.patch instead
+	"UpdateSettings":   LevelWrite, // agents use settings.patch instead
 	"ApplyDNS":         LevelWrite, // agents use settings.patch instead
 	"ApplySniffer":     LevelWrite, // agents use settings.patch instead
 	"SaveOverride":     LevelWrite,

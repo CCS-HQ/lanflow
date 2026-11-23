@@ -14,8 +14,14 @@ import (
 // the system proxy) keep using context.Background().
 func (s *Service) ctrlCtx(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	if parent == nil {
-		parent = s.rootCtx
+		return s.svcCtx(d)
 	}
+	return context.WithTimeout(parent, d)
+}
+
+// svcCtx is ctrlCtx without a caller's context: derived from rootCtx.
+func (s *Service) svcCtx(d time.Duration) (context.Context, context.CancelFunc) {
+	parent := s.rootCtx
 	if parent == nil { // a bare Service in a test
 		parent = context.Background()
 	}

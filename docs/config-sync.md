@@ -166,7 +166,7 @@ iCloud 可能只留下占位文件 `.lanflow.yaml.icloud`。此时澜流运行 `
 
 评估结论：当前做不到，因此条目不设置该属性，另一台 Mac 上需要重新输入链接。原因：
 
-1. 带 `kSecAttrSynchronizable` 的条目只存在于**数据保护钥匙串**（iCloud 钥匙串），写入需要 `kSecUseDataProtectionKeychain`，而这要求应用以开发者团队身份签名并带 `keychain-access-groups`（或 `application-identifier`）权限，通常还需要描述文件。澜流目前标识为 `com.example.lanflow`，没有团队签名和这些权限，调用会得到 `errSecMissingEntitlement`（-34018）。
+1. 带 `kSecAttrSynchronizable` 的条目只存在于**数据保护钥匙串**（iCloud 钥匙串），写入需要 `kSecUseDataProtectionKeychain`，而这要求应用以开发者团队身份签名并带 `keychain-access-groups`（或 `application-identifier`）权限，通常还需要描述文件。澜流目前没有团队签名和这些权限，调用会得到 `errSecMissingEntitlement`（-34018）。
 2. MyGo 的 Secrets 模块（`internal/darwin/secrets.go`，经 purego 调用 Security.framework）只设置 class / service / account / label / data，没有传入其他属性的接口；要支持需要绕过 MyGo 直接调用 `SecItemAdd`。
 3. Windows 凭据管理器没有对应的跨设备同步。
 

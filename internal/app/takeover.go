@@ -55,7 +55,7 @@ func (s *Service) takeOver() bool {
 		logFile = s.tunLogFile()
 	}
 	spec := core.Spec{Bin: bin, WorkDir: s.workDir, Config: s.runtime, Controller: s.ctrlAddr, LogFile: logFile}
-	ctx, cancel := s.ctrlCtx(nil, 10*time.Second)
+	ctx, cancel := s.svcCtx(10 * time.Second)
 	err := s.d.mgr.Adopt(ctx, spec, s.runnerFor(stray.tun))
 	cancel()
 	if err == nil {
@@ -86,7 +86,7 @@ func (s *Service) takeOver() bool {
 // adoptedLocked records the adopted core as running and brings up what a
 // start brings up; opMu must be held.
 func (s *Service) adoptedLocked(set model.Settings, tun bool) {
-	vctx, vcancel := s.ctrlCtx(nil, ctrlTimeout)
+	vctx, vcancel := s.svcCtx(ctrlTimeout)
 	version, _ := s.d.ctrl.Version(vctx)
 	vcancel()
 	s.mu.Lock()

@@ -161,10 +161,10 @@ func (p *Page) toggleColumn(id string) {
 // saveHidden persists the hidden columns in the settings.
 func (p *Page) saveHidden(hidden []string) {
 	e := p.e
+	// Only this option is saved (app.EditSettings): the settings page, the
+	// tray or an agent may be saving others at the same moment.
 	e.Run(func() error {
-		set := e.API.Settings()
-		set.ConnHiddenColumns = hidden
-		return e.API.SaveSettings(set)
+		return app.EditSettings(e.API, func(set *model.Settings) { set.ConnHiddenColumns = hidden })
 	}, "")
 }
 

@@ -29,7 +29,7 @@ func (s *Service) RefreshNetwork() error {
 
 // refreshNetInfo re-reads the local network information only.
 func (s *Service) refreshNetInfo() error {
-	ctx, cancel := s.ctrlCtx(nil, 5*time.Second)
+	ctx, cancel := s.svcCtx(5 * time.Second)
 	defer cancel()
 	info, err := s.d.netinfo(ctx)
 	return s.storeNetInfo(info, err)
@@ -261,7 +261,7 @@ func (s *Service) DNSQuery(name, qtype string) (model.DNSResult, error) {
 	if !s.running() {
 		return model.DNSResult{}, errCoreNotRunning
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+	ctx, cancel := s.svcCtx(ctrlTimeout)
 	defer cancel()
 	r, err := s.d.ctrl.DNSQuery(ctx, name, qtype)
 	if err != nil {
@@ -287,7 +287,7 @@ func (s *Service) DNSQuery(name, qtype string) (model.DNSResult, error) {
 		source = "system" // TUN hijacks port 53, so the system resolver reaches the core
 	}
 	if source != "" && (qtype == "A" || qtype == "AAAA" || qtype == "CNAME") {
-		actx, acancel := s.ctrlCtx(nil, appDNSTimeout)
+		actx, acancel := s.svcCtx(appDNSTimeout)
 		app, err := s.d.appDNS(actx, server, name, qtype)
 		acancel()
 		if err == nil && len(app) > 0 {
@@ -307,7 +307,7 @@ func (s *Service) FlushDNSCache() error {
 	if !s.running() {
 		return errCoreNotRunning
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+	ctx, cancel := s.svcCtx(ctrlTimeout)
 	defer cancel()
 	if err := s.d.ctrl.FlushDNSCache(ctx); err != nil {
 		return fmt.Errorf(i18n.T("清除 DNS 缓存失败：%v"), err)
@@ -320,7 +320,7 @@ func (s *Service) FlushFakeIPCache() error {
 	if !s.running() {
 		return errCoreNotRunning
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+	ctx, cancel := s.svcCtx(ctrlTimeout)
 	defer cancel()
 	if err := s.d.ctrl.FlushFakeIPCache(ctx); err != nil {
 		return fmt.Errorf(i18n.T("清除 Fake-IP 缓存失败：%v"), err)

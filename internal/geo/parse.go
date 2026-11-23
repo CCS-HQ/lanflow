@@ -187,8 +187,7 @@ func collect(name string) []hit {
 		if a < regionalA || a > regionalZ || b < regionalA || b > regionalZ {
 			continue
 		}
-		code := string([]byte{byte('A' + a - regionalA), byte('A' + b - regionalA)})
-		if idx, ok := countryByISO[code]; ok {
+		if idx, ok := countryByISO[string([]byte{byte('A' + a - regionalA), byte('A' + b - regionalA)})]; ok {
 			hits = append(hits, hit{offs[i], offs[i+2], kindCountry, idx, nil})
 		}
 		i++

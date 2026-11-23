@@ -30,6 +30,9 @@ var (
 	ConfigPath = filepath.Join(InstallDir, "config.json")
 	LogDir     = filepath.Join(programData(), "Lanflow Helper")
 	LogPath    = filepath.Join(LogDir, "helper.log")
+	// WorkDir is where the helper runs Mihomo (stage.go): inside LogDir,
+	// whose DACL admits SYSTEM and Administrators only.
+	WorkDir = filepath.Join(LogDir, "work")
 )
 
 func programFiles() string {
@@ -281,6 +284,7 @@ func serveReady(ctx context.Context, version string, logf Logf, ready chan<- str
 	}
 	sup := NewSupervisor(NewPolicy(cfg))
 	sup.Logf = logf
+	sup.WorkDir = WorkDir
 	l, err := Listen(cfg.UID)
 	if err != nil {
 		return fmt.Errorf("监听 %s 失败: %w", protocol.PipeName, err)

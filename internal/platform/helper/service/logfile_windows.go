@@ -89,18 +89,18 @@ func checkOpened(h windows.Handle, path string) error {
 	}
 	switch {
 	case info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0:
-		return errors.New("日志文件是重解析点（符号链接或目录联接）")
+		return errors.New("文件是重解析点（符号链接或目录联接）")
 	case info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0:
-		return errors.New("日志文件是目录")
+		return errors.New("路径是目录")
 	case info.NumberOfLinks != 1:
-		return fmt.Errorf("日志文件存在 %d 个硬链接", info.NumberOfLinks)
+		return fmt.Errorf("文件存在 %d 个硬链接", info.NumberOfLinks)
 	}
 	final, err := finalPath(h)
 	if err != nil {
 		return err
 	}
 	if !samePath(final, path) {
-		return fmt.Errorf("日志文件实际位置 %s 与预期不符", final)
+		return fmt.Errorf("文件实际位置 %s 与预期不符", final)
 	}
 	return nil
 }

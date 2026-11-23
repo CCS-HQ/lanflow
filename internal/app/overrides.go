@@ -105,7 +105,7 @@ func (s *Service) applyOverrideChangeLocked(o model.Override) error {
 
 // fetchOverride downloads a URL override's text.
 func (s *Service) fetchOverride(rawURL string) (string, error) {
-	ctx, cancel := s.ctrlCtx(nil, fetchTimeout)
+	ctx, cancel := s.svcCtx(fetchTimeout)
 	defer cancel()
 	text, err := profile.FetchOverride(ctx, s.fetchClient(true, 0), rawURL)
 	if err != nil {

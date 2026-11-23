@@ -423,8 +423,10 @@ func TestUpdateCheckDue(t *testing.T) {
 		t.Fatal("the stamp must move with the last check")
 	}
 	s.updateStamp = ""
-	if !s.updateCheckDue(now) || !s.updateCheckDue(now) {
-		t.Fatal("without a stamp file every launch checks")
+	for range 2 {
+		if !s.updateCheckDue(now) {
+			t.Fatal("without a stamp file every launch checks")
+		}
 	}
 }
 

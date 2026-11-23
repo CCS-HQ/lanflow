@@ -93,7 +93,6 @@ type captureState struct {
 	epoch     int64
 	err       string
 	restarts  []time.Time
-	warns     []string
 	// the automatic removal of the root failed removeFails times in a row
 	// and is not tried again before removeNext
 	removeFails int
@@ -653,7 +652,7 @@ func (s *Service) closeCaptureConns(r *captureRun) {
 	if !s.running() {
 		return
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+	ctx, cancel := s.svcCtx(ctrlTimeout)
 	defer cancel()
 	cs, err := s.d.ctrl.Connections(ctx)
 	if err != nil {
@@ -1350,7 +1349,7 @@ func (s *Service) captureAfterReload() {
 	}
 	s.mu.Unlock()
 	if strings.HasPrefix(now, profile.CaptureOutboundPrefix) {
-		ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+		ctx, cancel := s.svcCtx(ctrlTimeout)
 		s.d.ctrl.SelectProxy(ctx, "GLOBAL", "DIRECT")
 		cancel()
 		s.refreshProxies()

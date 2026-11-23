@@ -181,7 +181,7 @@ func (s *Service) prepare(a composeArgs) (prepared, error) {
 		p.discard()
 		return prepared{}, fmt.Errorf(i18n.T("写入运行时配置失败：%v"), werr)
 	}
-	ctx, cancel := s.ctrlCtx(nil, validateTimeout)
+	ctx, cancel := s.svcCtx(validateTimeout)
 	defer cancel()
 	if err := s.d.core.Validate(ctx, bin, s.workDir, p.tmp); err != nil {
 		p.discard()
@@ -319,13 +319,13 @@ func (s *Service) launchLocked(bin string, set model.Settings, helperOK bool, pr
 		logFile = s.tunLogFile()
 	}
 	spec := core.Spec{Bin: bin, WorkDir: s.workDir, Config: s.runtime, Controller: s.ctrlAddr, LogFile: logFile}
-	ctx, cancel := s.ctrlCtx(nil, startTimeout)
+	ctx, cancel := s.svcCtx(startTimeout)
 	err := s.d.mgr.Start(ctx, spec)
 	cancel()
 	if err != nil {
 		return fail(fmt.Errorf(i18n.T("内核启动失败：%v。可在「日志」中查看详情，或重新启动。"), err), model.CoreError)
 	}
-	vctx, vcancel := s.ctrlCtx(nil, ctrlTimeout)
+	vctx, vcancel := s.svcCtx(ctrlTimeout)
 	version, _ := s.d.ctrl.Version(vctx)
 	vcancel()
 
@@ -562,6 +562,31 @@ func (s *Service) reloadLocked() error {
 	return s.reloadPrepared(p)
 }
 
+// reloadPath is the file the running core is told to reload: runtime.yaml,
+// or, when the helper runs the core, the copy the helper makes of it in
+// its own work directory (that core loads nothing outside it, and the
+// helper checks the config on the way in).
+func (s *Service) reloadPath(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	tun := s.state.tunRunner
+	s.mu.Unlock()
+	if !tun {
+		return s.runtime, nil
+	}
+	st, ok := s.d.core.HelperRunner().(core.ConfigStager)
+	if !ok {
+		return s.runtime, nil
+	}
+	path, err := st.StageConfig(ctx, core.Spec{WorkDir: s.workDir, Config: s.runtime})
+	if errors.Is(err, core.ErrStageUnsupported) {
+		// The core was started by a helper from before this (taken over
+		// after an upgrade, until the helper is reinstalled): it runs on
+		// runtime.yaml itself.
+		return s.runtime, nil
+	}
+	return path, err
+}
+
 // reloadPrepared commits an already validated config and hot-reloads the
 // running core with it, so a caller that validated a change before storing
 // it (subscription switch, update, edit) does not validate it twice; opMu
@@ -579,12 +604,24 @@ func (s *Service) reloadPrepared(p prepared) (err error) {
 	if err := s.commit(p); err != nil {
 		return err
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout*2)
-	err = s.d.ctrl.ReloadConfig(ctx, s.runtime)
+	ctx, cancel := s.svcCtx(ctrlTimeout * 2)
+	path, err := s.reloadPath(ctx)
+	if err == nil {
+		err = s.d.ctrl.ReloadConfig(ctx, path)
+	}
 	cancel()
 	if err != nil {
 		if rerr := s.rollback(); rerr != nil {
 			s.alog.Errorf("reload config: %v", rerr)
+		} else if path != "" && path != s.runtime {
+			// The helper's copy is now the config the core refused, and it
+			// is the file that core reads when it is told to reload its own
+			// config: stage the restored one again.
+			rctx, rcancel := s.svcCtx(ctrlTimeout)
+			if _, serr := s.reloadPath(rctx); serr != nil {
+				s.alog.Warnf("reload config: restore the helper's copy: %v", serr)
+			}
+			rcancel()
 		}
 		icons, rd := groupIconsOf(prevYAML), parseRuntimeDNS(prevYAML)
 		s.mu.Lock()

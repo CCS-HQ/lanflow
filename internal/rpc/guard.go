@@ -394,15 +394,18 @@ func (g *guard) grant(agent string) (allow, ok bool) {
 func (g *guard) setGrant(agent string, allow bool) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	s := g.api.Settings()
-	out := s.AgentGrants[:0:0]
-	for _, gr := range s.AgentGrants {
+	// Only the grants are saved: an answer given while the user changes
+	// other settings must not put those back.
+	base := g.api.Settings()
+	next := base
+	out := base.AgentGrants[:0:0]
+	for _, gr := range base.AgentGrants {
 		if !strings.EqualFold(gr.Agent, agent) {
 			out = append(out, gr)
 		}
 	}
-	s.AgentGrants = append(out, model.AgentGrant{Agent: agent, Allow: allow, At: time.Now()})
-	if err := g.api.SaveSettings(s); err != nil {
+	next.AgentGrants = append(out, model.AgentGrant{Agent: agent, Allow: allow, At: time.Now()})
+	if err := g.api.UpdateSettings(base, next); err != nil {
 		return fmt.Errorf("无法保存授权结果: %w", err)
 	}
 	return nil

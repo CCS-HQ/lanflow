@@ -208,16 +208,6 @@ func decodeStatsFile(data []byte) ([]*statsDay, error) {
 	return []*statsDay{f.statsDayFile.day()}, nil
 }
 
-// decodeStatsDay parses a single day file (the first version's form or
-// the compressed one).
-func decodeStatsDay(data []byte) (*statsDay, error) {
-	days, err := decodeStatsFile(data)
-	if err != nil {
-		return nil, err
-	}
-	return days[0], nil
-}
-
 // dayFile is the path of a day's own file.
 func (s *statsStore) dayFile(date string) string { return filepath.Join(s.dir, date+statsFileExt) }
 
@@ -561,19 +551,4 @@ func statsFileOf(name string) string {
 		}
 	}
 	return strings.TrimSuffix(name, statsTmpExt)
-}
-
-// diskSize is the size of the stats directory's files, in bytes.
-func (s *statsStore) diskSize() int64 {
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		return 0
-	}
-	var n int64
-	for _, e := range entries {
-		if info, err := e.Info(); err == nil && !e.IsDir() {
-			n += info.Size()
-		}
-	}
-	return n
 }

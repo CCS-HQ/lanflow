@@ -507,7 +507,15 @@ func (f *Fake) Sites() []model.SiteCheck {
 	defer f.mu.Unlock()
 	return append([]model.SiteCheck(nil), f.sites...)
 }
-func (f *Fake) Settings() model.Settings { f.mu.Lock(); defer f.mu.Unlock(); return f.set }
+
+// Settings returns a copy that shares no list with the stored settings,
+// like the service's: a caller changing a list in place must not have
+// stored anything.
+func (f *Fake) Settings() model.Settings {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return model.CloneSettings(f.set)
+}
 func (f *Fake) Overrides() model.Overrides {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1326,18 +1334,27 @@ func (f *Fake) FlushDNSCache() error    { f.wait(); return nil }
 func (f *Fake) FlushFakeIPCache() error { f.wait(); return nil }
 
 func (f *Fake) SaveSettings(s model.Settings) error {
-	return f.do(func() error {
-		if s.MixedPort < 1 || s.MixedPort > 65535 {
-			return errors.New(i18n.T("端口须为 1–65535 之间的数字"))
-		}
-		if s.MixedPort == 7891 {
-			return errors.New(i18n.T("端口 7891 已被其他程序占用"))
-		}
-		f.set = s
-		f.st.MixedPort, f.st.AllowLAN, f.st.Mode = s.MixedPort, s.AllowLAN, s.Mode
-		i18n.SetLang(s.Language)
-		return nil
-	}, app.TopicSettings)
+	return f.do(func() error { return f.storeSettings(s) }, app.TopicSettings)
+}
+
+// UpdateSettings merges the change from base to next into the current
+// settings under the lock, like the service.
+func (f *Fake) UpdateSettings(base, next model.Settings) error {
+	return f.do(func() error { return f.storeSettings(model.MergeSettings(f.set, base, next)) }, app.TopicSettings)
+}
+
+// storeSettings is the save itself; f.mu is held.
+func (f *Fake) storeSettings(s model.Settings) error {
+	if s.MixedPort < 1 || s.MixedPort > 65535 {
+		return errors.New(i18n.T("端口须为 1–65535 之间的数字"))
+	}
+	if s.MixedPort == 7891 {
+		return errors.New(i18n.T("端口 7891 已被其他程序占用"))
+	}
+	f.set = model.CloneSettings(s)
+	f.st.MixedPort, f.st.AllowLAN, f.st.Mode = s.MixedPort, s.AllowLAN, s.Mode
+	i18n.SetLang(s.Language)
+	return nil
 }
 func (f *Fake) ApplyDNS(d model.DNSSettings) error {
 	return f.do(func() error { f.set.DNS = d; return nil }, app.TopicSettings)

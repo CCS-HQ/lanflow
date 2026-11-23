@@ -327,7 +327,7 @@ func (s *Service) runPendingRecheck() {
 
 // snapNet reads the interfaces and the network information now.
 func (s *Service) snapNet() (netSnap, model.NetInfo, error) {
-	ctx, cancel := s.ctrlCtx(nil, 5*time.Second)
+	ctx, cancel := s.svcCtx(5 * time.Second)
 	info, err := s.d.netinfo(ctx)
 	cancel()
 	src := s.nw.ifaceSrc
@@ -453,7 +453,7 @@ func sortedKeys(m map[string]bool) []string {
 // recheck is a full recheck (network information re-read, public IP and
 // main exit looked up again) without the log line; tests call it.
 func (s *Service) recheck() {
-	ctx, cancel := s.ctrlCtx(nil, 5*time.Second)
+	ctx, cancel := s.svcCtx(5 * time.Second)
 	info, err := s.d.netinfo(ctx)
 	cancel()
 	s.recheckWith(info, err, true)
@@ -503,7 +503,7 @@ func (s *Service) recheckWith(info model.NetInfo, infoErr error, netChanged bool
 			s.state.weSetProxy = false
 			s.state.st.SystemProxy = false
 			s.mu.Unlock()
-			s.removeMarker()
+			s.abandonProxy(m, port)
 			s.em.emit(TopicStatus)
 			s.notify(Notice{Kind: "error", Title: i18n.T("系统代理已被其他程序修改"), Detail: i18n.T("系统代理不再指向澜流。需要时请在「概览」中重新打开系统代理。")})
 			res.warned = append(res.warned, "system proxy changed by another app")
@@ -525,7 +525,7 @@ func (s *Service) recheckWith(info model.NetInfo, infoErr error, netChanged bool
 // corePings reports whether the controller answers, trying twice.
 func (s *Service) corePings() bool {
 	for i := 0; i < 2; i++ {
-		ctx, cancel := s.ctrlCtx(nil, pingTimeout)
+		ctx, cancel := s.svcCtx(pingTimeout)
 		_, err := s.d.ctrl.Version(ctx)
 		cancel()
 		if err == nil {
@@ -563,6 +563,17 @@ func (p notingSysProxy) SetPAC(url string) error {
 func (p notingSysProxy) Restore(saved sysproxy.Saved) error {
 	p.note(selfProxy)
 	return p.sysProxy.Restore(saved)
+}
+
+// ReleaseDialUp forwards to the wrapped system proxy when it has the call
+// (dialUpReleaser, switches.go).
+func (p notingSysProxy) ReleaseDialUp(saved sysproxy.Saved, host string, port int, pac string) error {
+	r, ok := p.sysProxy.(dialUpReleaser)
+	if !ok {
+		return nil
+	}
+	p.note(selfProxy)
+	return r.ReleaseDialUp(saved, host, port, pac)
 }
 
 type notingSysDNS struct {

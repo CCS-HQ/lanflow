@@ -229,16 +229,6 @@ func translated(file *ast.File) (viaT, counts map[*ast.BasicLit]bool) {
 	return viaT, counts
 }
 
-// sourceKeys maps every Chinese literal of the sources to where it is.
-func sourceKeys(t *testing.T) map[string][]string {
-	t.Helper()
-	keys := map[string][]string{}
-	for _, l := range sourceLiterals(t) {
-		keys[l.text] = append(keys[l.text], l.at())
-	}
-	return keys
-}
-
 // TestEveryKeyHasEnglish fails when a Chinese string of the sources has no
 // English entry, and when an entry translates nothing in the sources. An
 // entry for a count of one ("…|one", Tn) translates the key of a Tn call.

@@ -132,14 +132,19 @@ func redactSettings(s model.Settings) model.Settings {
 	s.ConnHiddenColumns = nil
 	a := s.Advanced.Clone()
 	for i := range a.Authentication {
-		if u, _, ok := strings.Cut(a.Authentication[i], ":"); ok {
-			a.Authentication[i] = u + ":***"
-		} else {
-			a.Authentication[i] = "***"
-		}
+		a.Authentication[i] = maskAuth(a.Authentication[i])
 	}
 	s.Advanced = a
 	return s
+}
+
+// maskAuth hides the password of an inbound authentication entry
+// ("user:pass"); applyPatch reads the mask back as the stored entry.
+func maskAuth(entry string) string {
+	if u, _, ok := strings.Cut(entry, ":"); ok {
+		return u + ":***"
+	}
+	return "***"
 }
 
 func walkStrings(v any, f func(string) string) any {

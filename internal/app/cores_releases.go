@@ -414,7 +414,7 @@ func (s *Service) coreReleases(channel string, refresh bool) (list []model.CoreR
 	if hasCache {
 		etag = cached.ETag
 	}
-	ctx, cancel := s.ctrlCtx(nil, releaseTimeout)
+	ctx, cancel := s.svcCtx(releaseTimeout)
 	defer cancel()
 	list, res, ferr := s.fetchReleases(ctx, channel, etag)
 	if ferr != nil {

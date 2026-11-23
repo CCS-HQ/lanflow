@@ -58,8 +58,6 @@ var ErrSecretNotFound = errors.New("secret not found")
 
 // ---- password storage ----
 
-func (s *Service) webdavSecretPath() string { return filepath.Join(s.opt.DataDir, webdavSecretFile) }
-
 // webdavSlot is where the password is kept (configsecrets.go).
 func (s *Service) webdavSlot() *secretSlot {
 	return s.cs.webdavPW.init(webdavSecretKey, webdavSecretFile)
@@ -336,7 +334,7 @@ func (s *Service) TestWebDAV() (err error) {
 }
 
 func (s *Service) webdavCtx() (context.Context, context.CancelFunc) {
-	return s.ctrlCtx(nil, 5*time.Minute)
+	return s.svcCtx(5 * time.Minute)
 }
 
 // backupDocument is a backup: the export with the subscription links.

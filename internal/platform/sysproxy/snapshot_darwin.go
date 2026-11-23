@@ -7,3 +7,5 @@ import "context"
 func snapshot() (Saved, error) { return darwinSnapshot(context.Background(), runCommand) }
 
 func restore(s Saved) error { return darwinRestore(context.Background(), runCommand, s) }
+
+func releaseDialUp(Saved, string, int, string) error { return nil }

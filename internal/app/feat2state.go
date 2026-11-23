@@ -16,15 +16,10 @@ type feat2State struct {
 	wifiInit bool
 
 	// WebDAV backup (backup.go)
-	password    string
-	pwLoaded    bool
-	pwLoading   bool   // a background load (WebDAVInfo) is running
-	storeKind   string // model.PasswordStoreKeychain / PasswordStoreFile, "" until known
 	busy        bool
 	lastError   string
 	lastAttempt time.Time // last automatic backup attempt, successful or not
 
-	opMu sync.Mutex // one backup / restore / listing at a time
 }
 
 // feat2 returns the state of s. It used to live in a package-level map

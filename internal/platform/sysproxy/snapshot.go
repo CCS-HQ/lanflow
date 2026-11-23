@@ -1,5 +1,7 @@
 package sysproxy
 
+//lint:file-ignore U1000 some of this file is used on other platforms only.
+
 // Platform-independent snapshot logic (parsing and command planning) so it
 // can be unit tested on any host. snapshot_<os>.go wires it to the system.
 
@@ -224,14 +226,24 @@ func darwinRestore(ctx context.Context, run executor, s Saved) error {
 	})
 }
 
-// windowsSaved holds the per-user WinINet values (nil = value absent).
-// HasAutoConfig marks snapshots that recorded AutoConfigURL (the PAC
-// address); older ones leave it alone on restore.
+// windowsSaved is the Windows snapshot.
+//
+// Enable, Server, Override and AutoConfig are the per-user registry values
+// (nil = value absent), which describe the LAN only. HasAutoConfig marks
+// snapshots that recorded AutoConfigURL (the PAC address); older ones
+// leave it alone on restore.
+//
+// Conns holds the WinINet options per connection: the LAN (name "") and
+// every RAS phone-book entry that could be read. Snapshots written before
+// per-connection support have none; restore then puts back the LAN
+// registry values, and on RAS entries only takes off what Lanflow itself
+// put there (see winRestore).
 type windowsSaved struct {
-	OS            string  `json:"os"`
-	Enable        *uint64 `json:"enable,omitempty"`
-	Server        *string `json:"server,omitempty"`
-	Override      *string `json:"override,omitempty"`
-	AutoConfig    *string `json:"autoConfig,omitempty"`
-	HasAutoConfig bool    `json:"hasAutoConfig,omitempty"`
+	OS            string    `json:"os"`
+	Enable        *uint64   `json:"enable,omitempty"`
+	Server        *string   `json:"server,omitempty"`
+	Override      *string   `json:"override,omitempty"`
+	AutoConfig    *string   `json:"autoConfig,omitempty"`
+	HasAutoConfig bool      `json:"hasAutoConfig,omitempty"`
+	Conns         []winConn `json:"conns,omitempty"`
 }

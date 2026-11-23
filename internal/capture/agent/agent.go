@@ -916,7 +916,7 @@ func (a *Agent) relay(client, up net.Conn, cr *connRec, proto, scheme, host stri
 	defer client.Close()
 	reqPipe, respPipe := newLossyPipe(pipeMax), newLossyPipe(pipeMax)
 	var pw sync.WaitGroup
-	finish := func() {}
+	var finish func()
 	// parse runs one direction's parser. When it returns (done, gave up or
 	// failed) its pipe is cut, so the copy of what is still forwarded is
 	// dropped instead of kept.

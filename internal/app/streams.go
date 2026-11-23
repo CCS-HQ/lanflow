@@ -396,7 +396,7 @@ func (s *Service) CloseConnection(id string) error {
 	if !s.running() {
 		return errCoreNotRunning
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+	ctx, cancel := s.svcCtx(ctrlTimeout)
 	defer cancel()
 	if err := s.d.ctrl.CloseConnection(ctx, id); err != nil {
 		return err
@@ -409,7 +409,7 @@ func (s *Service) CloseAllConnections() error {
 	if !s.running() {
 		return errCoreNotRunning
 	}
-	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+	ctx, cancel := s.svcCtx(ctrlTimeout)
 	defer cancel()
 	return s.d.ctrl.CloseAllConnections(ctx)
 }

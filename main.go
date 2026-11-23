@@ -203,6 +203,7 @@ func runSingle() {
 		}
 		shell.CheckUpdatesAtLaunch()
 		registerURLScheme()
+		dropLegacyInstallEntry()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

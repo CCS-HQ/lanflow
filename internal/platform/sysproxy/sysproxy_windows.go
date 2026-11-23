@@ -30,28 +30,42 @@ func openSettings(access uint32) (registry.Key, error) {
 	return k, nil
 }
 
+// winReal is the real winSystem: WinINet and RAS (wininet_windows.go) plus
+// the legacy registry values below.
+type winReal struct{}
+
+var _ winSystem = winReal{}
+
 func set(host string, port int, bypass []string) error {
-	if host == "" || port <= 0 || port > 65535 {
-		return fmt.Errorf("代理地址无效：%s:%d", host, port)
-	}
+	return winSet(winReal{}, host, port, bypass)
+}
+
+func clear() error { return winClear(winReal{}) }
+
+func setPAC(url string) error { return winSetPAC(winReal{}, url) }
+
+// legacySet writes the manual proxy to the registry values WinINet keeps
+// for the LAN. Like the other legacy* methods it is only the fallback for
+// a LAN that InternetSetOptionW refused; the caller notifies.
+func (winReal) legacySet(server, override string) error {
 	k, err := openSettings(registry.SET_VALUE | registry.QUERY_VALUE)
 	if err != nil {
 		return err
 	}
 	defer k.Close()
-	if err := k.SetStringValue("ProxyServer", formatProxyServer(host, port)); err != nil {
+	if err := k.SetStringValue("ProxyServer", server); err != nil {
 		return fmt.Errorf("写入 ProxyServer 失败：%w", err)
 	}
-	if err := k.SetStringValue("ProxyOverride", formatProxyOverride(bypass)); err != nil {
+	if err := k.SetStringValue("ProxyOverride", override); err != nil {
 		return fmt.Errorf("写入 ProxyOverride 失败：%w", err)
 	}
 	if err := k.SetDWordValue("ProxyEnable", 1); err != nil {
 		return fmt.Errorf("写入 ProxyEnable 失败：%w", err)
 	}
-	return notifySettingsChanged()
+	return nil
 }
 
-func clear() error {
+func (winReal) legacyClear() error {
 	k, err := openSettings(registry.SET_VALUE)
 	if err != nil {
 		return err
@@ -60,13 +74,13 @@ func clear() error {
 	if err := k.SetDWordValue("ProxyEnable", 0); err != nil {
 		return fmt.Errorf("关闭系统代理失败：%w", err)
 	}
-	return notifySettingsChanged()
+	return nil
 }
 
-// setPAC writes (or, for "", deletes) the WinINet AutoConfigURL value,
-// which is how Windows stores the PAC address; the manual proxy values
-// are left as they are.
-func setPAC(url string) error {
+// legacySetPAC writes (or, for "", deletes) the AutoConfigURL value, which
+// is how the registry stores the LAN's PAC address; the manual proxy
+// values are left as they are.
+func (winReal) legacySetPAC(url string) error {
 	k, err := openSettings(registry.SET_VALUE)
 	if err != nil {
 		return err
@@ -76,14 +90,16 @@ func setPAC(url string) error {
 		if err := k.DeleteValue("AutoConfigURL"); err != nil && !errors.Is(err, registry.ErrNotExist) {
 			return fmt.Errorf("关闭 PAC 代理失败：%w", err)
 		}
-		return notifySettingsChanged()
+		return nil
 	}
 	if err := k.SetStringValue("AutoConfigURL", url); err != nil {
 		return fmt.Errorf("写入 AutoConfigURL 失败：%w", err)
 	}
-	return notifySettingsChanged()
+	return nil
 }
 
+// get reads the LAN's registry values. WinINet keeps them in step with the
+// LAN's per-connection options, whichever of the two was written.
 func get() (State, error) {
 	k, err := openSettings(registry.QUERY_VALUE)
 	if err != nil {
@@ -112,9 +128,9 @@ func get() (State, error) {
 	return st, nil
 }
 
-// notifySettingsChanged tells WinINet (and through it most applications)
+// notify tells WinINet (and through it most applications)
 // that the proxy settings changed, then asks it to reload them.
-func notifySettingsChanged() error {
+func (winReal) notify() error {
 	if err := procInternetSetOptionW.Find(); err != nil {
 		return fmt.Errorf("系统代理已写入注册表，但无法加载 wininet.dll 通知系统刷新：%w", err)
 	}

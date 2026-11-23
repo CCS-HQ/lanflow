@@ -1,8 +1,10 @@
 // Package sysproxy sets and clears the OS system proxy.
 //
 // Exported signatures are a stable contract. Implementations: darwin (networksetup on every enabled network service) and
-// windows (WinINet per-user settings in the registry + InternetSetOption
-// INTERNET_OPTION_SETTINGS_CHANGED / REFRESH via golang.org/x/sys/windows)
+// windows (WinINet per-connection options on the LAN and on every dial-up /
+// VPN phone-book entry, with the per-user registry values as the LAN
+// fallback, then InternetSetOption INTERNET_OPTION_SETTINGS_CHANGED /
+// REFRESH via golang.org/x/sys/windows)
 // in build-tagged files, plus a no-op/unsupported implementation elsewhere.
 package sysproxy
 
@@ -38,12 +40,26 @@ func Get() (State, error) { return get() }
 type Saved []byte
 
 // Snapshot records the current HTTP/HTTPS/SOCKS proxy settings (every
-// enabled network service on macOS; the per-user WinINet values on Windows).
+// enabled network service on macOS; the LAN and every dial-up / VPN entry
+// on Windows).
 func Snapshot() (Saved, error) { return snapshot() }
 
 // Restore puts back what Snapshot recorded. Services that did not exist at
 // snapshot time get their proxies turned off.
 func Restore(s Saved) error { return restore(s) }
+
+// ReleaseDialUp is for the moment Lanflow gives up a system proxy that is no
+// longer its own (the user or another program changed it), so that Restore
+// and Clear are not called. On Windows Set and SetPAC also wrote every
+// dial-up / VPN entry, and those may still point at Lanflow: each entry
+// that still has the manual proxy at host:port, or the PAC address pac
+// ("" = none), gets what s recorded for it back, or has that proxy switched
+// off when s has nothing for it. The LAN and entries changed since are not
+// touched. s may be empty. A no-op on other systems, where the settings
+// Get reads are the only ones Lanflow writes.
+func ReleaseDialUp(s Saved, host string, port int, pac string) error {
+	return releaseDialUp(s, host, port, pac)
+}
 
 // DefaultBypass is the default bypass list.
 var DefaultBypass = []string{"localhost", "127.0.0.1", "::1", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "*.local", "*.lan", "<local>"}

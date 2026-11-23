@@ -25,7 +25,7 @@ Names are the MCP tool names; `lanflow ctl` equivalents in brackets.
 The user answers in Lanflow: just this time, always, or deny. "Always" covers the small changes only.
 - `select_proxy` [`ctl proxies select <group> <node>`], `set_mode` [`ctl mode set rule|global|direct`], `set_main_group`.
 - `save_custom_rule`, `delete_custom_rule`, `move_custom_rule` [`ctl rule add <TYPE> <payload> <target> [--dry-run]`].
-- `patch_settings` [`ctl config set <Path> <value> [--dry-run]`, `ctl config apply <file> [--dry-run]`] — change settings field by field, e.g. `{"Mode":"rule","DNS":{"TakeOver":true}}`. `dryRun: true` returns the diff only.
+- `patch_settings` [`ctl config set <Path> <value> [--dry-run]`, `ctl config apply <file> [--dry-run]`] — change settings field by field, e.g. `{"Mode":"rule","Advanced":{"ipv6":true}}`; name fields as `settings` returns them, and send a list whole (it replaces the stored one; masked entries such as `user:***` stand for the stored ones). `dryRun: true` returns the diff only. Patching `TUN`/`TUNStack`/`TUNSetDNS`, `DNS.*`, `MixedPort` and the other ports, `AllowLAN` and the LAN address and authentication lists, `AutoSystemProxy` and `Advanced.pac*`, `Advanced.tun*`/`dns*`/`interfaceName`, `SSIDRules`/`SSIDDefaultSub` or the `Geo` database URLs is a high-impact change (below). `CorePath`, `CoreVersion`, `CoreChannel`, `CoreAutoInstall`, `DownloadMirror`, `WebDAV`, `Feedback` and `Sync` cannot be patched: the user sets those in Lanflow.
 - `update_subscription` / `update_all_subscriptions` [`ctl sub update [--all]`].
 
 **High-impact changes (the user confirms once per session, even after "always"; with `lanflow ctl`, every command)**
@@ -33,11 +33,12 @@ The user answers in Lanflow: just this time, always, or deny. "Always" covers th
 - Overrides: `save_override`, `save_override_entry`, `delete_override_entry`.
 - Core and switches: `start_core`, `stop_core`, `restart_core`, `set_system_proxy`, `set_tun`.
 - `apply_config_file` without `dryRun` (see lanflow.yaml below).
+- `patch_settings` of the settings listed above, and `undo` of any high-impact change.
 
 Say what you are about to do before calling one of these, so the confirmation in Lanflow does not surprise the user. There is no tool that imports a subscription from a local file; the user does that in Lanflow.
 
 **Undo and audit**
-- `undo` [`ctl undo`] — reverts the latest write (settings, custom rules, overrides, node selection, current subscription). `audit_log` [`ctl audit`] lists recent writes.
+- `undo` [`ctl undo`] — reverts the latest write (settings, custom rules, overrides, node selection, current subscription). A setting the user changed again after that write is left alone and named in the result. `audit_log` [`ctl audit`] lists recent writes.
 
 **Composite (prefer these)**
 - `route_domain` — make a domain go through a node, group, DIRECT or REJECT: rule test → rule → diff → apply → verify. Supports `dry_run`.

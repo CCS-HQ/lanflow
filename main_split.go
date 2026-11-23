@@ -171,6 +171,7 @@ func runService(args split.Args) {
 	mygo.App.WhenReady(func() {
 		bg.Start()
 		registerURLScheme()
+		dropLegacyInstallEntry()
 		if args.Login && !api.Settings().SilentStart {
 			showWindow("") // started at login: the window too, as before the split
 		} else if args.Open != "" || args.Link != "" {

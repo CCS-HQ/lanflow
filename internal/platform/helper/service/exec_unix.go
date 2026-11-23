@@ -157,9 +157,14 @@ func checkSocket(st *unix.Stat_t, uid int) error {
 // root, i.e. what the root-run Mihomo wrote. Tests change it.
 var workDirFromUID = 0
 
-// handOverWorkDir gives the top-level entries of the work dir (cache.db,
-// downloaded geodata, provider files written by root) back to the user so
-// the app can manage them when running Mihomo unprivileged.
+// handOverWorkDir gives the top-level entries of the user's work dir that
+// root still owns back to the user, so the app can manage them when
+// running Mihomo unprivileged.
+//
+// Since helper 0.1.4 the root-run Mihomo works in the helper's own
+// directory (stage.go) and writes nothing here; what this finds are files
+// (cache.db, downloaded geodata, provider files) a helper before that left
+// behind when it ended without handing them over.
 //
 // The work dir belongs to the user, so nothing in it is trusted: the
 // directory is reached without following symlinks, and only regular files

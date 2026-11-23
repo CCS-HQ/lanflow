@@ -1,12 +1,15 @@
 {
   "name": "Lanflow",
-  "identifier": "com.example.lanflow",
-  "version": "0.1.9",
+  "identifier": "com.lanflow.app",
+  "version": "0.1.10",
   "urlSchemes": ["lanflow", "clash"],
   "out": "build",
   "updates": {
     "publicKey": "UKej6Hn9Mhc/rYMULlUmhe1cfJH06cqewjsbRK0739Y=",
     "github": "Owlbay/lanflow"
+  },
+  "windows": {
+    "installerInclude": "scripts/installer.nsh"
   },
   "macos": {
     "infoPlist": {

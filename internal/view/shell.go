@@ -105,7 +105,6 @@ type Shell struct {
 	tray       *tray
 	off        func()
 	offKeys    func() // the settings subscription of RegisterShortcuts
-	quitT      func()
 
 	page  env.Page
 	args  map[env.Page]string

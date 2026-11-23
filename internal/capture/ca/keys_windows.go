@@ -163,6 +163,7 @@ func cngPublic(key uintptr) (*cngSigner, error) {
 	if len(buf) < 8+2*sz {
 		return nil, errors.New("ncrypt: short public key blob")
 	}
+	//lint:ignore SA1019 the CNG blob carries the raw coordinates; the key is only read.
 	pub := &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(buf[8 : 8+sz]), Y: new(big.Int).SetBytes(buf[8+sz : 8+2*sz])}
 	return &cngSigner{key: key, pub: pub}, nil
 }

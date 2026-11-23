@@ -444,15 +444,19 @@ func (p *Page) sitesSection(c *ui.Context, t *ui.Theme, sites []model.SiteCheck,
 
 func (p *Page) removeSite(url string) {
 	e := p.e
-	s := e.API.Settings()
-	var keep []model.Site
-	for _, x := range s.Sites {
-		if x.URL != url {
-			keep = append(keep, x)
-		}
-	}
-	s.Sites = keep
-	e.Run(func() error { return e.API.SaveSettings(s) }, i18n.T("已删除网站"))
+	// The list is read in the job, right before it is saved, and only the
+	// list is saved (app.EditSettings): other settings saved meanwhile stay.
+	e.Run(func() error {
+		return app.EditSettings(e.API, func(s *model.Settings) {
+			var keep []model.Site
+			for _, x := range s.Sites {
+				if x.URL != url {
+					keep = append(keep, x)
+				}
+			}
+			s.Sites = keep
+		})
+	}, i18n.T("已删除网站"))
 }
 
 func (p *Page) addDialog(c *ui.Context, t *ui.Theme) {
@@ -495,16 +499,23 @@ func (p *Page) addSite() {
 	if name == "" {
 		name = hostOf(url)
 	}
-	s := e.API.Settings()
-	for _, x := range s.Sites {
+	for _, x := range e.API.Settings().Sites {
 		if x.URL == url {
 			p.addErr = i18n.T("这个网址已经在列表中")
 			return
 		}
 	}
-	s.Sites = append(s.Sites, model.Site{Name: name, URL: url})
 	p.addOpen = false
-	e.Run(func() error { return e.API.SaveSettings(s) }, i18n.Tf("已添加「%s」", name))
+	e.Run(func() error {
+		return app.EditSettings(e.API, func(s *model.Settings) {
+			for _, x := range s.Sites {
+				if x.URL == url {
+					return // added elsewhere since the check above
+				}
+			}
+			s.Sites = append(s.Sites, model.Site{Name: name, URL: url})
+		})
+	}, i18n.Tf("已添加「%s」", name))
 }
 
 // ---- local network & proxy status ----

@@ -96,7 +96,7 @@ func (s *Service) scanCoexist() atrust.Info {
 	s.mu.Unlock()
 	var info atrust.Info
 	if on && detect != nil && s.rootCtx.Err() == nil {
-		ctx, cancel := s.ctrlCtx(nil, 8*time.Second)
+		ctx, cancel := s.svcCtx(8 * time.Second)
 		info = detect(ctx, isOwnTUN)
 		cancel()
 	}
@@ -274,20 +274,6 @@ func (s *Service) coexistLocked() profile.Coexist {
 // bypassLocked is the system proxy bypass list in effect now. Call with mu held.
 func (s *Service) bypassLocked() []string {
 	return coexistBypass(s.state.settings.Bypass, s.coexistLocked())
-}
-
-// bypassList is the system proxy bypass list in effect now.
-func (s *Service) bypassList() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.bypassLocked()
-}
-
-// coexistActive reports whether the aTrust adjustments are in effect.
-func (s *Service) coexistActive() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return coexistApplies(s.state.coexist, s.state.settings)
 }
 
 // coexistSettingsChanged reports whether going from old to in (already

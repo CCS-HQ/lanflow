@@ -105,7 +105,7 @@ func (s *Service) switchCore(target, desiredPath, version string) error {
 	}
 
 	// 1. Everything that can fail without touching the running core.
-	ctx, cancel := s.ctrlCtx(nil, 2*time.Minute)
+	ctx, cancel := s.svcCtx(2 * time.Minute)
 	defer cancel()
 	reported, err := s.d.core.Version(ctx, target)
 	if err != nil {
@@ -211,7 +211,7 @@ func (s *Service) registerHelper(bin string) error {
 	if bin == "" {
 		return nil
 	}
-	hctx, cancel := s.ctrlCtx(nil, 2*time.Minute)
+	hctx, cancel := s.svcCtx(2 * time.Minute)
 	defer cancel()
 	err := s.d.helper.Install(hctx, helper.InstallOptions{HelperBin: s.opt.helperBinary(), CoreBin: bin, DataDir: s.opt.DataDir})
 	s.refreshHelper()

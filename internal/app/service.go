@@ -102,8 +102,6 @@ type state struct {
 	st       model.Status
 	settings model.Settings
 	up, down []int64
-	totalUp  int64 // last connections snapshot totals
-	totalDn  int64
 
 	proxies     model.ProxySnapshot
 	rawProxy    map[string]controller.Proxy
@@ -383,7 +381,7 @@ func (s *Service) bootstrap() {
 	s.mu.Unlock()
 
 	if bin != "" {
-		ctx, cancel := s.ctrlCtx(nil, 10*time.Second)
+		ctx, cancel := s.svcCtx(10 * time.Second)
 		v, err := s.d.core.Version(ctx, bin)
 		cancel()
 		if err == nil {
@@ -456,7 +454,7 @@ func isTimeout(err error) bool {
 // as not installed (TUN needs a reinstall); the first time that is seen
 // the user is told so.
 func (s *Service) refreshHelper() bool {
-	ctx, cancel := s.ctrlCtx(nil, 5*time.Second)
+	ctx, cancel := s.svcCtx(5 * time.Second)
 	err := s.d.helper.Check(ctx)
 	cancel()
 	ok := err == nil
@@ -497,7 +495,7 @@ func (s *Service) learnBundledHelper() {
 	if _, err := os.Stat(bin); err != nil {
 		return
 	}
-	ctx, cancel := s.ctrlCtx(nil, 10*time.Second)
+	ctx, cancel := s.svcCtx(10 * time.Second)
 	defer cancel()
 	if err := s.d.helper.SetBundled(ctx, bin); err != nil {
 		s.alog.Warnf("read bundled helper version: %v", err)
@@ -624,7 +622,7 @@ func (s *Service) leftoverProxy() (port int, ours bool) {
 	}
 	if err != nil || !proxyIsOurs(st, m, port) {
 		// Something else changed the proxy since; our marker is stale.
-		s.removeMarker()
+		s.abandonProxy(m, port)
 		return 0, false
 	}
 	return port, true

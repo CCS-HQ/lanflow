@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"lanflow/internal/app"
+	"lanflow/internal/applog"
 	"lanflow/internal/model"
 	"lanflow/internal/profile"
 )
@@ -27,7 +29,14 @@ type agentOp struct {
 	// level overrides Method.Level for given arguments (PatchSettings
 	// with dryRun is a read).
 	level func(args []json.RawMessage) Level
-	run   func(s *Server, ss *session, args []json.RawMessage) (any, error)
+	// high reports a high-impact write (guard.checkHigh) for given
+	// arguments: PatchSettings of a setting in patchHigh, Undo of a
+	// high-impact write.
+	high func(s *Server, args []json.RawMessage) bool
+	// summary, when set, is what the consent dialog and the audit log say
+	// of the call instead of its name and arguments.
+	summary func(s *Server, args []json.RawMessage) string
+	run     func(s *Server, ss *session, args []json.RawMessage) (any, error)
 }
 
 var agentOps = map[string]agentOp{
@@ -35,7 +44,7 @@ var agentOps = map[string]agentOp{
 		Method: Method{Name: "PatchSettings", Agent: true, Level: LevelWrite, Error: true,
 			Params:  []Param{{Name: "patch", Type: "map[string]any"}, {Name: "dryRun", Type: "bool"}},
 			Results: []string{"rpc.PatchResult"},
-			Doc:     "PatchSettings merges patch (a JSON object of settings fields, nested like Settings, e.g. {\"Mode\":\"rule\",\"DNS\":{\"TakeOver\":true}}) into the settings and applies them; dryRun returns the diff without saving."},
+			Doc:     "PatchSettings merges patch (a JSON object of settings fields, nested like Settings and named as Settings returns them, e.g. {\"Mode\":\"rule\",\"Advanced\":{\"ipv6\":true}}) into the settings and applies them; a list is replaced whole; dryRun returns the diff without saving. High-impact settings (TUN, DNS, the ports, LAN access and proxy authentication, PAC, Wi-Fi subscription rules, geo database URLs) are confirmed by the user once per session; the core's source, the download mirror, backup, feedback and sync settings cannot be patched."},
 		level: func(args []json.RawMessage) Level {
 			var dry bool
 			if len(args) > 1 && json.Unmarshal(args[1], &dry) == nil && dry {
@@ -43,6 +52,7 @@ var agentOps = map[string]agentOp{
 			}
 			return LevelWrite
 		},
+		high: func(_ *Server, args []json.RawMessage) bool { return len(args) > 0 && patchesHigh(args[0]) },
 		run: func(s *Server, ss *session, args []json.RawMessage) (any, error) {
 			var dry bool
 			if err := json.Unmarshal(args[1], &dry); err != nil {
@@ -53,9 +63,22 @@ var agentOps = map[string]agentOp{
 	},
 	"Undo": {
 		Method: Method{Name: "Undo", Agent: true, Level: LevelWrite, Error: true, Results: []string{"rpc.UndoResult"},
-			Doc: "Undo reverts the newest configuration write made through ctl or MCP in this run of Lanflow (settings, custom rules, overrides, proxy selection, current subscription)."},
+			Doc: "Undo reverts the newest configuration write made through ctl or MCP in this run of Lanflow (settings, custom rules, overrides, proxy selection, current subscription). A setting changed again since that write is left as it is and named in the result. Reverting a high-impact write is confirmed by the user like the write itself."},
+		// Taking a high-impact write back is one: undoing "TUN off" turns
+		// TUN on. The newest entry decides; runUndo checks again what it
+		// really takes off the stack.
+		high: func(s *Server, _ []json.RawMessage) bool {
+			e, ok := s.undo.peek()
+			return ok && e.high
+		},
+		summary: func(s *Server, _ []json.RawMessage) string {
+			if e, ok := s.undo.peek(); ok {
+				return undoSummary(e)
+			}
+			return "Undo()"
+		},
 		run: func(s *Server, ss *session, _ []json.RawMessage) (any, error) {
-			res, err := s.runUndo()
+			res, err := s.runUndo(ss)
 			if res.Method != "" || err != errNothingToUndo {
 				s.audit.addSummary(ss, "Undo", res.Method, err)
 			}
@@ -119,9 +142,14 @@ func (s *Server) callAgentOp(ss *session, name string, op agentOp, params json.R
 		for i, a := range args {
 			vals[i] = json.RawMessage(a)
 		}
-		if err := s.guard.check(ss, name, level, false, summarizeAny(name, vals)); err != nil {
+		high := level == LevelWrite && op.high != nil && op.high(s, args)
+		sum := summarizeAny(name, vals)
+		if op.summary != nil {
+			sum = op.summary(s, args)
+		}
+		if err := s.guard.check(ss, name, level, high, sum); err != nil {
 			if level != LevelRead {
-				s.audit.addSummary(ss, name, summarizeAny(name, vals), err)
+				s.audit.addSummary(ss, name, sum, err)
 			}
 			return nil, err
 		}
@@ -136,15 +164,91 @@ type PatchResult struct {
 	Applied bool             `json:"applied"`
 }
 
-// patchLocked lists the settings agents may not patch: the window's own
-// state, the grants, the core binary and the backup credentials.
-var patchLocked = map[string]bool{
-	"UI": true, "AgentGrants": true, "ConnHiddenColumns": true,
-	"CorePath": true, "CoreVersion": true, "WebDAV": true,
+// patchLocked lists the settings agents may not patch, as paths (a path
+// covers what is under it; a trailing * matches by prefix):
+//
+//   - the window's own state and the grants;
+//   - where the core's binary comes from (CorePath, CoreVersion, the
+//     download mirror, the update channel and installing updates unasked);
+//   - where data leaves this machine to: the backup server (WebDAV), the
+//     report service (Feedback: reports go there with the user's token)
+//     and the sync folder (Sync, which SetConfigSync, a dangerous
+//     operation, sets after its checks).
+var patchLocked = []string{
+	"UI", "AgentGrants", "ConnHiddenColumns",
+	"CorePath", "CoreVersion", "DownloadMirror", "CoreChannel", "CoreAutoInstall",
+	"WebDAV", "Feedback", "Sync",
+}
+
+// patchHigh are the settings whose change through PatchSettings is a
+// high-impact write (guard.checkHigh: confirmed once per connection,
+// whatever the agent is allowed "always"), like the methods of their own
+// are (SetTUN, SetSystemProxy). Without it an agent allowed "always"
+// would turn TUN on by patching the setting and skip that confirmation.
+//
+//   - TUN and how it routes (the helper restarts the core as root);
+//   - who may use the proxy: the LAN switch, its address lists and the
+//     inbound authentication;
+//   - the listening ports (programs and the system proxy point at them);
+//   - DNS, which decides where every lookup goes;
+//   - the system proxy: its form (PAC), turning it on at the next launch,
+//     and the outbound interface;
+//   - which subscription is in use by Wi-Fi network (UseSubscription is
+//     a high-impact write) and where the geo databases the rules match
+//     against are downloaded from.
+//
+// A new setting is a plain write until it is listed here or in
+// patchLocked; TestPatchFieldClasses holds the list of plain ones, so
+// adding a setting means deciding.
+var patchHigh = []string{
+	"TUN", "TUNStack", "TUNSetDNS", "Advanced.TUN*", "Advanced.InterfaceName",
+	"AllowLAN", "Advanced.LANAllowedIPs", "Advanced.LANDisallowedIPs", "Advanced.Authentication", "Advanced.SkipAuthPrefixes",
+	"MixedPort", "Advanced.HTTPPort", "Advanced.SocksPort",
+	"DNS", "Advanced.DNS*",
+	"AutoSystemProxy", "Advanced.PAC*",
+	"SSIDRules", "SSIDDefaultSub",
+	"Geo.GeoIP", "Geo.GeoSite", "Geo.MMDB", "Geo.ASN",
+}
+
+// pathIn reports whether the settings path is one of patterns or under one.
+func pathIn(path string, patterns []string) bool {
+	for _, p := range patterns {
+		if pre, ok := strings.CutSuffix(p, "*"); ok {
+			if strings.HasPrefix(path, pre) {
+				return true
+			}
+		} else if path == p || strings.HasPrefix(path, p+".") {
+			return true
+		}
+	}
+	return false
+}
+
+func anyPathIn(paths, patterns []string) bool {
+	for _, p := range paths {
+		if pathIn(p, patterns) {
+			return true
+		}
+	}
+	return false
+}
+
+// patchesHigh reports whether patch names a setting of patchHigh,
+// whether or not it changes its value.
+func patchesHigh(patch json.RawMessage) bool {
+	var touched []string
+	scratch := model.Settings{}
+	// A patch applyPatch will refuse may still name paths before its
+	// error: asking for it does no harm.
+	_ = patchInto(reflect.ValueOf(&scratch).Elem(), reflect.ValueOf(model.Settings{}), patch, "", &touched)
+	return anyPathIn(touched, patchHigh)
 }
 
 func (s *Server) patchSettings(ss *session, patch json.RawMessage, dry bool) (any, error) {
-	cur := s.o.API.Settings()
+	api := s.o.API
+	// A copy of its own: the patch is applied to another one, and this
+	// one is what the diff shows and what undo goes back to.
+	cur := model.CloneSettings(api.Settings())
 	next, changed, err := applyPatch(cur, patch, ss.identity().Agent())
 	if err != nil {
 		return nil, &Error{Code: CodeInvalidParams, Message: err.Error()}
@@ -154,69 +258,202 @@ func (s *Server) patchSettings(ss *session, patch json.RawMessage, dry bool) (an
 		return []any{res}, nil
 	}
 	id := ss.identity()
-	prep := s.prepareUndo("PatchSettings", nil)
-	err = s.o.API.SaveSettings(next)
+	// Only what the patch changed is saved (UpdateSettings merges it into
+	// the settings stored then): the user may be changing others.
+	err = api.UpdateSettings(cur, next)
 	s.audit.addSummary(ss, "PatchSettings", truncate("PatchSettings("+strings.Join(changed, ", ")+")", 300), err)
 	if err != nil {
 		return nil, err
 	}
-	if restore, desc := prep(nil); restore != nil {
-		s.undo.push(undoEntry{client: id.String(), method: "PatchSettings", desc: desc + "（" + strings.Join(changed, ", ") + "）", restore: restore})
-	}
+	// Undo is the patch the other way round: it takes back these options
+	// and leaves what was stored since. What the service made of the patch
+	// counts as written (a port that clears another one set to the same).
+	wrote := app.NormalizeSettings(next)
+	s.undo.push(undoEntry{client: id.String(), method: "PatchSettings", desc: "恢复之前的设置（" + strings.Join(changed, ", ") + "）",
+		high:    anyPathIn(model.SettingsChanged(cur, wrote), patchHigh),
+		restore: func() (string, error) { return restoreSettings(api, wrote, cur, nil) }})
 	res.Applied = true
 	return []any{res}, nil
 }
 
-// applyPatch merges patch into cur. Keys match the Settings field names
-// case-insensitively; unknown keys are errors. With agent, locked fields
-// are refused.
+// applyPatch merges patch into a copy of cur, which it leaves alone, and
+// names the top-level settings that change. Keys are the Go field names
+// or the JSON names agents read the settings with (Advanced.HTTPPort,
+// Advanced.httpPort), whatever their case; unknown keys are errors. An
+// object patches a section option by option; any other value replaces
+// the option, a list as a whole. A masked value an agent read and sends
+// back (the password of Advanced.Authentication, what applog.Redact
+// hides) stands for the stored one. With agent, locked settings are
+// refused.
 func applyPatch(cur model.Settings, patch json.RawMessage, agent bool) (model.Settings, []string, error) {
-	var p map[string]any
-	dec := json.NewDecoder(bytes.NewReader(patch))
-	dec.UseNumber()
-	if err := dec.Decode(&p); err != nil || p == nil {
-		return cur, nil, fmt.Errorf("补丁应为 JSON 对象，例如 {\"Mode\":\"global\"}")
-	}
-	b, _ := json.Marshal(cur)
-	var base map[string]any
-	dec = json.NewDecoder(bytes.NewReader(b))
-	dec.UseNumber()
-	_ = dec.Decode(&base)
-	t := reflect.TypeOf(cur)
-	for k := range p {
-		if f, ok := fieldFold(t, k); ok && agent && patchLocked[f.Name] {
-			return cur, nil, fmt.Errorf("设置项 %s 不能经 agent 修改", f.Name)
-		}
-	}
-	if err := mergeInto(base, p, t, ""); err != nil {
+	next := model.CloneSettings(cur)
+	var touched []string
+	if err := patchInto(reflect.ValueOf(&next).Elem(), reflect.ValueOf(cur), patch, "", &touched); err != nil {
 		return cur, nil, err
 	}
-	// Only the patched fields are decoded, so the others stay exactly as
-	// they were (times keep their location, nil slices stay nil).
-	next := cur
-	nv := reflect.ValueOf(&next).Elem()
-	var changed []string
-	for k := range p {
-		f, _ := fieldFold(t, k)
-		b, _ := json.Marshal(base[f.Name])
-		fv := reflect.New(f.Type)
-		fv.Elem().Set(nv.FieldByName(f.Name))
-		dec := json.NewDecoder(bytes.NewReader(b))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(fv.Interface()); err != nil {
-			return cur, nil, fmt.Errorf("设置项 %s 的值无效: %v", f.Name, err)
+	if agent {
+		for _, p := range touched {
+			if pathIn(p, patchLocked) {
+				return cur, nil, fmt.Errorf("设置项 %s 不能经 agent 修改", p)
+			}
 		}
-		old, _ := json.Marshal(nv.FieldByName(f.Name).Interface())
-		now, _ := json.Marshal(fv.Elem().Interface())
-		nv.FieldByName(f.Name).Set(fv.Elem())
-		if !bytes.Equal(old, now) {
-			changed = append(changed, f.Name)
+	}
+	var changed []string
+	for _, p := range model.SettingsChanged(cur, next) {
+		top, _, _ := strings.Cut(p, ".")
+		if len(changed) == 0 || changed[len(changed)-1] != top {
+			changed = append(changed, top)
 		}
 	}
 	sort.Strings(changed)
 	return next, changed, nil
 }
 
+// patchInto applies the JSON object raw to the struct dst; old is the
+// same struct of the settings before the patch. touched collects the
+// paths of the options the patch sets.
+func patchInto(dst, old reflect.Value, raw json.RawMessage, path string, touched *[]string) error {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		if path == "" {
+			return fmt.Errorf("补丁应为 JSON 对象，例如 {\"Mode\":\"global\"}")
+		}
+		return fmt.Errorf("设置项 %s 应为 JSON 对象", path)
+	}
+	if len(obj) == 0 && path != "" {
+		*touched = append(*touched, path) // names the section, sets nothing
+	}
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	seen := map[string]string{}
+	for _, k := range keys {
+		f, ok := fieldFold(dst.Type(), k)
+		if !ok {
+			return fmt.Errorf("没有设置项 %s%s", dotted(path), k)
+		}
+		p := dotted(path) + f.Name
+		if other, dup := seen[f.Name]; dup {
+			return fmt.Errorf("设置项 %s 在补丁里出现了两次（%s 和 %s）", p, other, k)
+		}
+		seen[f.Name] = k
+		fv, ov := dst.FieldByIndex(f.Index), old.FieldByIndex(f.Index)
+		if sectionType(f.Type) {
+			if err := patchInto(fv, ov, obj[k], p, touched); err != nil {
+				return err
+			}
+			continue
+		}
+		*touched = append(*touched, p)
+		// Decoded into a value of its own: decoding into the current one
+		// would write into the list the settings before the patch hold.
+		nv := reflect.New(f.Type)
+		dec := json.NewDecoder(bytes.NewReader(obj[k]))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(nv.Interface()); err != nil {
+			return fmt.Errorf("设置项 %s 的值无效: %v", p, err)
+		}
+		if err := unmask(nv.Elem(), ov, p); err != nil {
+			return err
+		}
+		fv.Set(nv.Elem())
+	}
+	return nil
+}
+
+func dotted(path string) string {
+	if path == "" {
+		return ""
+	}
+	return path + "."
+}
+
+// sectionType reports whether t is a section of the settings patched
+// option by option: a struct of exported fields (model.MergeSettings
+// draws the same line; a time is one value).
+func sectionType(t reflect.Type) bool {
+	if t.Kind() != reflect.Struct || t.NumField() == 0 {
+		return false
+	}
+	for i := 0; i < t.NumField(); i++ {
+		if !t.Field(i).IsExported() {
+			return false
+		}
+	}
+	return true
+}
+
+// maskFor is how an agent sees the string s of the option at path
+// (redactSettings, then RedactValue's pass over every string).
+func maskFor(path, s string) string {
+	if path == "Advanced.Authentication" {
+		s = maskAuth(s)
+	}
+	return applog.Redact(s)
+}
+
+// unmask puts the stored strings back where the new value of the option
+// at path holds their masked form: an agent that reads a list, adds an
+// entry and sends the list back has only the masks of the others. A mask
+// that stands for nothing stored is refused where it can be told (the
+// inbound authentication): it would be saved as the password.
+func unmask(nv, old reflect.Value, path string) error {
+	stored := map[string]bool{}
+	byMask := map[string][]string{}
+	walkStringValues(old, func(v reflect.Value) {
+		s := v.String()
+		stored[s] = true
+		if m := maskFor(path, s); m != s {
+			byMask[m] = append(byMask[m], s)
+		}
+	})
+	var err error
+	walkStringValues(nv, func(v reflect.Value) {
+		s := v.String()
+		if stored[s] {
+			return
+		}
+		if orig := byMask[s]; len(orig) > 0 {
+			v.SetString(orig[0])
+			if len(orig) > 1 {
+				byMask[s] = orig[1:]
+			}
+			return
+		}
+		if path == "Advanced.Authentication" && (s == "***" || strings.HasSuffix(s, ":***")) && err == nil {
+			err = fmt.Errorf("设置项 %s 的条目 %s 是脱敏后的占位符，不对应任何已保存的条目：新条目请写出完整的 用户名:密码", path, s)
+		}
+	})
+	return err
+}
+
+// walkStringValues calls f for every string in v (lists, structs and
+// maps gone through); strings of a settable v can be set.
+func walkStringValues(v reflect.Value, f func(reflect.Value)) {
+	switch v.Kind() {
+	case reflect.String:
+		f(v)
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			walkStringValues(v.Index(i), f)
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if v.Type().Field(i).IsExported() {
+				walkStringValues(v.Field(i), f)
+			}
+		}
+	case reflect.Pointer:
+		if !v.IsNil() {
+			walkStringValues(v.Elem(), f)
+		}
+	}
+}
+
+// fieldFold finds the field of struct t that name means: its Go name or
+// its JSON name, whatever the case.
 func fieldFold(t reflect.Type, name string) (reflect.StructField, bool) {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
@@ -226,34 +463,15 @@ func fieldFold(t reflect.Type, name string) (reflect.StructField, bool) {
 	}
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
-		if f.IsExported() && strings.EqualFold(f.Name, name) {
+		if !f.IsExported() {
+			continue
+		}
+		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if strings.EqualFold(f.Name, name) || (tag != "" && tag != "-" && strings.EqualFold(tag, name)) {
 			return f, true
 		}
 	}
 	return reflect.StructField{}, false
-}
-
-func mergeInto(dst map[string]any, patch map[string]any, t reflect.Type, path string) error {
-	for k, v := range patch {
-		f, ok := fieldFold(t, k)
-		if !ok {
-			return fmt.Errorf("没有设置项 %s%s", path, k)
-		}
-		ft := f.Type
-		if pv, ok := v.(map[string]any); ok && ft.Kind() == reflect.Struct {
-			dv, _ := dst[f.Name].(map[string]any)
-			if dv == nil {
-				dv = map[string]any{}
-			}
-			if err := mergeInto(dv, pv, ft, path+f.Name+"."); err != nil {
-				return err
-			}
-			dst[f.Name] = dv
-			continue
-		}
-		dst[f.Name] = v
-	}
-	return nil
 }
 
 // SettingsDiff is the redacted line diff of two settings, as indented JSON

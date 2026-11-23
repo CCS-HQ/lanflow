@@ -48,10 +48,6 @@ func newMatcher(patterns []string) *matcher {
 	return m
 }
 
-func (m *matcher) empty() bool {
-	return len(m.exact) == 0 && len(m.suffix) == 0 && len(m.wild) == 0 && len(m.prefixes) == 0
-}
-
 // match returns the pattern (as written) that host matches, "" if none.
 func (m *matcher) match(host string) string {
 	h := strings.ToLower(strings.TrimSuffix(host, "."))

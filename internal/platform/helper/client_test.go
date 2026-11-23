@@ -25,9 +25,10 @@ type fakeHelper struct {
 	stopped   chan struct{}
 	listener  net.Listener
 	dialErrOn bool
-	stalled   chan struct{} // while non-nil and open, status answers wait for it
-	version   string        // ping version; "fake" when empty
-	protocol  int           // ping protocol; protocol.Version when zero
+	stalled   chan struct{}                         // while non-nil and open, status answers wait for it
+	version   string                                // ping version; "fake" when empty
+	protocol  int                                   // ping protocol; protocol.Version when zero
+	stage     func(protocol.Spec) protocol.Response // the stage op; nil = a helper from before it existed
 }
 
 func startFakeHelper(t *testing.T) *fakeHelper {
@@ -91,6 +92,12 @@ func (f *fakeHelper) handle(_ context.Context, req protocol.Request) protocol.Re
 		return protocol.Response{OK: true}
 	case protocol.OpStatus:
 		return protocol.Response{OK: true, Running: f.running, ExitError: f.exitError, PID: 7}
+	case protocol.OpStage:
+		if f.stage != nil {
+			return f.stage(*req.Spec)
+		}
+		// What helper 0.1.3 and older answer (service.NewHandler).
+		return protocol.Response{Error: `未知操作: "stage"`}
 	}
 	return protocol.Response{Error: "unknown"}
 }
@@ -415,5 +422,64 @@ func TestCheckDowngrade(t *testing.T) {
 	helperVersionOf = func(context.Context, string) (string, error) { return "", errors.New("boom") }
 	if err := checkDowngrade(ctx, "/x"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The helper's core runs on the helper's copy of the config, so a reload
+// asks for a new copy and gets its path (core.ConfigStager).
+func TestRunnerStageConfig(t *testing.T) {
+	f := startFakeHelper(t)
+	var r core.Runner = newTestRunner()
+	st, ok := r.(core.ConfigStager)
+	if !ok {
+		t.Fatal("the helper's runner is not a core.ConfigStager")
+	}
+	ctx := context.Background()
+	spec := core.Spec{WorkDir: "/data/core", Config: "/data/core/runtime.yaml"}
+
+	// A helper from before the op existed (still running a core the app
+	// took over after an upgrade) says so, and the app reloads the way
+	// that core expects.
+	if path, err := st.StageConfig(ctx, spec); !errors.Is(err, core.ErrStageUnsupported) {
+		t.Fatalf("an old helper: %q, %v", path, err)
+	}
+
+	var got protocol.Spec
+	f.mu.Lock()
+	f.stage = func(s protocol.Spec) protocol.Response {
+		got = s
+		return protocol.Response{OK: true, Running: true, ConfigPath: "/helper/work/runtime.yaml"}
+	}
+	f.mu.Unlock()
+	path, err := st.StageConfig(ctx, spec)
+	if err != nil || path != "/helper/work/runtime.yaml" {
+		t.Fatalf("StageConfig = %q, %v", path, err)
+	}
+	if got.Config != spec.Config || got.WorkDir != spec.WorkDir {
+		t.Fatalf("spec sent: %+v", got)
+	}
+
+	// A refusal is the helper's own message.
+	f.mu.Lock()
+	f.stage = func(protocol.Spec) protocol.Response {
+		return protocol.Response{Error: "权限组件拒绝了这份配置"}
+	}
+	f.mu.Unlock()
+	if _, err := st.StageConfig(ctx, spec); err == nil || !strings.Contains(err.Error(), "拒绝了这份配置") || errors.Is(err, core.ErrStageUnsupported) {
+		t.Fatalf("refusal: %v", err)
+	}
+	// An answer without a path is not a path.
+	f.mu.Lock()
+	f.stage = func(protocol.Spec) protocol.Response { return protocol.Response{OK: true} }
+	f.mu.Unlock()
+	if path, err := st.StageConfig(ctx, spec); err == nil {
+		t.Fatalf("empty path accepted: %q", path)
+	}
+	// An unreachable helper reads as such.
+	f.mu.Lock()
+	f.dialErrOn = true
+	f.mu.Unlock()
+	if _, err := st.StageConfig(ctx, spec); err == nil || !strings.Contains(err.Error(), "无法连接权限组件") || errors.Is(err, core.ErrStageUnsupported) {
+		t.Fatalf("unreachable helper: %v", err)
 	}
 }

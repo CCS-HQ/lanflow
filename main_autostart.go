@@ -57,6 +57,7 @@ func queueAutostart(exe string, open bool) {
 // unless Settings.SilentStart (docs/service-split.md S3).
 func applyAutostart(exe string, open bool) {
 	migrateLogin.Do(func() {
+		dropLegacyLoginItem()
 		if mygo.App.OpenAtLogin() {
 			if err := mygo.App.SetOpenAtLogin(false); err != nil {
 				log.Printf("lanflow: remove the old login item: %v", err)

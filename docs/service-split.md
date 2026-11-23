@@ -45,7 +45,7 @@
 | --- | --- | --- | --- | --- |
 | 读状态 | `Status`、`Proxies`、`Rules`、`Settings`（脱敏） | ✓ | ✓ | ✓ |
 | 敏感读 | 订阅链接、连接明细、日志原文、解密内容 | ✓ | 需 `--reveal` 且界面确认 | 默认拒绝，需按会话授权 |
-| 写配置 | `SaveSettings`、`SelectProxy`、`AddCustomRule`、订阅增删 | ✓ | 在终端里运行：✓（`--dry-run` 先给 diff）；不在终端里（脚本、agent 调用）：与 MCP 相同 | 需首次授权（本次 / 始终 / 拒绝），每次写入记审计 |
+| 写配置 | `UpdateSettings`（界面；agent 用 `PatchSettings`）、`SelectProxy`、`AddCustomRule`、订阅增删 | ✓ | 在终端里运行：✓（`--dry-run` 先给 diff）；不在终端里（脚本、agent 调用）：与 MCP 相同 | 需首次授权（本次 / 始终 / 拒绝），每次写入记审计 |
 | 高影响写 | 导入或切换订阅、覆写、内核启停、系统代理、TUN、`ApplyConfigFile`（预览除外） | ✓ | 在终端里运行：✓；否则每次运行确认一次（仅本次 / 始终允许 / 拒绝），「始终允许」单独记为 `lanflow ctl (high impact)` | 每个连接确认一次（允许 / 拒绝），「始终允许」不覆盖 |
 | 危险操作 | 安装/卸载 helper、根证书、删除全部订阅、导出备份 | ✓ | 需界面确认 | 不开放 |
 
@@ -107,9 +107,12 @@ S1 在现有单进程里加了本机接口，界面仍直接调用进程内的 `
 - 方法清单：`internal/rpc/levels.go` 是权限表的唯一来源，生成器把它和 `api.go` 合成 `manifest_gen.go`（名称、参数名与类型、结果类型、级别、文档）。API 新增方法而 `levels.go` 没有对应条目时，生成器和 `internal/app/remote` 的测试都会失败；生成文件过期也会被测试发现。
 - 权限：在四级之外加了「仅界面」级（`TakeNotices`、UI 状态、`ResolveRecovery`、`DismissProxyHint`、`PatchUIState`），任何 agent 都不能调用。只测量、不改配置的动作（测速、检测、DNS 查询、刷新网络、泄漏检查）归为「读」。删除订阅、重置统计、切换/安装内核、备份与恢复、WebDAV 密码归为「危险」。
 - 授权：MCP 首次写入、不在终端里运行的 ctl 首次写入、两者的高影响写（第 4 节）、MCP 敏感读、ctl `--reveal` 敏感读、ctl 危险操作都经界面弹窗（同时发系统通知并把窗口拉到前台）。写入的「始终允许 / 拒绝」存进 `Settings.AgentGrants`，「仅本次」只对当前连接有效；敏感读只按连接授权。等待超过 1 分钟视为拒绝（「等待界面确认超时」；S2 起由服务端计时，弹窗卡住也会按时返回）。没有界面可问时（`Prompt` 为空）一律拒绝并说明原因。
-- 整体写设置：agent 读到的设置已脱敏，整体写回会把掩码存进去，所以 `SaveSettings`、`ApplyDNS`、`ApplySniffer` 对 agent 拒绝，改用新增的 `PatchSettings(patch, dryRun)`：按字段名（不区分大小写）合并 JSON 补丁，未知字段报错，`UI`、`AgentGrants`、`CorePath`、`CoreVersion`、`WebDAV`、`ConnHiddenColumns` 不可改；`dryRun` 返回脱敏后设置的行级差异（前后各 2 行上下文）。`EditSubscription` 收到空链接时保留原链接。
+- 整体写设置：agent 读到的设置已脱敏，整体写回会把掩码存进去，所以 `SaveSettings`、`UpdateSettings`、`ApplyDNS`、`ApplySniffer` 对 agent 拒绝（`UpdateSettings(base, next)` 是界面用的补丁式保存，参数同样是两份完整设置），改用 `PatchSettings(patch, dryRun)`：按字段名（不区分大小写）合并 JSON 补丁，未知字段报错，部分设置项不可改（见下）；`dryRun` 返回脱敏后设置的行级差异（前后各 2 行上下文）。键可以写 Go 字段名或 `Settings` 返回的 JSON 名（`Advanced.HTTPPort`、`Advanced.httpPort`），同一项写两次报错；对象按项合并，列表整体替换；agent 读到的脱敏值（`Advanced.Authentication` 的 `用户名:***` 等）原样传回时代表已保存的那一条，不对应任何已保存条目的占位符被拒绝。补丁按设置项分三类（`agentops.go` 的 `patchHigh`、`patchLocked`，测试 `TestPatchFieldClasses` 要求每个设置项都归类）：
+  - 高影响（与 `SetTUN` 等相同：每个连接确认一次，「始终允许」不覆盖；补丁里出现即算，不论值是否变化）：`TUN`、`TUNStack`、`TUNSetDNS`、`Advanced.TUN*`、`Advanced.InterfaceName`；`AllowLAN`、`Advanced.LANAllowedIPs`、`LANDisallowedIPs`、`Authentication`、`SkipAuthPrefixes`；`MixedPort`、`Advanced.HTTPPort`、`SocksPort`；`DNS.*`、`Advanced.DNS*`；`AutoSystemProxy`、`Advanced.PAC*`；`SSIDRules`、`SSIDDefaultSub`（等价于切换订阅）；`Geo` 的四个数据库地址。
+  - 锁定（agent 不可改）：`UI`、`AgentGrants`、`ConnHiddenColumns`；`CorePath`、`CoreVersion`、`CoreChannel`、`CoreAutoInstall`、`DownloadMirror`（内核二进制的来源）；`WebDAV`、`Feedback`（数据发往何处）；`Sync`（由危险级的 `SetConfigSync` 设置）。
+  - 其余为普通写。服务端经 `UpdateSettings` 保存补丁、授权结果和撤销，只写改动的设置项，不会覆盖用户同时在界面里改的其他设置。`EditSubscription` 收到空链接时保留原链接。
 - 其他 agent 方法：`Undo`、`AuditLog(n)`、`Methods`（清单，供兼容检查）、`PatchUIState`（`UpdateUIState` 的远程形式，仅界面）。
-- 审计与撤销：ctl/MCP 的写入和被拒的非读调用写入日志目录的 `audit.log`（JSON 行，参数经 `applog.Redact`，2 MB 轮转一份）。写入前按方法快照：设置（撤销时保留 UI 状态与授权）、自定义规则（删新增、补回删除的、再按原顺序移动）、覆写列表、规则启停、系统代理开关、代理组选择、当前订阅、订阅编辑、导入的订阅（撤销即删除）。撤销栈在内存里，最多 20 条，只覆盖本次运行。
+- 审计与撤销：ctl/MCP 的写入和被拒的非读调用写入日志目录的 `audit.log`（JSON 行，参数经 `applog.Redact`，2 MB 轮转一份）。写入前按方法快照：设置（撤销只把那次写入改动的设置项改回去，包括服务归一化时连带改动的项；其中之后又被别处改过的项不动，并在结果里列出；其他设置项、UI 状态与授权都保留）、自定义规则（删新增、补回删除的、再按原顺序移动）、覆写列表、规则启停、系统代理开关、代理组选择、当前订阅、订阅编辑、导入的订阅（撤销即删除）。撤销栈在内存里，最多 20 条，只覆盖本次运行；撤销失败时条目放回栈顶。撤销一次高影响写（含触及高影响设置项的补丁）本身按高影响写确认。
 - 脱敏：agent 收到的每个结果都先转成 JSON 再对所有字符串做 `applog.Redact`（图标字节除外）；订阅的 `URL` 清空；设置去掉 UI 状态和授权，代理认证的密码打码。
 - MCP：工具名是方法名的 snake_case；提供读、敏感读、写三级，去掉整体写设置、图标、目录路径、aTrust 文件导入导出、诊断包导出和从本地文件导入订阅；高影响写的工具说明里注明每个会话需确认一次，并标为 `destructiveHint`。参数的 JSON Schema 由 `app.API` 的反射类型生成。连接按需建立，澜流重启后自动重连；单次调用最长等 3 分钟（包含等用户授权）。
 - 测试：`internal/rpc`（往返、握手、对端 uid 校验、权限与授权、事件、补丁预览与撤销、脱敏）、`internal/app/remote`（清单覆盖与生成文件新鲜度）、`apigen`（漏标即失败）、`internal/ctl`、`internal/mcp`（工具清单、一次完整的 `route_domain` 预览 → 应用 → 验证 → 撤销）、`internal/view`（授权弹窗）。
@@ -165,7 +168,7 @@ S1 在现有单进程里加了本机接口，界面仍直接调用进程内的 `
 ### 与设计的差异
 
 - 设计中「托盘弹通知请用户允许」实现为通知 + 托盘菜单项 + 原生对话框；单进程模式保留窗口内的弹窗。
-- 版本不一致只在界面启动（握手）时检查一次，不做跨版本兼容。协议版本（`rpc.ProtocolVersion`）不一致时握手失败，错误里带服务的 PID（本版本起），界面结束旧服务（Unix SIGTERM，Windows `TerminateProcess`）后拉起自己的服务。
+- 版本不一致只在界面启动（握手）时检查一次，不做跨版本兼容。协议版本（`rpc.ProtocolVersion`）不一致时握手失败，错误里带服务的 PID（本版本起），界面结束旧服务（Unix SIGTERM，Windows `TerminateProcess`）后拉起自己的服务。协议版本现为 2：界面保存设置只用 `UpdateSettings`，为避免新界面连着没有这个方法的旧服务（同一版本号的两次构建时版本比较发现不了），加入该方法时提升了版本号。
 - 服务在运行却连不上时，界面带 `--fallback` 尝试单进程；拿不到单实例锁（服务还占着）就提示用户结束 Lanflow，服务也不会因此再拉起界面，避免循环。
 - 规则（`Rules`）仍整包传输：它只在 `TopicRules` 时变化，读缓存已避免每帧传输。
 - `UpdateUIState` 仍按设计在客户端执行函数后 `PatchUIState` 整体提交。

@@ -346,7 +346,7 @@ func (s *Service) ProbeExits() error {
 			continue
 		}
 		seen[r.Node] = true
-		ctx, cancel := s.ctrlCtx(nil, probeTimeout)
+		ctx, cancel := s.svcCtx(probeTimeout)
 		err := s.probeNode(ctx, r.Node)
 		cancel()
 		if err != nil && firstErr == nil {
@@ -402,7 +402,7 @@ func (s *Service) runMainProbe() {
 		return
 	}
 	defer s.probeExitMu.Unlock()
-	ctx, cancel := s.ctrlCtx(nil, probeTimeout)
+	ctx, cancel := s.svcCtx(probeTimeout)
 	defer cancel()
 	_ = s.probeNodeLocked(ctx, node)
 }
@@ -448,7 +448,7 @@ func (s *Service) fetchYouLoop() {
 	s.mu.Unlock()
 	s.em.emit(TopicNet)
 	for attempt := 0; s.rootCtx.Err() == nil; attempt++ {
-		ctx, cancel := s.ctrlCtx(nil, probeTimeout)
+		ctx, cancel := s.svcCtx(probeTimeout)
 		info, err := s.d.loc.Direct(ctx)
 		cancel()
 		s.mu.Lock()
