@@ -71,6 +71,64 @@ func TestTrustWorkDir(t *testing.T) {
 	}
 }
 
+// TestUserPipeSDDL verifies that the SDDL passed to a user-mode Mihomo
+// process lets go-winio create multiple pipe instances and accept repeated
+// connections even when running as a standard (non-elevated) user.
+func TestUserPipeSDDL(t *testing.T) {
+	sid, err := currentSID()
+	if err != nil || sid == "" {
+		t.Fatalf("currentSID: %q, %v", sid, err)
+	}
+	sddl := userPipeSDDL(sid)
+	var gotEnv string
+	for _, kv := range extraEnv() {
+		if v, ok := strings.CutPrefix(kv, "LISTEN_NAMEDPIPE_SDDL="); ok {
+			gotEnv = v
+		}
+	}
+	if gotEnv != sddl {
+		t.Fatalf("extraEnv LISTEN_NAMEDPIPE_SDDL = %q, want %q", gotEnv, sddl)
+	}
+	if !strings.Contains(sddl, "(D;;GA;;;NU)") || !strings.Contains(sddl, "(A;;GA;;;"+sid+")") {
+		t.Fatalf("unexpected userPipeSDDL: %q", sddl)
+	}
+
+	addr := fmt.Sprintf(`\\.\pipe\lanflow-test-sddl-%d`, time.Now().UnixNano())
+	l, err := winio.ListenPipe(addr, &winio.PipeConfig{SecurityDescriptor: sddl})
+	if err != nil {
+		t.Fatalf("ListenPipe with userPipeSDDL: %v", err)
+	}
+	defer l.Close()
+
+	acceptErr := make(chan error, 1)
+	go func() {
+		for range 3 {
+			c, err := l.Accept()
+			if err != nil {
+				acceptErr <- err
+				return
+			}
+			_ = c.Close()
+		}
+		acceptErr <- nil
+	}()
+
+	trackServer(os.Getpid())
+	defer untrackServer(os.Getpid())
+	for i := range 3 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		c, err := dial(ctx, addr)
+		cancel()
+		if err != nil {
+			t.Fatalf("dial #%d: %v", i+1, err)
+		}
+		_ = c.Close()
+	}
+	if err := <-acceptErr; err != nil {
+		t.Fatalf("Accept failed: %v", err)
+	}
+}
+
 // ownsConsole reports whether this process is attached to a console:
 // AttachConsole then fails with ERROR_ACCESS_DENIED. If it succeeds the
 // process had none and is detached again.
