@@ -267,7 +267,8 @@ func (s *Service) startLocked() (err error) {
 	fail := s.failStart
 	if prev != model.CoreRunning && s.d.portInUse(set.MixedPort, set.AllowLAN) {
 		// A core of ours the previous run left may hold it (takeover.go).
-		if !s.stopStray() || s.d.portInUse(set.MixedPort, set.AllowLAN) {
+		s.stopStray()
+		if s.d.portInUse(set.MixedPort, set.AllowLAN) && !s.waitPortReleased(set.MixedPort, set.AllowLAN) {
 			return fail(s.portTaken(set.MixedPort), model.CoreError)
 		}
 	}
@@ -283,6 +284,41 @@ func (s *Service) startLocked() (err error) {
 		return fail(err, model.CoreError)
 	}
 	return s.launchLocked(bin, set, helperOK, prev)
+}
+
+// How long startLocked waits for a mixed port that only closing
+// connections still hold, and how often it looks.
+var (
+	portReleaseWait = 65 * time.Second
+	portReleasePoll = 500 * time.Millisecond
+)
+
+// waitPortReleased waits for a mixed port that nothing listens on any more
+// but that still cannot be bound: the connections the stopped core had
+// accepted on it linger in TIME_WAIT (and FIN_WAIT) after it exits. On
+// macOS that blocks the user's core for a while after a TUN core: the
+// kernel refuses a non-root bind to a port on which any socket of another
+// user exists (in_pcbbind, whatever SO_REUSEADDR says), and the TUN core
+// ran as root. Turning TUN off then failed with the port "taken" until
+// TIME_WAIT ran out (2*MSL, 30 s by default). A port something listens
+// on is another program's: false at once, as before.
+func (s *Service) waitPortReleased(port int, lan bool) bool {
+	if s.d.portListening == nil || s.d.portListening(port) {
+		return false
+	}
+	s.alog.Infof("mixed port %d: nothing listens on it but it cannot be bound yet (connections of the previous core closing); waiting", port)
+	deadline := time.Now().Add(portReleaseWait)
+	for s.d.portInUse(port, lan) {
+		if !time.Now().Before(deadline) || s.d.portListening(port) || s.rootCtx.Err() != nil {
+			return false
+		}
+		select {
+		case <-s.rootCtx.Done():
+			return false
+		case <-time.After(portReleasePoll):
+		}
+	}
+	return true
 }
 
 // failStart records a failed start in Status and returns err.
