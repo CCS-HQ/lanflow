@@ -45,6 +45,7 @@ func composeCoexist(t *testing.T, in Input) (composedCoexist, Output) {
 }
 
 func TestComposeCoexist(t *testing.T) {
+	t.Parallel()
 	in := Input{
 		Subscription: []byte(testSub),
 		Managed:      Managed{MixedPort: 7890, TUN: true},
@@ -122,6 +123,7 @@ var fullCoexist = Coexist{
 }
 
 func TestComposeCoexistLists(t *testing.T) {
+	t.Parallel()
 	cfg, _ := composeCoexist(t, Input{Subscription: []byte(testSub), Managed: Managed{MixedPort: 7890, TUN: true}, Coexist: fullCoexist})
 
 	// direct ranges go DIRECT but stay in the TUN; excluded ones leave it
@@ -189,9 +191,10 @@ func TestComposeCoexistLists(t *testing.T) {
 // TestComposeCoexistMihomoCheck runs the full layer through `mihomo -t`
 // when the binary is available.
 func TestComposeCoexistMihomoCheck(t *testing.T) {
-	bin := filepath.Join("..", "..", "bin", "mihomo")
+	t.Parallel()
+	bin := mihomoTestPath()
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("./bin/mihomo not present")
+		t.Skipf("%s not present", bin)
 	}
 	in := Input{Subscription: []byte(testSub), Managed: Managed{MixedPort: 17890, TUN: true, TUNStack: "mixed"}, Coexist: fullCoexist}
 	in.DNS.TakeOver = true

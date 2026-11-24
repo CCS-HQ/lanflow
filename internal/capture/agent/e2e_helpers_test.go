@@ -82,11 +82,13 @@ func selfSigned(t *testing.T, name string) tls.Certificate {
 // upstream is an HTTPS (h2 + h1) echo server that also keeps the raw
 // bytes each connection received.
 type upstream struct {
-	ln   net.Listener
-	port int
-	cert tls.Certificate
-	mu   sync.Mutex
-	raw  [][]byte
+	ln     net.Listener
+	port   int
+	cert   tls.Certificate
+	slowIn chan struct{}
+	slowMu sync.Once
+	mu     sync.Mutex
+	raw    [][]byte
 }
 
 func startUpstream(t *testing.T, cert tls.Certificate, ech []tls.EncryptedClientHelloKey) *upstream {
@@ -95,7 +97,7 @@ func startUpstream(t *testing.T, cert tls.Certificate, ech []tls.EncryptedClient
 	if err != nil {
 		t.Fatal(err)
 	}
-	u := &upstream{ln: ln, port: ln.Addr().(*net.TCPAddr).Port, cert: cert}
+	u := &upstream{ln: ln, port: ln.Addr().(*net.TCPAddr).Port, cert: cert, slowIn: make(chan struct{})}
 	cfg := &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2", "http/1.1"}, EncryptedClientHelloKeys: ech}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +107,7 @@ func startUpstream(t *testing.T, cert tls.Certificate, ech []tls.EncryptedClient
 		json.NewEncoder(w).Encode(map[string]any{"path": r.URL.Path, "body": string(body), "ech": r.TLS != nil && r.TLS.ECHAccepted})
 	})
 	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
+		u.slowMu.Do(func() { close(u.slowIn) })
 		select {
 		case <-r.Context().Done():
 		case <-time.After(20 * time.Second):
@@ -290,7 +293,7 @@ func startKernel(t *testing.T, cfg []byte, mixed int, host string) *kernel {
 		if time.Now().After(deadline) {
 			t.Fatalf("mihomo did not start: %v\n%s", err, k.log.String())
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	return k
 }

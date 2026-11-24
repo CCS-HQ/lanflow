@@ -15,6 +15,7 @@ import (
 const validSub = "proxies:\n  - {name: a, type: ss, server: 1.1.1.1, port: 1, cipher: aes-128-gcm, password: p}\n"
 
 func TestFetchHeaders(t *testing.T) {
+	t.Parallel()
 	var gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotUA = r.Header.Get("User-Agent")
@@ -58,6 +59,7 @@ func TestFetchHeaders(t *testing.T) {
 }
 
 func TestFetchNoOptionalHeaders(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(validSub))
 	}))
@@ -72,6 +74,7 @@ func TestFetchNoOptionalHeaders(t *testing.T) {
 }
 
 func TestParseDispositionName(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"":                                   "",
 		`attachment; filename="sub.yaml"`:    "sub",
@@ -93,6 +96,7 @@ func TestParseDispositionName(t *testing.T) {
 }
 
 func TestParseUserInfo(t *testing.T) {
+	t.Parallel()
 	up, down, total, exp := parseUserInfo("upload=1; download=2;total=3; expire=1700000000.0; junk; x=y")
 	if up != 1 || down != 2 || total != 3 || exp.Unix() != 1700000000 {
 		t.Errorf("got %d %d %d %v", up, down, total, exp)
@@ -104,6 +108,7 @@ func TestParseUserInfo(t *testing.T) {
 }
 
 func TestFetchStatusErrors(t *testing.T) {
+	t.Parallel()
 	for code, want := range map[int]string{
 		403: "下载失败：HTTP 403。链接可能已失效",
 		404: "下载失败：HTTP 404。链接不存在",
@@ -123,6 +128,7 @@ func TestFetchStatusErrors(t *testing.T) {
 }
 
 func TestFetchTimeout(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
@@ -144,6 +150,7 @@ func TestFetchTimeout(t *testing.T) {
 }
 
 func TestFetchNotClashFormat(t *testing.T) {
+	t.Parallel()
 	links := "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@1.1.1.1:8388#node1\nvmess://eyJ2IjoiMiJ9\n"
 	cases := map[string]struct {
 		body string
@@ -171,6 +178,7 @@ func TestFetchNotClashFormat(t *testing.T) {
 }
 
 func TestFetchTooLarge(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("proxies:\n"))
 		chunk := strings.Repeat("#", 1<<20)
@@ -188,6 +196,7 @@ func TestFetchTooLarge(t *testing.T) {
 }
 
 func TestFetchBadURL(t *testing.T) {
+	t.Parallel()
 	for _, u := range []string{"", "ftp://x/y", "not a url", "example.com/sub"} {
 		_, err := Fetch(context.Background(), netx.Direct(time.Second), u, "")
 		if err == nil || !strings.HasPrefix(err.Error(), "订阅链接无效") {
@@ -197,6 +206,7 @@ func TestFetchBadURL(t *testing.T) {
 }
 
 func TestFetchErrorHidesToken(t *testing.T) {
+	t.Parallel()
 	// Connection refused on a closed port: the message must not echo the URL/query.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	url := srv.URL + "/api/v1/client/subscribe?token=SECRETTOKEN"
@@ -214,6 +224,7 @@ func TestFetchErrorHidesToken(t *testing.T) {
 }
 
 func TestCheckYAML(t *testing.T) {
+	t.Parallel()
 	ok := []string{
 		validSub,
 		"proxy-providers:\n  p:\n    type: http\n    url: https://x\n",

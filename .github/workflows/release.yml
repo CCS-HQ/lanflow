@@ -16,10 +16,9 @@ jobs:
   validate:
     name: Validate release version
     runs-on: ubuntu-24.04
-    timeout-minutes: 60 # mostly waiting for the commit's CI run, 45 minutes at most
+    timeout-minutes: 15
     permissions:
       contents: read
-      actions: read # the CI runs of the tagged commit
     outputs:
       geoip_sha256: ${{ steps.geo.outputs.geoip_sha256 }}
       geosite_sha256: ${{ steps.geo.outputs.geosite_sha256 }}
@@ -75,12 +74,52 @@ jobs:
             exit 1
           fi
 
-      # The build jobs below repeat vet and the tests, but the full set of
-      # checks (race detector, staticcheck, govulncheck, the cross builds) is
-      # the CI workflow's: the tagged commit must have a successful CI run,
-      # from the push to main or started by hand (workflow_dispatch) on the
-      # tag. A run still in progress is waited for; pull request runs do not
-      # count (their workflow file is the pull request's own).
+      # meta-rules-dat publishes only a rolling "latest" that is replaced
+      # daily, so the geo databases are fetched once, here, and both build
+      # jobs pack these very files: fetch-core.sh finds them in bin/geo/ and
+      # checks them against the sums below (GEOIP_SHA256 and the others)
+      # instead of asking for "latest" again. The sums go into the release
+      # notes and a release asset, so what a release shipped stays on record.
+      - name: Fetch geodata for both platforms
+        id: geo
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          scripts/fetch-core.sh
+          for pair in geoip:geoip.metadb geosite:geosite.dat asn:GeoLite2-ASN.mmdb; do
+            sum="$(sha256sum "bin/geo/${pair#*:}" | cut -d' ' -f1)"
+            echo "${pair%%:*}_sha256=${sum}" >> "$GITHUB_OUTPUT"
+            echo "${sum}  ${pair#*:}"
+          done
+          echo "fetched_at=$(date -u +%Y-%m-%dT%H:%MZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: geodata
+          path: |
+            bin/geo/geoip.metadb
+            bin/geo/geosite.dat
+            bin/geo/GeoLite2-ASN.mmdb
+          if-no-files-found: error
+          retention-days: 7 # long enough to re-run a failed build job
+
+  # Runs in parallel with build-macos and build-windows while gating the final
+  # release job: a tag pushed right after merging to main builds installers
+  # concurrently with CI instead of waiting serially for CI to finish first.
+  wait-ci:
+    name: Require CI run
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: read # the CI runs of the tagged commit
+    steps:
+      # The full set of checks (vet, mygo vet, unit tests with -race,
+      # staticcheck, govulncheck, cross builds) is the CI workflow's: the
+      # tagged commit must have a successful CI run, from the push to main or
+      # started by hand (workflow_dispatch) on the tag. Pull request runs do
+      # not count (their workflow file is the pull request's own).
       - name: Require a successful CI run of the tagged commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -114,35 +153,6 @@ jobs:
             sleep 30
           done
 
-      # meta-rules-dat publishes only a rolling "latest" that is replaced
-      # daily, so the geo databases are fetched once, here, and both build
-      # jobs pack these very files: fetch-core.sh finds them in bin/geo/ and
-      # checks them against the sums below (GEOIP_SHA256 and the others)
-      # instead of asking for "latest" again. The sums go into the release
-      # notes and a release asset, so what a release shipped stays on record.
-      - name: Fetch geodata for both platforms
-        id: geo
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          scripts/fetch-core.sh
-          for pair in geoip:geoip.metadb geosite:geosite.dat asn:GeoLite2-ASN.mmdb; do
-            sum="$(sha256sum "bin/geo/${pair#*:}" | cut -d' ' -f1)"
-            echo "${pair%%:*}_sha256=${sum}" >> "$GITHUB_OUTPUT"
-            echo "${sum}  ${pair#*:}"
-          done
-          echo "fetched_at=$(date -u +%Y-%m-%dT%H:%MZ)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: geodata
-          path: |
-            bin/geo/geoip.metadb
-            bin/geo/geosite.dat
-            bin/geo/GeoLite2-ASN.mmdb
-          if-no-files-found: error
-          retention-days: 7 # long enough to re-run a failed build job
-
   build-macos:
     name: Build macOS
     needs: validate
@@ -162,11 +172,6 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Vet
-        run: |
-          go vet ./...
-          go tool mygo vet .
-
       # The geo databases the validate job fetched, the same for every platform.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -185,13 +190,13 @@ jobs:
           scripts/prepare-resources.sh darwin amd64
 
       # After the resources: bin/mihomo and bin/geo/ are there now, so the
-      # end-to-end tests run against the core that ships instead of skipping
-      # themselves. The race detector and the other checks are CI's, which
-      # the validate job required for this commit.
-      - name: Test
+      # packages that exercise the real core and geodata run against the exact
+      # files that ship. Vet, staticcheck, race detector, and the pure unit/UI
+      # tests are verified by CI on this exact commit (gated by wait-ci).
+      - name: Test bundled core and geodata
         env:
           CGO_ENABLED: "0"
-        run: go test ./...
+        run: go test ./internal/core ./internal/controller ./internal/locate ./internal/profile ./internal/capture/agent ./internal/app
 
       # No Developer ID: mygo signs ad hoc ("-"), which Apple Silicon requires to run at all.
       # One platform per build: build-app.sh links in that platform's
@@ -268,6 +273,14 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Configure Windows Defender exclusions
+        shell: pwsh
+        run: |
+          $paths = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:USERPROFILE, $env:LOCALAPPDATA, "C:\hostedtoolcache") | Where-Object { $_ }
+          foreach ($p in $paths) {
+            try { Add-MpPreference -ExclusionPath $p -ErrorAction Stop } catch { Write-Host "Skipped Defender exclusion for ${p}: $_" }
+          }
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -276,11 +289,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Vet
-        run: |
-          go vet ./...
-          go tool mygo vet .
 
       # The geo databases the validate job fetched, the same for every platform.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -307,12 +315,12 @@ jobs:
             [ -s "resources/windows-amd64/licenses/${f}" ] || { echo "licenses/${f} was not prepared" >&2; exit 1; }
           done
 
-      # After the resources, as on macOS: the end-to-end tests run against
-      # the core that ships.
-      - name: Test
+      # After the resources, as on macOS: the packages that exercise the real
+      # core and geodata run against the exact files that ship.
+      - name: Test bundled core and geodata
         env:
           CGO_ENABLED: "0"
-        run: go test ./...
+        run: go test ./internal/core ./internal/controller ./internal/locate ./internal/profile ./internal/capture/agent ./internal/app
 
       # mygo uses a makensis it finds (PATH or Program Files\NSIS, which the
       # runner image provides) and otherwise downloads NSIS 3.13 and checks
@@ -356,7 +364,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [validate, build-macos, build-windows]
+    needs: [validate, wait-ci, build-macos, build-windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

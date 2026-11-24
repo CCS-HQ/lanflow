@@ -2,6 +2,12 @@ name: CI
 
 on:
   pull_request:
+    paths-ignore:
+      - "docs/*.md"
+      - "docs/prototype/**"
+      - "examples/**"
+      - "skills/**"
+      - "README.md"
   push:
     branches: [main]
   # By hand, on any branch or tag: the release workflow requires a successful
@@ -14,32 +20,15 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a push to main or a manual run: the release workflow requires
+  # a completed, successful CI run on the tagged commit.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The release workflow refuses a tag whose helper changed without a
-  # cmd/lanflow-helper/VERSION bump (scripts/check-helper-version.sh); the
-  # same check here catches it on the pull request (e.g. a dependency
-  # update the helper imports) instead of at release time.
-  helper-version:
-    name: Helper version
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0 # the previous release tag
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-
-      - name: Require a helper version bump when the helper changed
-        run: scripts/check-helper-version.sh HEAD
-
-  # Checks that need no macOS or Windows runner: the builds nobody runs
-  # day to day, static analysis, and the third-party notices.
+  # All platform-independent checks, cross builds, static analysis, and
+  # vulnerability scanning run together on one Linux runner. Keeping a single
+  # Ubuntu job also ensures actions/setup-go saves the full Linux build cache
+  # instead of racing with a lighter job that only ran `go list`.
   lint:
     name: Lint and cross builds
     runs-on: ubuntu-24.04
@@ -50,10 +39,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # the previous release tag, for check-helper-version.sh
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - id: go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      # Cache compiled linter binaries and staticcheck's own analysis cache
+      # (~/.cache/staticcheck, which setup-go does not include).
+      - name: Cache static analysis tools and state
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/staticcheck
+            ~/.cache/lanflow-ci-tools
+          key: lint-tools-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-sc0.8.2-gv1.9.0-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            lint-tools-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-sc0.8.2-gv1.9.0-
+
+      # The release workflow refuses a tag whose helper changed without a
+      # cmd/lanflow-helper/VERSION bump (scripts/check-helper-version.sh); the
+      # same check here catches it on the pull request (e.g. a dependency
+      # update the helper imports) instead of at release time.
+      - name: Require a helper version bump when the helper changed
+        run: scripts/check-helper-version.sh HEAD
+
+      - name: go mod tidy -diff
+        run: go mod tidy -diff
 
       # THIRD-PARTY-NOTICES.md ships in every package and release. It names
       # the Mihomo version whose source the GPL notice points at, and every
@@ -76,14 +89,21 @@ jobs:
           done < "${RUNNER_TEMP}/modules.txt"
           [ "$ok" = 1 ]
 
-      # The test jobs build darwin/arm64 and windows/amd64 only. Linux has
-      # code of its own (internal/rpc/peer_linux.go among others) and Windows
-      # on ARM is a platform fetch-core.sh knows: keep both compiling.
-      - name: Cross vet and build (linux/amd64, windows/arm64)
+      - name: mygo vet
+        run: go tool mygo vet .
+
+      # Vet all target platforms here so the macOS/Windows test runners go
+      # straight to `go test` without a separate full compile pass, and keep
+      # linux/amd64 and windows/arm64 compiling.
+      - name: Vet and cross build
         run: |
-          for target in linux/amd64 windows/arm64; do
-            echo "::group::${target}"
+          for target in darwin/arm64 windows/amd64 linux/amd64 windows/arm64; do
+            echo "::group::vet ${target}"
             GOOS="${target%/*}" GOARCH="${target#*/}" go vet ./...
+            echo "::endgroup::"
+          done
+          for target in linux/amd64 windows/arm64; do
+            echo "::group::build ${target}"
             GOOS="${target%/*}" GOARCH="${target#*/}" go build ./...
             echo "::endgroup::"
           done
@@ -92,11 +112,24 @@ jobs:
       # would build a staticcheck.exe this machine cannot start.
       - name: staticcheck
         run: |
-          GOBIN="$RUNNER_TEMP/bin" go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          TOOLS_BIN="$HOME/.cache/lanflow-ci-tools"
+          [ -x "$TOOLS_BIN/staticcheck" ] || GOBIN="$TOOLS_BIN" go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           status=0
           for goos in darwin windows linux; do
             echo "::group::GOOS=${goos}"
-            GOOS="$goos" "$RUNNER_TEMP/bin/staticcheck" ./... || status=1
+            GOOS="$goos" "$TOOLS_BIN/staticcheck" ./... || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+      - name: govulncheck
+        run: |
+          TOOLS_BIN="$HOME/.cache/lanflow-ci-tools"
+          [ -x "$TOOLS_BIN/govulncheck" ] || GOBIN="$TOOLS_BIN" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          status=0
+          for target in darwin/arm64 windows/amd64; do
+            echo "::group::govulncheck ${target}"
+            GOOS="${target%/*}" GOARCH="${target#*/}" "$TOOLS_BIN/govulncheck" ./... || status=1
             echo "::endgroup::"
           done
           exit "$status"
@@ -106,13 +139,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, windows-2022]
+        include:
+          - os: macos-15
+            cgo: "1"
+            test_flags: "-race -shuffle=on"
+          - os: windows-2022
+            cgo: "0"
+            test_flags: "-shuffle=on"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30 # a run takes about 5; a hung end-to-end test should not hold a runner for hours
+    timeout-minutes: 30 # a run takes a few minutes; a hung end-to-end test should not hold a runner for hours
+    env:
+      CGO_ENABLED: ${{ matrix.cgo }}
     defaults:
       run:
         shell: bash
     steps:
+      # Microsoft Defender scans every extracted Go toolchain file, cached .a
+      # archive, and compiled *.test.exe in %TEMP% on Windows runners.
+      - name: Configure Windows Defender exclusions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $paths = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:USERPROFILE, $env:LOCALAPPDATA, "C:\hostedtoolcache") | Where-Object { $_ }
+          foreach ($p in $paths) {
+            try { Add-MpPreference -ExclusionPath $p -ErrorAction Stop } catch { Write-Host "Skipped Defender exclusion for ${p}: $_" }
+          }
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -121,26 +173,32 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: go mod tidy -diff
-        run: go mod tidy -diff
+      # fetch-core.sh verifies every cached archive and geodata file against
+      # its pinned SHA-256 or the digest reported by api.github.com before
+      # accepting it, so caching bin/ speeds up downloads without trusting
+      # unverified bytes.
+      - name: Cache Mihomo core and geodata
+        if: vars.CI_SKIP_CORE != '1'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            bin/cache
+            bin/geo
+            bin/licenses
+          key: mihomo-geo-${{ runner.os }}-${{ hashFiles('scripts/fetch-core.sh') }}
+          restore-keys: |
+            mihomo-geo-${{ runner.os }}-
 
-      # The end-to-end tests (internal/app, internal/core, internal/locate) use
-      # bin/mihomo and bin/geo/ and skip themselves when those are absent.
-      # fetch-core.sh checks every file against a pinned or API-reported
-      # SHA-256. Set the repository variable CI_SKIP_CORE=1 to skip the
-      # download (e.g. while GitHub release downloads are failing); the
-      # tests then run without the real core.
+      # The end-to-end tests (internal/app, internal/core, internal/locate,
+      # internal/capture/agent, internal/profile) use bin/mihomo[.exe] and
+      # bin/geo/ and skip themselves when those are absent. Set the repository
+      # variable CI_SKIP_CORE=1 to skip the download (e.g. while GitHub release
+      # downloads are failing); the tests then run without the real core.
       - name: Fetch Mihomo core and geodata
         if: vars.CI_SKIP_CORE != '1'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: scripts/fetch-core.sh
-
-      - name: go vet
-        run: go vet ./...
-
-      - name: mygo vet
-        run: go tool mygo vet .
 
       # One pass of the tests per platform: with the race detector on macOS
       # (it needs cgo, and that runner has a C toolchain), without on
@@ -148,20 +206,10 @@ jobs:
       # order, so one that depends on what an earlier test left behind shows
       # up; a failure prints the seed (-shuffle=<seed> repeats the order).
       - name: go test
-        if: runner.os != 'macOS'
-        env:
-          CGO_ENABLED: "0"
         run: |
+          set -o pipefail
           mkdir -p ci-diagnostics
-          go test -shuffle=on ./... 2>&1 | tee ci-diagnostics/go-test.log
-
-      - name: go test -race
-        if: runner.os == 'macOS'
-        env:
-          CGO_ENABLED: "1"
-        run: |
-          mkdir -p ci-diagnostics
-          go test -race -shuffle=on ./... 2>&1 | tee ci-diagnostics/go-test.log
+          go test ${{ matrix.test_flags }} ./... 2>&1 | tee ci-diagnostics/go-test.log
 
       # The whole test output of a failed run, kept as a file: the interface
       # tests print where every element of the page was when a click missed,
@@ -174,6 +222,3 @@ jobs:
           path: ci-diagnostics/
           if-no-files-found: ignore
           retention-days: 14
-
-      - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

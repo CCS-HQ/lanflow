@@ -34,6 +34,7 @@ func mode(t *testing.T, path string) os.FileMode {
 }
 
 func TestStoreLayoutAndPermissions(t *testing.T) {
+	t.Parallel()
 	s, dir := openTestStore(t)
 	sub, err := s.Put(model.Subscription{Name: "A", Source: "url", URL: "https://x/sub?token=t"})
 	if err != nil {
@@ -102,6 +103,7 @@ func TestStoreLayoutAndPermissions(t *testing.T) {
 }
 
 func TestStoreCRUD(t *testing.T) {
+	t.Parallel()
 	s, dir := openTestStore(t)
 	if _, ok := s.Current(); ok {
 		t.Error("empty store has no current")
@@ -239,6 +241,7 @@ func TestStoreCRUD(t *testing.T) {
 }
 
 func TestStorePersistsAcrossReopen(t *testing.T) {
+	t.Parallel()
 	s, dir := openTestStore(t)
 	a, _ := s.Put(model.Subscription{Name: "A", Source: "url", URL: "https://a"})
 	_, _ = s.Put(model.Subscription{Name: "B", Source: "url", URL: "https://b"})
@@ -289,6 +292,7 @@ func TestStorePersistsAcrossReopen(t *testing.T) {
 }
 
 func TestStoreAtomicWrite(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.json")
 	if err := atomicWrite(path, []byte("one")); err != nil {
@@ -309,6 +313,7 @@ func TestStoreAtomicWrite(t *testing.T) {
 }
 
 func TestStoreConcurrency(t *testing.T) {
+	t.Parallel()
 	s, dir := openTestStore(t)
 	var wg sync.WaitGroup
 	const workers = 8

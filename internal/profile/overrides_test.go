@@ -16,6 +16,7 @@ import (
 // subscription's first, the global one last (the former order), the
 // subscription selecting its own, and the old files gone.
 func TestOverridesMigrateLegacyTexts(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "profile")
 	s, err := Open(dir)
 	if err != nil {
@@ -70,6 +71,7 @@ func TestOverridesMigrateLegacyTexts(t *testing.T) {
 }
 
 func TestOverridesListCRUDAndOrder(t *testing.T) {
+	t.Parallel()
 	s, _ := openTestStore(t)
 	sub, _ := s.Put(model.Subscription{Name: "A", Source: "url", URL: "https://a"})
 	o1, err := s.PutOverride(model.Override{Name: "one", Enabled: true, Text: "a: 1\n"})
@@ -146,6 +148,7 @@ func TestOverridesListCRUDAndOrder(t *testing.T) {
 // The legacy accessors create and select entries the way the single texts
 // behaved, and compose attributes the layers by name.
 func TestOverridesLegacyAccessorsAndCompose(t *testing.T) {
+	t.Parallel()
 	s, _ := openTestStore(t)
 	sub, _ := s.Put(model.Subscription{Name: "A", Source: "url", URL: "https://a"})
 	if err := s.SetOverride(sub.ID, "log-level: debug\n"); err != nil {
@@ -198,6 +201,7 @@ func TestOverridesLegacyAccessorsAndCompose(t *testing.T) {
 }
 
 func TestFetchOverride(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/ok.yaml":
@@ -225,6 +229,7 @@ func TestFetchOverride(t *testing.T) {
 }
 
 func TestFetchParsesHomePage(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Profile-Web-Page-Url", "https://portal.example.com/")
 		_, _ = w.Write([]byte("proxies:\n  - {name: a, type: ss, server: 1.1.1.1, port: 1, cipher: aes-128-gcm, password: p}\n"))

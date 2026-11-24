@@ -10,6 +10,7 @@ import (
 // TestForeign: files this build must never rewrite are told apart from
 // files that are merely invalid, and from its own.
 func TestForeign(t *testing.T) {
+	t.Parallel()
 	enc, key, err := NewEncryption("a long passphrase")
 	if err != nil {
 		t.Fatal(err)

@@ -40,6 +40,7 @@ func listenersOf(t *testing.T, m map[string]any) map[string]string {
 // TestComposeConfinesSubscriptionListeners: with 允许局域网 off, nothing a
 // subscription brings listens beyond this machine.
 func TestComposeConfinesSubscriptionListeners(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{Subscription: []byte(lanSub), Managed: Managed{MixedPort: 17890, ProbePort: 41234}})
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +90,7 @@ func TestComposeConfinesSubscriptionListeners(t *testing.T) {
 // TestComposeAllowLANKeepsSubscriptionListeners: with the switch on, the
 // subscription's listeners are left as they are.
 func TestComposeAllowLANKeepsSubscriptionListeners(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{Subscription: []byte(lanSub), Managed: Managed{MixedPort: 17890, AllowLAN: true}})
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +114,7 @@ func TestComposeAllowLANKeepsSubscriptionListeners(t *testing.T) {
 // TestComposeOverrideListenersKept: the override layers and the 高级
 // options are the user's own and keep the address they name.
 func TestComposeOverrideListenersKept(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{
 		Subscription:   []byte(lanSub),
 		SubOverride:    "listeners+:\n  - {name: mine, type: mixed, listen: 0.0.0.0, port: 7001}\n",
@@ -148,6 +151,7 @@ func TestComposeOverrideListenersKept(t *testing.T) {
 // TestComposeDNSTakeOverDropsSubscriptionListen: Lanflow's own dns
 // section replaces the subscription's, listen included.
 func TestComposeDNSTakeOverDropsSubscriptionListen(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{Subscription: []byte(lanSub), Managed: Managed{MixedPort: 17890}, DNS: model.DNSSettings{TakeOver: true}})
 	if err != nil {
 		t.Fatal(err)
@@ -163,6 +167,7 @@ func TestComposeDNSTakeOverDropsSubscriptionListen(t *testing.T) {
 }
 
 func TestLoopbackAddr(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		in, out     string
 		changed, ok bool
@@ -188,6 +193,7 @@ func TestLoopbackAddr(t *testing.T) {
 // so that every level multiplies the one below, are refused instead of
 // being expanded into the proxies that reference them.
 func TestComposeRefusesAliasBomb(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("external-ui:\n  a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n")
 	for i := 1; i <= 9; i++ {

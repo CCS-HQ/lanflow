@@ -19,11 +19,19 @@ while read -r dir; do
   paths+=("${dir#"$PWD"/}")
 done < <(go list -deps -f '{{if not .Standard}}{{if eq .Module.Path "lanflow"}}{{.Dir}}{{end}}{{end}}' ./cmd/lanflow-helper | sed '/^$/d')
 changed="$(git diff --name-only "$PREV" "$REF" -- "${paths[@]}" | grep -v -e '^cmd/lanflow-helper/VERSION$' -e '_test\.go$' || true)"
+old="$(git show "$PREV:cmd/lanflow-helper/VERSION" 2>/dev/null | tr -d ' \n' || true)"
+new="$(git show "$REF:cmd/lanflow-helper/VERSION" | tr -d ' \n')"
+if [ -n "$changed" ] && [ "$old" != "$new" ]; then
+  echo "helper $old -> $new since $PREV"
+  exit 0
+fi
 
 # Its dependencies: the modules the helper is built from on each system, at
 # the versions go.mod selects, and the Go version. Only those count: go.mod
 # also changes for modules the helper never links (the UI framework), and
 # such a change must not force every user to reinstall the helper.
+# Skip creating worktrees when neither go.mod/go.sum nor any helper package
+# changed since $PREV: the helper's dependency set cannot have changed then.
 helper_deps() { # <checkout>
   (
     cd "$1"
@@ -35,29 +43,34 @@ helper_deps() { # <checkout>
     done | sed '/^$/d' | sort -u
   )
 }
-tmp="$(mktemp -d)"
-cleanup() {
-  git worktree remove --force "$tmp/prev" >/dev/null 2>&1 || true
-  git worktree remove --force "$tmp/ref" >/dev/null 2>&1 || true
-  rm -rf "$tmp"
-}
-trap cleanup EXIT
-git worktree add --quiet --detach "$tmp/prev" "$PREV"
-git worktree add --quiet --detach "$tmp/ref" "$REF"
-deps_prev="$(helper_deps "$tmp/prev")"
-deps_ref="$(helper_deps "$tmp/ref")"
-if [ "$deps_prev" != "$deps_ref" ]; then
-  deps_diff="$(diff <(printf '%s\n' "$deps_prev") <(printf '%s\n' "$deps_ref") | grep '^[<>]' || true)"
-  changed="${changed:+$changed
+if [ -n "$changed" ] || ! git diff --quiet "$PREV" "$REF" -- go.mod go.sum; then
+  tmp="$(mktemp -d)"
+  cleanup() {
+    git worktree remove --force "$tmp/prev" >/dev/null 2>&1 || true
+    git worktree remove --force "$tmp/ref" >/dev/null 2>&1 || true
+    rm -rf "$tmp"
+  }
+  trap cleanup EXIT
+  git worktree add --quiet --detach "$tmp/prev" "$PREV"
+  deps_prev="$(helper_deps "$tmp/prev")"
+  if [ "$(git rev-parse --verify "${REF}^{commit}")" = "$(git rev-parse HEAD)" ] &&
+     [ -z "$(git status --porcelain -- go.mod go.sum "${paths[@]}")" ]; then
+    deps_ref="$(helper_deps .)"
+  else
+    git worktree add --quiet --detach "$tmp/ref" "$REF"
+    deps_ref="$(helper_deps "$tmp/ref")"
+  fi
+  if [ "$deps_prev" != "$deps_ref" ]; then
+    deps_diff="$(diff <(printf '%s\n' "$deps_prev") <(printf '%s\n' "$deps_ref") | grep '^[<>]' || true)"
+    changed="${changed:+$changed
 }helper dependencies ($PREV < > $REF):
 $deps_diff"
+  fi
 fi
 if [ -z "$changed" ]; then
   echo "helper unchanged since $PREV"
   exit 0
 fi
-old="$(git show "$PREV:cmd/lanflow-helper/VERSION" 2>/dev/null | tr -d ' \n' || true)"
-new="$(git show "$REF:cmd/lanflow-helper/VERSION" | tr -d ' \n')"
 if [ "$old" = "$new" ]; then
   echo "error: the helper changed since $PREV but cmd/lanflow-helper/VERSION is still $new:" >&2
   echo "$changed" >&2

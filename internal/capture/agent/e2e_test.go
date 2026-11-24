@@ -223,7 +223,11 @@ func TestE2EDisableStopsDecryptionAndClosesConnections(t *testing.T) {
 		}
 		slowErr <- err
 	}()
-	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-up.slowIn:
+	case <-time.After(5 * time.Second):
+		t.Fatal("in-flight /slow request never reached upstream")
+	}
 
 	// the off sequence (docs/capture.md §9 配置重载)
 	off := false

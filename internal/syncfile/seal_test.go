@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"lanflow/internal/model"
@@ -11,7 +12,21 @@ import (
 
 const testPass = "correct horse battery"
 
+type sharedEnc struct {
+	enc Encryption
+	key []byte
+}
+
+var testSharedEnc = sync.OnceValue(func() sharedEnc {
+	enc, key, err := NewEncryption(testPass)
+	if err != nil {
+		panic(err)
+	}
+	return sharedEnc{enc: enc, key: key}
+})
+
 func TestSealRoundTrip(t *testing.T) {
+	t.Parallel()
 	enc, key, err := NewEncryption(testPass)
 	if err != nil {
 		t.Fatal(err)
@@ -68,10 +83,8 @@ func TestSealRoundTrip(t *testing.T) {
 }
 
 func TestSealAADBindsField(t *testing.T) {
-	_, key, err := NewEncryption(testPass)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
+	key := testSharedEnc().key
 	v, _ := Seal(key, SubscriptionPath("a1"), "https://a.example/")
 	for _, path := range []string{SubscriptionPath("b2"), WebDAVPasswordPath, checkPath} {
 		if _, err := Open(key, path, v); !errors.Is(err, ErrSealedDamaged) {
@@ -90,6 +103,7 @@ func TestSealAADBindsField(t *testing.T) {
 }
 
 func TestWrongPassphrase(t *testing.T) {
+	t.Parallel()
 	enc, _, err := NewEncryption(testPass)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +121,8 @@ func TestWrongPassphrase(t *testing.T) {
 }
 
 func TestEncryptionLimits(t *testing.T) {
-	enc, _, _ := NewEncryption(testPass)
+	t.Parallel()
+	enc := testSharedEnc().enc
 	for name, mut := range map[string]func(*Encryption){
 		"kdf":    func(e *Encryption) { e.KDF = "scrypt" },
 		"memory": func(e *Encryption) { e.MemoryKiB = 4 << 20 },
@@ -129,7 +144,9 @@ func TestEncryptionLimits(t *testing.T) {
 }
 
 func TestSealedDecodeErrors(t *testing.T) {
-	enc, key, _ := NewEncryption(testPass)
+	t.Parallel()
+	se := testSharedEnc()
+	enc, key := se.enc, se.key
 	v, _ := Seal(key, SubscriptionPath("a1b2c3d4"), "https://x.example/")
 	for name, tc := range map[string]struct {
 		mut  func(*Doc)
