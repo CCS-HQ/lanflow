@@ -90,6 +90,7 @@ var shellTopics = []app.Topic{app.TopicStatus, app.TopicNotice, app.TopicSetting
 type toastReq struct {
 	msg, detail string
 	isError     bool
+	info        bool // news, not the outcome of what the user did
 	action      string
 	onAction    func()
 }
@@ -685,6 +686,7 @@ func (s *Shell) View(c *ui.Context) {
 	}
 	s.shortcuts(c)
 	s.dialogs(c, st)
+	s.toastView(c)
 }
 
 // drain runs what other goroutines queued: pending functions, toasts and
@@ -713,6 +715,10 @@ func (s *Shell) drain(c *ui.Context) {
 
 func (s *Shell) showToast(c *ui.Context, tr toastReq) {
 	tt := ui.Toast{Title: tr.msg, Description: tr.detail, Timeout: 3 * time.Second, Action: tr.action, OnAction: tr.onAction}
+	tt.Type = toastSuccess
+	if tr.info {
+		tt.Type = toastInfo
+	}
 	if tr.isError {
 		tt.Type, tt.Timeout = "error", 5*time.Second
 	}
@@ -734,7 +740,7 @@ func (s *Shell) handleNotice(c *ui.Context, n app.Notice) {
 	case "error":
 		s.errorToast(firstNonEmpty(n.Title, n.Detail), detailIf(n))
 	default:
-		s.showToast(c, toastReq{msg: firstNonEmpty(n.Title, n.Detail), detail: detailIf(n)})
+		s.showToast(c, toastReq{msg: firstNonEmpty(n.Title, n.Detail), detail: detailIf(n), info: true})
 	}
 }
 
