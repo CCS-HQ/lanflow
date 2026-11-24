@@ -24,7 +24,7 @@ import (
 )
 
 // appVersion is shown in 关于.
-const appVersion = "0.1.10"
+const appVersion = "0.1.11"
 
 const (
 	tabGeneral = iota
