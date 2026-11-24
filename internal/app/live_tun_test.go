@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,10 +124,37 @@ func TestLiveTUN(t *testing.T) {
 
 	liveCoexist(t, s)
 
+	// Exercise the root-owned mixed listener too. TUN-only traffic does
+	// not leave TCP sockets on this port and missed the macOS root -> user
+	// TIME_WAIT handoff failure. Have the proxy close its client connection.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Connection", "close")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+	port := s.Settings().MixedPort
+	checkProxy := func() {
+		t.Helper()
+		cl := netx.ViaPort(port, 5*time.Second)
+		defer cl.CloseIdleConnections()
+		resp, err := cl.Get(server.URL)
+		if err != nil {
+			t.Fatalf("mixed proxy on %d: %v", port, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("mixed proxy on %d: %s", port, resp.Status)
+		}
+	}
+	checkProxy()
 	if err := s.SetTUN(false); err != nil {
 		t.Fatalf("SetTUN(false): %v", err)
 	}
 	e2eWait(t, 30*time.Second, "TUN off", func() bool { st := s.Status(); return st.Core == model.CoreRunning && !st.TUN })
+	if s.Settings().MixedPort != port || s.Status().MixedPort != port {
+		t.Fatal("TUN handoff changed the proxy port")
+	}
+	checkProxy()
 	e2eWait(t, 15*time.Second, "routes restored", func() bool { _, ok := netinfo.OtherTUN(context.Background()); return !ok })
 	if snap, err := sysdns.Snapshot(); err == nil {
 		t.Logf("system DNS after TUN off: %s", snap)
