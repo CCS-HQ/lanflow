@@ -252,7 +252,7 @@ var snapshots = []snapshot{
 	}},
 	{name: "toast-core-crash", page: env.Overview, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, tt *ui.Tester) {
 		s.hiddenOnce, s.hiddenFlag = false, ""
-		s.handleNotice(nil, app.Notice{Kind: "core-crash", Detail: "exit status 1"})
+		queueNotice(s, app.Notice{Kind: "core-crash", Detail: "exit status 1"})
 		settleToast(tt)
 	}},
 
@@ -290,6 +290,15 @@ func longText(line string, n int) string {
 		fmt.Fprintf(&b, "%3d  %s", i, line)
 	}
 	return b.String()
+}
+
+// queueNotice hands n to the shell as the service's notices arrive
+// (onChange): the next frame handles it. A notice that becomes a toast
+// needs that frame's context; handleNotice(nil, n) shows none.
+func queueNotice(s *Shell, n app.Notice) {
+	s.mu.Lock()
+	s.notices = append(s.notices, n)
+	s.mu.Unlock()
 }
 
 // settleToast lets a toast finish fading in (200 ms) before the frame.
