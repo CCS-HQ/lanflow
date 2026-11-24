@@ -125,6 +125,24 @@ func asyncPage(t *testing.T, g *gated) (*Page, *envtest.Async, *ui.Tester, *rec)
 	return p, a, tt, r
 }
 
+// waitForFrame keeps delivering UI callbacks until the requested outcome
+// arrives. A count of finished jobs cannot identify it: the page starts
+// unrelated jobs of its own when it first draws.
+func waitForFrame(t *testing.T, tt *ui.Tester, what string, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		tt.Frame()
+		if done() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // TestSavesRunOneAtATimeAndKeepLaterChanges: a change made while another
 // is being saved must show with it, be saved after it, and the draft must
 // stay until the last save is done. Before, each save ran on its own goroutine and the first to
@@ -152,8 +170,7 @@ func TestSavesRunOneAtATimeAndKeepLaterChanges(t *testing.T) {
 
 	// A finishes. The draft stays (B is not saved yet) and B starts.
 	g.release("save", 1)
-	a.WaitFinished(1)
-	tt.Frame()
+	waitForFrame(t, tt, "save A to leave the queue", func() bool { return len(p.saveQ) == 1 })
 	if p.draft == nil {
 		t.Fatal("the draft was dropped while a save was still queued")
 	}
@@ -269,8 +286,7 @@ func TestLateRuntimeConfigIsDropped(t *testing.T) {
 
 	// The second call answers first, then the first, late.
 	g.releaseOnly("runtime", 2)
-	a.WaitFinished(1)
-	tt.Frame()
+	waitForFrame(t, tt, "the second runtime config", func() bool { return !p.rt.loading })
 	g.release("runtime", 1)
 	a.Settle(tt.Frame)
 	if p.rt.loading || len(p.rt.lines) != 1 || p.rt.lines[0].Text != "call: 2" {
