@@ -39,6 +39,8 @@ func TestSameInstallDir(t *testing.T) {
 		{`C:\Apps\Lanflow`, `"c:\apps\lanflow"`, true},
 		{`C:\Apps\Lanflow`, `D:\Apps\Lanflow`, false},
 		{``, ``, false},
+		{`""`, ``, false},
+		{` " " `, ``, false},
 		{``, `C:\Apps\Lanflow`, false},
 	} {
 		if got := sameInstallDir(c.a, c.b); got != c.want {

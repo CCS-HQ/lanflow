@@ -42,7 +42,8 @@ func init() {
 		"订阅「%s」（文件中只有钥匙串引用，本机钥匙串里没有它的链接）": "subscription \"%s\" (the file has only a keychain reference, and this machine's keychain does not have its link)",
 
 		// internal/app/configsecrets.go, internal/view/subs/page.go
-		"这个订阅来自配置同步，本机钥匙串里没有它的链接。请在「编辑」中重新输入订阅链接。": "This subscription came through configuration sync, and this machine's keychain does not have its link. Enter the subscription link again in Edit.",
+		"这个订阅来自配置同步，本机钥匙串里没有它的链接。请在「编辑」中重新输入订阅链接。":   "This subscription came through configuration sync, and this machine's keychain does not have its link. Enter the subscription link again in Edit.",
+		"这个订阅来自配置同步，本机凭据管理器里没有它的链接。请在「编辑」中重新输入订阅链接。": "This subscription came through configuration sync, and this machine's Credential Manager does not have its link. Enter the subscription link again in Edit.",
 		"需要重新输入链接": "Link needed",
 
 		// internal/app/configapply.go
@@ -77,7 +78,8 @@ func init() {
 
 		// internal/view/settings/configsync.go, internal/view/overview/page.go
 		"配置同步": "Configuration sync",
-		"把设置、覆写、自定义规则和订阅保存为 lanflow.yaml，放进会同步的文件夹，在多台设备间保持一致；订阅链接留在钥匙串中": "Keep settings, overrides, custom rules and subscriptions as lanflow.yaml in a synced folder, the same on every device; subscription links stay in the keychain",
+		"把设置、覆写、自定义规则和订阅保存为 lanflow.yaml，放进会同步的文件夹，在多台设备间保持一致；订阅链接留在钥匙串中":   "Keep settings, overrides, custom rules and subscriptions as lanflow.yaml in a synced folder, the same on every device; subscription links stay in the keychain",
+		"把设置、覆写、自定义规则和订阅保存为 lanflow.yaml，放进会同步的文件夹，在多台设备间保持一致；订阅链接留在凭据管理器中": "Keep settings, overrides, custom rules and subscriptions as lanflow.yaml in a synced folder, the same on every device; subscription links stay in Credential Manager",
 		"iCloud 云盘":   "iCloud Drive",
 		"自定义文件夹…":     "Custom folder…",
 		"关闭时设置只保存在本机": "When off, the settings stay on this machine only",
@@ -85,6 +87,7 @@ func init() {
 		"同步位置":              "Sync location",
 		"同步文件":              "Sync file",
 		"正在等待 iCloud 下载文件…": "Waiting for iCloud to download the file…",
+		"正在等待云盘下载文件…":       "Waiting for cloud drive to download the file…",
 		"上次加载：%s":           "Last loaded: %s",
 		"上次写入：%s":           "Last written: %s",
 		"同步文件的修改没有加载，配置保持不变：%s": "A change to the sync file was not loaded; the configuration is unchanged: %s",
@@ -100,11 +103,13 @@ func init() {
 		"副本中的配置校验通过后会加载到本机并成为 lanflow.yaml；当前文件会移到数据目录的 sync-backups 文件夹。": "Once validated, the copy's configuration is loaded on this machine and becomes lanflow.yaml; the current file moves to the sync-backups folder of the data directory.",
 		"使用副本":    "Use copy",
 		"已改用冲突副本": "Switched to the conflict copy",
-		"%d 个订阅的链接不在本机钥匙串中（%s），请在「订阅」页编辑并重新输入链接。": "The links of %d subscription(s) are not in this machine's keychain (%s); edit them on the Subscriptions page and enter the links again.",
+		"%d 个订阅的链接不在本机钥匙串中（%s），请在「订阅」页编辑并重新输入链接。":   "The links of %d subscription(s) are not in this machine's keychain (%s); edit them on the Subscriptions page and enter the links again.",
+		"%d 个订阅的链接不在本机凭据管理器中（%s），请在「订阅」页编辑并重新输入链接。": "The links of %d subscription(s) are not in this machine's Credential Manager (%s); edit them on the Subscriptions page and enter the links again.",
 		"前往订阅": "Go to Subscriptions",
-		"同步文件中设置了 WebDAV 密码，但本机钥匙串里没有；需要备份到 WebDAV 时请重新输入密码。": "The sync file says a WebDAV password is set, but this machine's keychain does not have it; enter the password again to back up to WebDAV.",
-		"配置同步已关闭；同步文件保留在原处":                                   "Configuration sync is off; the sync file stays where it is",
-		"已开启配置同步并加载了文件中的配置":                                   "Configuration sync is on, and the configuration in the file was loaded",
+		"同步文件中设置了 WebDAV 密码，但本机钥匙串里没有；需要备份到 WebDAV 时请重新输入密码。":   "The sync file says a WebDAV password is set, but this machine's keychain does not have it; enter the password again to back up to WebDAV.",
+		"同步文件中设置了 WebDAV 密码，但本机凭据管理器里没有；需要备份到 WebDAV 时请重新输入密码。": "The sync file says a WebDAV password is set, but this machine's Credential Manager does not have it; enter the password again to back up to WebDAV.",
+		"配置同步已关闭；同步文件保留在原处":                                     "Configuration sync is off; the sync file stays where it is",
+		"已开启配置同步并加载了文件中的配置":                                     "Configuration sync is on, and the configuration in the file was loaded",
 		"选择同步文件夹": "Choose a sync folder",
 		"选择 OneDrive、坚果云、Dropbox 等同步盘里的文件夹；澜流会在其中保存 lanflow.yaml。": "Choose a folder of OneDrive, Nutstore, Dropbox or another sync drive; Lanflow keeps lanflow.yaml in it.",
 		"同步文件夹中已有配置": "The sync folder already has a configuration",

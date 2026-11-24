@@ -18,6 +18,10 @@ import (
 // caller (a new session on Unix, a detached process on Windows), with the
 // caller's environment (LANFLOW_FAKE, LANFLOW_SOCKET) and no terminal.
 func Start(exe string, args ...string) (int, error) {
+	return start(exe, detachService, args...)
+}
+
+func start(exe string, detach func(*exec.Cmd), args ...string) (int, error) {
 	cmd := exec.Command(exe, args...)
 	cmd.Env = os.Environ()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
@@ -36,7 +40,7 @@ func StartService(exe string, login bool) error {
 	if login {
 		args = append(args, LoginFlag)
 	}
-	_, err := Start(exe, args...)
+	_, err := start(exe, detachService, args...)
 	return err
 }
 
@@ -47,7 +51,7 @@ func StartWindow(exe, open string) error {
 	if open != "" {
 		args = append(args, OpenFlag+open)
 	}
-	_, err := Start(exe, args...)
+	_, err := start(exe, detachWindow, args...)
 	return err
 }
 
@@ -84,7 +88,7 @@ type ConnectOptions struct {
 
 // ErrNotSplit: the serving process is a single-process Lanflow (an older
 // version, or LANFLOW_SINGLE) and showed its own window.
-var ErrNotSplit = errors.New("澜流以单进程方式运行，已显示它自己的窗口")
+var ErrNotSplit = i18n.Error("澜流以单进程方式运行，已显示它自己的窗口")
 
 // dial is remote.Dial; tests replace it.
 var dial = remote.Dial
@@ -114,7 +118,7 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 	c, err := dial(ctx, ro)
 	if errors.Is(err, rpc.ErrNotRunning) && o.Start != nil {
 		if err := o.Start(); err != nil {
-			return nil, rpc.AttachResult{}, fmt.Errorf("无法启动澜流后台服务: %w", err)
+			return nil, rpc.AttachResult{}, fmt.Errorf(i18n.T("无法启动澜流后台服务: %w"), err)
 		}
 		deadline := time.Now().Add(o.Wait)
 		for {
@@ -180,7 +184,7 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 
 // ErrOldService: a Lanflow from before the split serves the local
 // interface (it has the window ops missing); it must be quit first.
-var ErrOldService = errors.New("另一个旧版本的澜流正在运行：请先退出它，再打开澜流")
+var ErrOldService = i18n.Error("另一个旧版本的澜流正在运行：请先退出它，再打开澜流")
 
 // OldServiceText is ErrOldService for the user, translated.
 func OldServiceText() string {
@@ -224,7 +228,7 @@ func (o ConnectOptions) replace(pid int, quit func() error) error {
 	so := o.Stop
 	so.Quit = quit
 	if err := StopService(pid, so); err != nil {
-		return fmt.Errorf("无法结束旧的澜流后台服务: %w", err)
+		return fmt.Errorf(i18n.T("无法结束旧的澜流后台服务: %w"), err)
 	}
 	if o.Cleanup != nil {
 		o.Cleanup()

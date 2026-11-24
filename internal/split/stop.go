@@ -1,10 +1,11 @@
 package split
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"time"
+
+	"lanflow/internal/i18n"
 )
 
 // Ending the service process before another version starts: an update
@@ -60,15 +61,16 @@ func (o *StopOptions) defaults() {
 // reusing the pid; on macOS and Linux same compares the process's start
 // time. nil skips the check.
 var procOps = struct {
-	alive     func(pid int) bool
-	terminate func(pid int) error
-	kill      func(pid int) error
-	pin       func(pid int) (same func() bool, release func())
-	poll      time.Duration
-}{Alive, Terminate, Kill, pinProcess, 100 * time.Millisecond}
+	alive           func(pid int) bool
+	terminate       func(pid int) error
+	kill            func(pid int) error
+	pin             func(pid int) (same func() bool, release func())
+	poll            time.Duration
+	terminateIsKill bool
+}{Alive, Terminate, Kill, pinProcess, 100 * time.Millisecond, terminateIsKill}
 
 // ErrServiceStuck: the service process outlived every step of StopService.
-var ErrServiceStuck = errors.New("旧的澜流后台服务没有退出")
+var ErrServiceStuck = i18n.Error("旧的澜流后台服务没有退出")
 
 // StopService ends the service process pid and waits until it is gone:
 // first politely (o.Quit), then Terminate (SIGTERM: the service still
@@ -86,12 +88,16 @@ func StopService(pid int, o StopOptions) error {
 		same, release = procOps.pin(pid)
 		defer release()
 	}
-	// gone: the service ended and its pid names another process now.
+	// gone: the service ended (either cleanly or its pid was reused).
 	gone := func() bool {
 		if same() {
 			return false
 		}
-		o.Logf("lanflow: the service %d ended (its pid belongs to another process now)", pid)
+		if procOps.alive(pid) {
+			o.Logf("lanflow: the service %d ended (its pid belongs to another process now)", pid)
+		} else {
+			o.Logf("lanflow: the service %d ended", pid)
+		}
 		return true
 	}
 	if o.Quit != nil {
@@ -107,13 +113,19 @@ func StopService(pid int, o StopOptions) error {
 	if gone() {
 		return nil
 	}
+	termWait := o.Term
+	if procOps.terminateIsKill {
+		termWait = o.Kill
+	}
 	if err := procOps.terminate(pid); err != nil && procOps.alive(pid) {
 		o.Logf("lanflow: terminate the service %d: %v", pid, err)
-	} else if waitGone(pid, o.Term) {
+	} else if waitGone(pid, termWait) {
 		o.Logf("lanflow: the service %d ended", pid)
 		return nil
+	} else if procOps.terminateIsKill {
+		return ErrServiceStuck
 	} else {
-		o.Logf("lanflow: the service %d did not end in %s; killing it", pid, o.Term)
+		o.Logf("lanflow: the service %d did not end in %s; killing it", pid, termWait)
 	}
 	if gone() {
 		return nil

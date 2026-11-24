@@ -52,7 +52,11 @@ func (p *Page) syncPassphraseRows(c *ui.Context, st model.ConfigSyncStatus, busy
 	e := p.e
 	desc := i18n.T("把订阅链接和 WebDAV 密码用口令加密后写进同步文件，其他设备（包括 Windows）输入同一口令即可取回。口令本身不保存；丢失口令后，文件中的链接无法恢复，只能在各设备上重新输入。")
 	if !st.Encrypted {
-		desc = i18n.T("关闭时同步文件只写钥匙串引用，另一台设备需要重新输入订阅链接。开启后，链接和 WebDAV 密码用口令加密写进文件；口令丢失后无法恢复这些链接。")
+		if e.Mac {
+			desc = i18n.T("关闭时同步文件只写钥匙串引用，另一台设备需要重新输入订阅链接。开启后，链接和 WebDAV 密码用口令加密写进文件；口令丢失后无法恢复这些链接。")
+		} else {
+			desc = i18n.T("关闭时同步文件只写凭据引用，另一台设备需要重新输入订阅链接。开启后，链接和 WebDAV 密码用口令加密写进文件；口令丢失后无法恢复这些链接。")
+		}
 	}
 	e.Kit.Row(c, i18n.T("用口令加密链接"), desc, func() {
 		on := st.Encrypted
@@ -60,10 +64,16 @@ func (p *Page) syncPassphraseRows(c *ui.Context, st model.ConfigSyncStatus, busy
 			if on {
 				p.openPassDialog(passSet)
 			} else {
+				confirmBody := i18n.T("同步文件改回只写钥匙串引用，加密的链接和 WebDAV 密码从文件中移除，本机钥匙串里的派生密钥也会删除。其他设备之后需要自己的钥匙串里有链接，否则要重新输入。")
+				doneMsg := i18n.T("已关闭口令加密；同步文件改回钥匙串引用")
+				if !e.Mac {
+					confirmBody = i18n.T("同步文件改回只写凭据引用，加密的链接和 WebDAV 密码从文件中移除，本机凭据管理器里的派生密钥也会删除。其他设备之后需要自己的凭据存储里有链接，否则要重新输入。")
+					doneMsg = i18n.T("已关闭口令加密；同步文件改回凭据引用")
+				}
 				e.Confirm(i18n.T("关闭口令加密？"),
-					i18n.T("同步文件改回只写钥匙串引用，加密的链接和 WebDAV 密码从文件中移除，本机钥匙串里的派生密钥也会删除。其他设备之后需要自己的钥匙串里有链接，否则要重新输入。"),
+					confirmBody,
 					i18n.T("关闭加密"), true, func() {
-						p.syncJob(func() error { return e.API.SetSyncPassphrase("") }, i18n.T("已关闭口令加密；同步文件改回钥匙串引用"))
+						p.syncJob(func() error { return e.API.SetSyncPassphrase("") }, doneMsg)
 					})
 			}
 		}
@@ -75,8 +85,12 @@ func (p *Page) syncPassphraseRows(c *ui.Context, st model.ConfigSyncStatus, busy
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Button(c, i18n.T("修改口令…")).Disabled(busy).OnClick(func() { p.openPassDialog(passChange) })
 			ui.Button(c, i18n.T("在本机忘记口令")).Disabled(busy).OnClick(func() {
+				forgetBody := i18n.T("本机钥匙串中由口令派生的密钥会被删除。本机已有的订阅链接保留；之后同步文件中新增或修改的链接，需要重新输入口令才能取回。")
+				if !e.Mac {
+					forgetBody = i18n.T("本机凭据管理器中由口令派生的密钥会被删除。本机已有的订阅链接保留；之后同步文件中新增或修改的链接，需要重新输入口令才能取回。")
+				}
 				e.Confirm(i18n.T("在本机忘记同步口令？"),
-					i18n.T("本机钥匙串中由口令派生的密钥会被删除。本机已有的订阅链接保留；之后同步文件中新增或修改的链接，需要重新输入口令才能取回。"),
+					forgetBody,
 					i18n.T("忘记口令"), false, func() {
 						p.syncJob(func() error { return e.API.ForgetSyncPassphrase() }, i18n.T("已在本机忘记同步口令"))
 					})
@@ -160,7 +174,13 @@ func (p *Page) passphraseDialog(c *ui.Context, t *ui.Theme) {
 	case passChange:
 		title, intro, okLabel = i18n.T("修改同步口令"), i18n.T("所有链接会用新口令重新加密并写回同步文件；其他设备读到新文件后，需要输入新口令。"), i18n.T("修改口令")
 	case passUnlock:
-		title, intro, okLabel = i18n.T("输入同步口令"), i18n.T("输入在其他设备上设置的同步口令，以解锁同步文件中的订阅链接。口令正确后，链接存入本机钥匙串，之后启动无需再次输入。"), i18n.T("解锁")
+		title = i18n.T("输入同步口令")
+		if p.e.Mac {
+			intro = i18n.T("输入在其他设备上设置的同步口令，以解锁同步文件中的订阅链接。口令正确后，链接存入本机钥匙串，之后启动无需再次输入。")
+		} else {
+			intro = i18n.T("输入在其他设备上设置的同步口令，以解锁同步文件中的订阅链接。口令正确后，链接存入本机凭据管理器，之后启动无需再次输入。")
+		}
+		okLabel = i18n.T("解锁")
 	}
 	ui.Modal(c, &d.open, func() {
 		ui.Column(c.Key("sync-pass")).Width(env.DialogWidth(c, 440)).Gap(12).Children(func() {

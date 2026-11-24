@@ -25,7 +25,7 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 GOOS_T="$1"; GOARCH_T="$2"; DEST="$3"
 [ "$(basename "$DEST")" = licenses ] || die "<dest> must be a directory named licenses, got $DEST"
 
-PINNED_VERSION="$(sed -n 's/^PINNED_VERSION="\([^"]*\)".*/\1/p' scripts/fetch-core.sh)"
+PINNED_VERSION="$(sed -n 's/^PINNED_VERSION="\([^"]*\)".*/\1/p' scripts/fetch-core.sh | tr -d '\r')"
 MIHOMO_VERSION="${MIHOMO_VERSION:-$PINNED_VERSION}"
 [ -n "$MIHOMO_VERSION" ] || die "cannot read PINNED_VERSION from scripts/fetch-core.sh"
 MIHOMO_LICENSE="bin/licenses/mihomo/LICENSE"
@@ -134,7 +134,7 @@ copy_licenses() {
 
 # The Go distribution (standard library and runtime, linked into both
 # programs).
-GOROOT_DIR="$(go env GOROOT)"
+GOROOT_DIR="$(go env GOROOT | tr -d '\r')"
 GOROOT_DIR="${GOROOT_DIR//\\//}"
 copy_licenses "$GOROOT_DIR" "$DEST/go/go"
 [ -f "$DEST/go/go/LICENSE" ] || die "no LICENSE in GOROOT ($GOROOT_DIR)"
@@ -147,6 +147,9 @@ go version > "$DEST/go/go/VERSION.txt"
 # file in its root stops the script.
 modules=0
 while IFS=$'\t' read -r mod moddir pkgdir; do
+  mod="${mod%$'\r'}"
+  moddir="${moddir%$'\r'}"
+  pkgdir="${pkgdir%$'\r'}"
   [ -n "$mod" ] || continue
   moddir="${moddir//\\//}"
   pkgdir="${pkgdir//\\//}"

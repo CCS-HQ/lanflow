@@ -329,6 +329,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: scripts/build-app.sh windows amd64
 
+      - name: Check bundled helper hash
+        run: |
+          want="$(sed -n 's/.*ExpectedHelperSHA256=\([0-9a-f]*\).*/\1/p' "bin/windows-amd64/app-ldflags")"
+          got="$(sha256sum "resources/windows-amd64/lanflow-helper.exe" | cut -d' ' -f1)"
+          echo "windows/amd64: linked ${want}, bundled ${got}"
+          [ -n "$want" ] && [ "$want" = "$got" ]
+
       - name: Collect artifacts
         run: |
           mkdir -p dist

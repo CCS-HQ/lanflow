@@ -11,8 +11,8 @@ func TestFormatProxyServer(t *testing.T) {
 		port int
 		want string
 	}{
-		{"127.0.0.1", 7890, "http=127.0.0.1:7890;https=127.0.0.1:7890;socks=127.0.0.1:7890"},
-		{"::1", 7890, "http=[::1]:7890;https=[::1]:7890;socks=[::1]:7890"},
+		{"127.0.0.1", 7890, "127.0.0.1:7890"},
+		{"::1", 7890, "[::1]:7890"},
 	}
 	for _, c := range cases {
 		if got := formatProxyServer(c.host, c.port); got != c.want {
@@ -53,7 +53,7 @@ func TestProxyServerRoundTrip(t *testing.T) {
 
 func TestFormatProxyOverride(t *testing.T) {
 	got := formatProxyOverride(DefaultBypass)
-	want := "localhost;127.0.0.1;::1;192.168.0.0/16;10.0.0.0/8;172.16.0.0/12;*.local;*.lan;<local>"
+	want := "localhost;127.0.0.1;::1;192.168.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;*.local;*.lan;<local>"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -62,6 +62,9 @@ func TestFormatProxyOverride(t *testing.T) {
 	}
 	if got := formatProxyOverride([]string{"a", "<LOCAL>", "a"}); got != "a;<LOCAL>" {
 		t.Fatalf("dedup/case handling wrong: %q", got)
+	}
+	if got := formatProxyOverride([]string{"10.2.3.4/32", "192.168.5.0/24", "10.0.0.0/8"}); got != "10.2.3.4;192.168.5.*;10.*;<local>" {
+		t.Fatalf("cidr expansion wrong: %q", got)
 	}
 }
 

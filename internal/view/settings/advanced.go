@@ -252,7 +252,11 @@ func (p *Page) advancedTab(c *ui.Context, t *ui.Theme, s model.Settings, st mode
 				p.textRow(c, t, i18n.T("只接管这些网段"), i18n.T("设置后只有这些网段进入 TUN，每行一个（route-address）"), "adv-tun-route", &f.tunRoute, 1, false)
 				p.textRow(c, t, i18n.T("不接管的网段"), i18n.T("这些网段绕过 TUN，每行一个；与 aTrust 兼容加入的网段合并（route-exclude-address）"), "adv-tun-exclude", &f.tunExclude, 1, false)
 				p.textRow(c, t, i18n.T("DNS 劫持"), i18n.T("截获到这些地址的 DNS 查询，每行一个；留空为 any:53 和 tcp://any:53（dns-hijack）"), "adv-tun-hijack", &f.tunHijack, 1, false)
-				p.advInput(c, i18n.T("网卡名称"), i18n.T("TUN 网卡的名称；留空用澜流固定的名称（device）"), "adv-tun-device", &f.tunDevice, 160, "utun1700")
+				tunDevicePH := "utun1700"
+				if !e.Mac {
+					tunDevicePH = "Lanflow"
+				}
+				p.advInput(c, i18n.T("网卡名称"), i18n.T("TUN 网卡的名称；留空用澜流固定的名称（device）"), "adv-tun-device", &f.tunDevice, 160, tunDevicePH)
 				p.textRow(c, t, i18n.T("只在这些网卡上接管"), i18n.T("每行一个网卡名（include-interface）"), "adv-tun-include", &f.tunInclude, 1, false)
 				p.textRow(c, t, i18n.T("不在这些网卡上接管"), i18n.T("每行一个网卡名（exclude-interface）"), "adv-tun-exclif", &f.tunExclIf, 1, false)
 			})
@@ -277,7 +281,11 @@ func (p *Page) advancedTab(c *ui.Context, t *ui.Theme, s model.Settings, st mode
 				e.Kit.Row(c, i18n.T("禁用 TCP 保活"), i18n.T("部分网络下可减少无效流量（disable-keep-alive）"), func() {
 					ui.Switch(c.Key("adv-ka-off"), &f.disableKeepAlive).Label(i18n.T("禁用 TCP 保活"))
 				})
-				p.advInput(c, i18n.T("出站网卡"), i18n.T("内核的出站流量绑定到这个网卡，例如 en0；留空自动选择（interface-name）"), "adv-iface", &f.ifaceName, 160, "")
+				ifaceDesc := i18n.T("内核的出站流量绑定到这个网卡，例如 en0；留空自动选择（interface-name）")
+				if !e.Mac {
+					ifaceDesc = i18n.T("内核的出站流量绑定到这个网卡，例如 WLAN；留空自动选择（interface-name）")
+				}
+				p.advInput(c, i18n.T("出站网卡"), ifaceDesc, "adv-iface", &f.ifaceName, 160, "")
 				glOpts := []string{i18n.T("默认"), i18n.T("省内存"), i18n.T("标准")}
 				glVals := []string{"", "memconservative", "standard"}
 				p.selectRow(c, i18n.T("地理数据加载"), i18n.T("省内存模式启动更快、占用更少（geodata-loader）"), mapName(f.geodataLoader, glVals, glOpts), glOpts, func(v string) {

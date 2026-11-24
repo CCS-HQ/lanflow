@@ -1,8 +1,12 @@
 package env
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"lanflow/internal/geo"
@@ -27,6 +31,26 @@ func FlagPrefix(cc string) string {
 		return f + " "
 	}
 	return ""
+}
+
+// FlagPrefixFor returns FlagPrefix(cc) on macOS, and "" on platforms whose
+// system emoji font lacks regional-indicator flag glyphs (Windows renders raw
+// ASCII country codes that duplicate English country labels).
+func FlagPrefixFor(mac bool, cc string) string {
+	if !mac {
+		return ""
+	}
+	return FlagPrefix(cc)
+}
+
+// RevealInFolder opens path's enclosing folder in the system file manager,
+// falling back to opening the parent directory when path itself does not exist.
+func RevealInFolder(path string) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		_ = mygo.Shell.OpenPath(filepath.Dir(path))
+		return
+	}
+	mygo.Shell.ShowItemInFolder(path)
 }
 
 // ModeName names a proxy mode: 规则, 全局 or 直连.

@@ -2,6 +2,7 @@ package capture
 
 import (
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -113,7 +114,11 @@ func selectedApp(set model.CaptureSettings, path, name string) bool {
 			if path == "" || a.Match == "" {
 				continue
 			}
-			if pre, wild := strings.CutSuffix(a.Match, "*"); wild && strings.HasPrefix(path, pre) || path == a.Match {
+			if runtime.GOOS == "windows" {
+				if pre, wild := strings.CutSuffix(a.Match, "*"); wild && len(path) >= len(pre) && strings.EqualFold(path[:len(pre)], pre) || strings.EqualFold(path, a.Match) {
+					return true
+				}
+			} else if pre, wild := strings.CutSuffix(a.Match, "*"); wild && strings.HasPrefix(path, pre) || path == a.Match {
 				return true
 			}
 		}

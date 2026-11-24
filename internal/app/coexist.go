@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"lanflow/internal/i18n"
@@ -55,7 +56,7 @@ var ownTUNRanges = []netip.Prefix{
 // isOwnTUN reports whether iface is Lanflow's TUN: the fixed device name
 // first, else (an older core that ignored the name) one of its addresses.
 func isOwnTUN(iface string) bool {
-	if iface == profile.TUNDevice {
+	if iface == profile.TUNDevice || strings.EqualFold(iface, profile.WindowsTUNDevice) {
 		return true
 	}
 	i, err := net.InterfaceByName(iface)

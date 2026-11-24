@@ -259,6 +259,7 @@ func (s *Server) client(ctx context.Context) (*remote.Client, error) {
 	if s.conn != nil {
 		select {
 		case <-s.conn.Conn().Done():
+			_ = s.conn.Close()
 			s.conn = nil
 		default:
 			return s.conn, nil

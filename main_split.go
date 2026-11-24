@@ -50,6 +50,7 @@ func runService(args split.Args) {
 	var startMu sync.Mutex
 	var lastStart time.Time
 	showWindow := func(arg string) {
+		split.AllowForeground(0)
 		if srv != nil && srv.SendUI(rpc.UIShow, arg) {
 			return
 		}
@@ -62,6 +63,7 @@ func runService(args split.Args) {
 		}
 		lastStart = time.Now()
 		startMu.Unlock()
+		split.AllowForeground(0)
 		if err := split.StartWindow(exe, arg); err != nil {
 			log.Printf("lanflow: start the window: %v", err)
 		}
@@ -75,6 +77,7 @@ func runService(args split.Args) {
 		Mac:        runtime.GOOS == "darwin",
 		ShowWindow: showWindow,
 		ToggleWindow: func() {
+			split.AllowForeground(0)
 			if srv == nil || !srv.SendUI(rpc.UIToggle, "") {
 				showWindow("")
 			}
@@ -374,6 +377,7 @@ func runWindow(args split.Args) {
 	case errors.Is(err, split.ErrNotSplit), err == nil && res.Forwarded:
 		return // another window shows instead
 	case errors.Is(err, split.ErrOldService):
+		i18n.SetLang(i18n.FromSystem(mygo.App.PreferredLanguages()))
 		showError(split.OldServiceText())
 		return
 	case err != nil:
@@ -384,10 +388,11 @@ func runWindow(args split.Args) {
 		log.Printf("lanflow: no service (%v); running as one process", err)
 		os.Args = append(os.Args, split.FallbackFlag)
 		if !mygo.App.RequestSingleInstanceLock() {
+			i18n.SetLang(i18n.FromSystem(mygo.App.PreferredLanguages()))
 			showError(split.NoServiceText(err))
 			return
 		}
-		runSingle()
+		runSingle(true)
 		return
 	}
 	client = cl
@@ -521,7 +526,7 @@ func runWindow(args split.Args) {
 		}
 		sh.RegisterShortcuts() // through the service (Options.SetShortcut)
 		sh.CheckUpdatesAtLaunch()
-		for _, a := range append([]string{args.Open}, queued...) {
+		for _, a := range append([]string{firstOf(args.Open, args.Link)}, queued...) {
 			sh.Open(a)
 		}
 		if res.PID != 0 && cl.Conn() != nil {

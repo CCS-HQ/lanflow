@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"lanflow/internal/capture/ca"
+	"lanflow/internal/core"
 )
 
 // Start is the first line the window writes to the agent's stdin.
@@ -94,6 +95,9 @@ func Main(stdin io.Reader, stdout io.Writer, keys ca.KeyStore) int {
 		debug.SetMemoryLimit(st.MemLimit)
 	} else {
 		debug.SetMemoryLimit(256 << 20)
+	}
+	if st.Config.CoreWorkDir != "" {
+		core.TrustWorkDir(st.Config.CoreWorkDir)
 	}
 	root, pemb, created, err := loadRoot(keys, st, false)
 	if err != nil {

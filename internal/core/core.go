@@ -92,6 +92,11 @@ func ControllerAddress() string { return controllerAddress() }
 // (unix socket or named pipe). Used by package controller.
 func Dial(ctx context.Context, address string) (net.Conn, error) { return dial(ctx, address) }
 
+// TrustWorkDir registers a core work directory whose recorded mihomo.pid
+// belongs to a core started by the parent Lanflow service (used by child
+// processes such as capture-agent on Windows). No-op on non-Windows.
+func TrustWorkDir(workDir string) { trustWorkDir(workDir) }
+
 // Manager owns the core lifecycle.
 type Manager struct{ m *manager }
 

@@ -139,6 +139,10 @@ func currentUID() int {
 	return os.Getuid()
 }
 
+// verifyClient / verifyServer require the other end to run as the current user.
+func verifyClient(conn net.Conn) error { return verifyPeer(conn) }
+func verifyServer(conn net.Conn) error { return verifyPeer(conn) }
+
 // verifyPeer requires the other end to run as the current user.
 func verifyPeer(conn net.Conn) error {
 	uid, err := peerUID(conn)

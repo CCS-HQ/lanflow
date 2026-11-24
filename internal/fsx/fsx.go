@@ -59,6 +59,7 @@ func CreateTemp(path string, perm os.FileMode) (*os.File, error) {
 		os.Remove(f.Name())
 		return nil, err
 	}
+	hideTempFile(f.Name())
 	return f, nil
 }
 
@@ -79,17 +80,38 @@ func Commit(f *os.File, path string) error {
 		os.Remove(name)
 		return err
 	}
+	unhideFile(path)
 	return nil
 }
 
 // Rename renames oldpath over newpath (replacing it) and syncs the
 // directory of newpath so the rename survives a crash.
 func Rename(oldpath, newpath string) error {
-	if err := retryBusy(func() error { return os.Rename(oldpath, newpath) }); err != nil {
+	err := retryBusy(func() error {
+		err := os.Rename(oldpath, newpath)
+		if err != nil && isReadOnlyDest(newpath) && isAccessDenied(err) {
+			return nonRetryable{err}
+		}
+		return err
+	})
+	if err != nil {
+		var nr nonRetryable
+		if errors.As(err, &nr) {
+			return nr.err
+		}
 		return err
 	}
 	SyncDir(filepath.Dir(newpath))
 	return nil
+}
+
+type nonRetryable struct{ err error }
+
+func (e nonRetryable) Error() string { return e.err.Error() }
+
+func isAccessDenied(err error) bool {
+	var e syscall.Errno
+	return runtime.GOOS == "windows" && errors.As(err, &e) && e == 5
 }
 
 // SyncDir flushes a directory's entries to disk. Best effort: not every

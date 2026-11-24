@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -193,6 +194,14 @@ type syncPersist struct {
 
 func (s *Service) syncStatePath() string { return filepath.Join(s.opt.DataDir, syncStateFile) }
 
+func syncPathKey(p string) string {
+	p = filepath.Clean(p)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(p)
+	}
+	return p
+}
+
 // loadSyncHashes reads the hashes once; cs.mu held.
 func (s *Service) loadSyncHashesLocked() {
 	if s.cs.loaded {
@@ -206,15 +215,18 @@ func (s *Service) loadSyncHashesLocked() {
 	}
 	var p syncPersist
 	if json.Unmarshal(data, &p) == nil && p.Hashes != nil {
-		s.cs.hashes = p.Hashes
+		for k, v := range p.Hashes {
+			s.cs.hashes[syncPathKey(k)] = v
+		}
 	}
 }
 
 // rememberHash records the content last written or processed at path.
 func (s *Service) rememberHash(path, hash string) {
+	key := syncPathKey(path)
 	s.cs.mu.Lock()
 	s.loadSyncHashesLocked()
-	s.cs.hashes[path] = hash
+	s.cs.hashes[key] = hash
 	data, _ := json.Marshal(syncPersist{Hashes: s.cs.hashes})
 	s.cs.mu.Unlock()
 	if err := writeFileAtomic(s.syncStatePath(), data, 0o600); err != nil {
@@ -223,10 +235,11 @@ func (s *Service) rememberHash(path, hash string) {
 }
 
 func (s *Service) knownHash(path string) string {
+	key := syncPathKey(path)
 	s.cs.mu.Lock()
 	defer s.cs.mu.Unlock()
 	s.loadSyncHashesLocked()
-	return s.cs.hashes[path]
+	return s.cs.hashes[key]
 }
 
 // ---- loop ----
@@ -272,7 +285,7 @@ func (s *Service) syncStep() {
 	defer s.cs.runMu.Unlock()
 	path := filepath.Join(dir, syncfile.FileName)
 	s.cs.mu.Lock()
-	moved := s.cs.snapDir != "" && s.cs.snapDir != dir
+	moved := s.cs.snapDir != "" && syncPathKey(s.cs.snapDir) != syncPathKey(dir)
 	s.cs.mu.Unlock()
 	if moved {
 		s.resetSeal() // another folder: its file says whether it is sealed
@@ -281,7 +294,7 @@ func (s *Service) syncStep() {
 	snap := syncfile.Look(dir)
 
 	s.cs.mu.Lock()
-	if s.cs.snapDir != dir || !snap.Same(s.cs.snap) {
+	if syncPathKey(s.cs.snapDir) != syncPathKey(dir) || !snap.Same(s.cs.snap) {
 		s.cs.snap, s.cs.snapDir, s.cs.changedAt = snap, dir, now
 	}
 	debounce := s.cs.debounce
@@ -323,15 +336,16 @@ func (s *Service) syncStep() {
 func (s *Service) checkSyncFile(dir, path string, snap syncfile.Snapshot, now time.Time) bool {
 	wall := time.Now() // file times are wall-clock times
 	s.cs.mu.Lock()
-	unchanged := !s.cs.readAt.IsZero() && s.cs.readDir == dir && snap.Same(s.cs.read) && wall.Sub(s.cs.readAt) < syncRecheck
+	unchanged := !s.cs.readAt.IsZero() && syncPathKey(s.cs.readDir) == syncPathKey(dir) && snap.Same(s.cs.read) && wall.Sub(s.cs.readAt) < syncRecheck
 	held := s.cs.held
 	s.cs.mu.Unlock()
 	if !s.sealPrimed() {
 		unchanged = false // the file's encryption block must be read before anything is written
 	}
-	waiting := held.path == path && (held.retryAt.IsZero() || now.Before(held.retryAt))
-	if unchanged && (held.path != path || waiting) {
-		return held.path != path
+	sameHeld := held.path != "" && syncPathKey(held.path) == syncPathKey(path)
+	waiting := sameHeld && (held.retryAt.IsZero() || now.Before(held.retryAt))
+	if unchanged && (!sameHeld || waiting) {
+		return !sameHeld
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -352,7 +366,7 @@ func (s *Service) checkSyncFile(dir, path string, snap syncfile.Snapshot, now ti
 		s.releaseHeld()
 		s.ensureSealPrimed(data)
 		return true
-	case held.path == path && held.hash == h && waiting:
+	case sameHeld && held.hash == h && waiting:
 		return false // the version refused before; still not its turn
 	}
 	s.loadExternal(path, data, h)

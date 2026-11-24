@@ -346,7 +346,7 @@ func (s *Shell) saveFeedback(id string) {
 			if err != nil {
 				return
 			}
-			mygo.Shell.ShowItemInFolder(path)
+			env.RevealInFolder(path)
 			s.toast(toastReq{msg: i18n.Tf("已保存到 %s", filepath.Base(path))})
 		})
 	})

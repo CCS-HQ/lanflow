@@ -14,7 +14,7 @@ func init() {
 		"首次开启仍会询问安装权限组件":    "The first time still asks to install the helper",
 		"规则 → 全局 → 直连 → 规则": "Rule → global → direct → rule",
 		"窗口在前台时隐藏，否则显示":     "Hides the window when it is in front, shows it otherwise",
-		"测速主代理组，和菜单栏的「测试当前组延迟」一样": "Tests the main group, like \"Test Current Group Delay\" in the menu bar",
+		"测速主代理组，和托盘菜单的「测试当前组延迟」一样": "Tests the main group, like \"Test Current Group Delay\" in the tray menu",
 
 		// internal/view/hotkey/hotkey.go
 		"快捷键至少要包含 ⌘ / Ctrl / Alt 之一": "A shortcut needs at least one of ⌘ / Ctrl / Alt",

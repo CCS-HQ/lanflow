@@ -11,6 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func pathKey(s string) string { return s }
+
 // prepareWorkDir creates dir (0700) and requires it to be a real
 // directory owned by the helper's own user, root. Its parent is ConfigDir,
 // which only root writes, so nobody else can have put it there.

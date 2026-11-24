@@ -22,7 +22,7 @@ func Endpoint(string) string {
 	}
 	sid, err := currentSID()
 	if err != nil {
-		return `\\.\pipe\lanflow-unknown`
+		return fmt.Sprintf(`\\.\pipe\lanflow-pid-%d`, os.Getpid())
 	}
 	return `\\.\pipe\lanflow-` + sid
 }
@@ -37,7 +37,7 @@ func Listen(dataDir string) (net.Listener, error) {
 		return nil, err
 	}
 	l, err := winio.ListenPipe(Endpoint(dataDir), &winio.PipeConfig{
-		SecurityDescriptor: "D:P(A;;GA;;;" + sid + ")",
+		SecurityDescriptor: "D:P(D;;GA;;;NU)(A;;GA;;;" + sid + ")",
 		InputBufferSize:    64 << 10,
 		OutputBufferSize:   64 << 10,
 	})
@@ -69,24 +69,24 @@ func currentSID() (string, error) {
 	return tu.User.Sid.String(), nil
 }
 
-// verifyPeer requires the process at the other end of the pipe (the
-// client for the server, the server for a client) to run as the current
-// user.
-func verifyPeer(conn net.Conn) error {
+// verifyClient checks the client process on a server-side pipe handle.
+func verifyClient(conn net.Conn) error {
+	return verifyPipePID(conn, windows.GetNamedPipeClientProcessId)
+}
+
+// verifyServer checks the server process on a client-side pipe handle.
+func verifyServer(conn net.Conn) error {
+	return verifyPipePID(conn, windows.GetNamedPipeServerProcessId)
+}
+
+func verifyPipePID(conn net.Conn, getPID func(windows.Handle, *uint32) error) error {
 	fc, ok := conn.(interface{ Fd() uintptr })
 	if !ok {
 		return errors.New("无法获取管道句柄")
 	}
-	h := windows.Handle(fc.Fd())
 	var pid uint32
-	if err := windows.GetNamedPipeClientProcessId(h, &pid); err != nil {
+	if err := getPID(windows.Handle(fc.Fd()), &pid); err != nil {
 		return fmt.Errorf("无法获取对端进程: %w", err)
-	}
-	if pid == uint32(os.Getpid()) {
-		// We are the client: check the server instead.
-		if err := windows.GetNamedPipeServerProcessId(h, &pid); err != nil {
-			return fmt.Errorf("无法获取对端进程: %w", err)
-		}
 	}
 	want, err := currentSID()
 	if err != nil {

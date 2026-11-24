@@ -8,7 +8,13 @@ import (
 	"syscall"
 )
 
-func detach(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} }
+const terminateIsKill = false
+
+func detachService(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} }
+func detachWindow(cmd *exec.Cmd)  { cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} }
+
+// AllowForeground is a no-op off Windows.
+func AllowForeground(int) {}
 
 // Alive reports whether process pid still runs.
 func Alive(pid int) bool {

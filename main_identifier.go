@@ -13,7 +13,12 @@ const appIdentifier = "com.lanflow.app"
 // installer name the same folder; it writes them quoted.
 func sameInstallDir(a, b string) bool {
 	clean := func(s string) string {
-		return strings.ToLower(filepath.Clean(strings.Trim(strings.TrimSpace(s), `"`)))
+		s = strings.Trim(strings.TrimSpace(s), `"`)
+		if s == "" {
+			return ""
+		}
+		return strings.ToLower(filepath.Clean(s))
 	}
-	return a != "" && clean(a) == clean(b)
+	ca, cb := clean(a), clean(b)
+	return ca != "" && ca == cb
 }

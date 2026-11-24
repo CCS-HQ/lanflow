@@ -1,8 +1,11 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,9 +44,9 @@ func (p *Policy) Validate(spec protocol.Spec) (protocol.Spec, error) {
 	// Binary: only the recorded copy (or the source it was copied from,
 	// when that source is still byte-identical) is acceptable.
 	switch {
-	case spec.Bin == c.Core:
-	case c.CoreSource != "" && spec.Bin == c.CoreSource:
-		sum, err := FileSHA256(spec.Bin)
+	case samePath(filepath.Clean(spec.Bin), filepath.Clean(c.Core)):
+	case c.CoreSource != "" && samePath(filepath.Clean(spec.Bin), filepath.Clean(c.CoreSource)):
+		sum, err := sourceSHA256(spec.Bin)
 		if err != nil {
 			return out, fmt.Errorf("无法读取内核 %s: %w", spec.Bin, err)
 		}
@@ -255,3 +258,16 @@ func FilterEnv(env []string) ([]string, error) {
 }
 
 func envAllowed(key string) bool { return allowedEnv[key] }
+
+func sourceSHA256(path string) (string, error) {
+	f, err := openSource(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, io.LimitReader(f, 256<<20)); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}

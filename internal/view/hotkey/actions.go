@@ -1,6 +1,7 @@
 package hotkey
 
 import (
+	"runtime"
 	"sync"
 
 	"lanflow/internal/i18n"
@@ -48,25 +49,32 @@ func ActionDesc(action string) string {
 	case model.ShortcutWindow:
 		return i18n.T("窗口在前台时隐藏，否则显示")
 	case model.ShortcutTestDelay:
-		return i18n.T("测速主代理组，和菜单栏的「测试当前组延迟」一样")
+		return i18n.T("测速主代理组，和托盘菜单的「测试当前组延迟」一样")
 	}
 	return ""
 }
 
 // Conflict returns the other action already bound to acc in set, or ""
-// when acc is free. Accelerators are compared in canonical form.
+// when acc is free. Accelerators are compared in canonical form for the
+// current OS.
 func Conflict(set model.Settings, action, acc string) string {
+	return ConflictFor(set, action, acc, runtime.GOOS == "darwin")
+}
+
+// ConflictFor is Conflict with an explicit platform flag mac so callers
+// with an Env (and cross-platform tests) resolve CmdOrCtrl consistently.
+func ConflictFor(set model.Settings, action, acc string, mac bool) string {
 	c, err := Parse(acc)
 	if err != nil {
 		return ""
 	}
-	want := c.String()
+	want := c.Normalize(mac).String()
 	for _, a := range model.ShortcutActions {
 		if a == action {
 			continue
 		}
 		other, err := Parse(set.ShortcutOf(a))
-		if err == nil && other.String() == want {
+		if err == nil && other.Normalize(mac).String() == want {
 			return a
 		}
 	}

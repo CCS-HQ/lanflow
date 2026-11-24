@@ -4,8 +4,12 @@ package helper
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 // While the verified helper is held, nobody can rewrite, replace or
@@ -44,5 +48,52 @@ func TestLockVerifiedHelper(t *testing.T) {
 	}
 	if _, err := lockVerifiedHelper(bin + ".missing"); err == nil {
 		t.Error("a missing helper was locked")
+	}
+}
+
+func TestLockVerifiedHelperShortPathAndJunction(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "Very Long Helper Directory")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(realDir, "lanflow-helper.exe")
+	if err := os.WriteFile(bin, []byte("helper bytes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	old := ExpectedHelperSHA256
+	t.Cleanup(func() { ExpectedHelperSHA256 = old })
+	sum, err := fileSHA256(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ExpectedHelperSHA256 = sum
+
+	// 8.3 short path should be accepted when it does not traverse a reparse point.
+	if p, err := windows.UTF16PtrFromString(bin); err == nil {
+		buf := make([]uint16, windows.MAX_LONG_PATH)
+		if n, err := windows.GetShortPathName(p, &buf[0], uint32(len(buf))); err == nil && n > 0 && int(n) < len(buf) {
+			shortBin := windows.UTF16ToString(buf[:n])
+			release, err := lockVerifiedHelper(shortBin)
+			if err != nil {
+				t.Fatalf("short path %q rejected: %v", shortBin, err)
+			}
+			release()
+		}
+	}
+
+	// A directory junction along the path must still be rejected.
+	linkDir := filepath.Join(base, "junction-dir")
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", linkDir, realDir).CombinedOutput(); err != nil {
+		t.Skipf("mklink /J unavailable: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	t.Cleanup(func() { _ = os.Remove(linkDir) })
+
+	if release, err := lockVerifiedHelper(filepath.Join(linkDir, "lanflow-helper.exe")); err == nil {
+		release()
+		t.Fatal("helper reached through a directory junction was accepted")
+	} else if !strings.Contains(err.Error(), "重解析点") {
+		t.Fatalf("expected reparse-point error, got: %v", err)
 	}
 }

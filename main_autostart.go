@@ -66,7 +66,7 @@ func applyAutostart(exe string, open bool) {
 			}
 		}
 	})
-	if runtime.GOOS == "darwin" && !mygo.App.IsPackaged() {
+	if (runtime.GOOS == "darwin" || runtime.GOOS == "windows") && !mygo.App.IsPackaged() {
 		return // development builds: no stable path to start at login
 	}
 	if real, err := filepath.EvalSymlinks(exe); err == nil {

@@ -3,8 +3,15 @@
 package geo
 
 import (
+	"runtime"
+	"strings"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
+
+var procSHLoadIndirectString = windows.NewLazySystemDLL("shlwapi.dll").NewProc("SHLoadIndirectString")
 
 // osLocalZone reads the Windows time zone from the registry and maps it to
 // an IANA name. TimeZoneKeyName (Vista and later) is the English key name
@@ -35,7 +42,7 @@ func osLocalZone() string {
 }
 
 // keyForStandardName finds the Time Zones key whose localized standard
-// name (Std) is std; "" when none matches.
+// name (Std or resolved MUI_Std) is std; "" when none matches.
 func keyForStandardName(std string) string {
 	zones, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Time Zones`, registry.ENUMERATE_SUB_KEYS|registry.QUERY_VALUE)
 	if err != nil {
@@ -52,10 +59,37 @@ func keyForStandardName(std string) string {
 			continue
 		}
 		s, _, err := z.GetStringValue("Std")
+		mui, _, merr := z.GetStringValue("MUI_Std")
 		z.Close()
-		if err == nil && s == std {
+		if err == nil && strings.EqualFold(s, std) {
+			return name
+		}
+		if merr == nil && mui != "" && strings.EqualFold(loadIndirectString(mui), std) {
 			return name
 		}
 	}
 	return ""
+}
+
+func loadIndirectString(s string) string {
+	if s == "" || procSHLoadIndirectString.Find() != nil {
+		return s
+	}
+	src, err := windows.UTF16PtrFromString(s)
+	if err != nil {
+		return s
+	}
+	var out [256]uint16
+	r, _, _ := procSHLoadIndirectString.Call(
+		uintptr(unsafe.Pointer(src)),
+		uintptr(unsafe.Pointer(&out[0])),
+		uintptr(len(out)),
+		0,
+	)
+	runtime.KeepAlive(src)
+	runtime.KeepAlive(&out[0])
+	if r != 0 {
+		return ""
+	}
+	return windows.UTF16ToString(out[:])
 }

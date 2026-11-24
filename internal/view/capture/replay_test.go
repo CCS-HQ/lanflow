@@ -50,10 +50,14 @@ func TestReplayEditor(t *testing.T) {
 	}
 	waitFor(t, tt, func() bool { return tt.HasText("200 OK") })
 	p.rp.mu.Lock()
-	curl := p.rp.curl()
+	curlDarwin := p.rp.curlFor("darwin")
+	curlWin := p.rp.curlFor("windows")
 	p.rp.mu.Unlock()
-	if !strings.HasPrefix(curl, "curl -X 'POST' 'https://") || !strings.Contains(curl, "--data-raw") {
-		t.Fatalf("curl: %s", curl)
+	if !strings.HasPrefix(curlDarwin, "curl -X 'POST' 'https://") || !strings.Contains(curlDarwin, "--data-raw") {
+		t.Fatalf("darwin curl: %s", curlDarwin)
+	}
+	if !strings.HasPrefix(curlWin, "curl.exe -X 'POST' 'https://") || !strings.Contains(curlWin, "--data-raw") {
+		t.Fatalf("windows curl: %s", curlWin)
 	}
 	if out := os.Getenv("REPLAY_PREVIEW"); out != "" {
 		tt.SetScale(2)

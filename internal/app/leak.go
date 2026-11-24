@@ -17,6 +17,7 @@ import (
 	"lanflow/internal/locate"
 	"lanflow/internal/model"
 	"lanflow/internal/netx"
+	"lanflow/internal/platform/sysdns"
 )
 
 // 泄漏检查 (docs/design.md §5.7, docs/advanced.md §5): does anything bypass
@@ -267,7 +268,11 @@ func dnsLeakItem(p dnsProbe) model.LeakItem {
 	case p.tun && p.fakeIP:
 		item.Status = model.LeakFail
 		item.Summary = i18n.T("系统 DNS 请求未经过澜流")
-		item.Detail = i18n.Tf("TUN 已开启，但系统解析器返回了真实地址（%s），说明域名查询绕过了内核，直接发给了系统 DNS（%s）。请在设置 › 代理中开启「自动设置系统 DNS」，或把系统 DNS 改为任意公网地址，让 TUN 接管 53 端口的查询。", strings.Join(p.sysAnswers, ", "), sysDNS)
+		if sysdns.Supported() {
+			item.Detail = i18n.Tf("TUN 已开启，但系统解析器返回了真实地址（%s），说明域名查询绕过了内核，直接发给了系统 DNS（%s）。请在设置 › 代理中开启「自动设置系统 DNS」，或把系统 DNS 改为任意公网地址，让 TUN 接管 53 端口的查询。", strings.Join(p.sysAnswers, ", "), sysDNS)
+		} else {
+			item.Detail = i18n.Tf("TUN 已开启，但系统解析器返回了真实地址（%s），说明域名查询绕过了内核，直接发给了系统 DNS（%s）。请在系统网络设置中把当前连接的 DNS 改为公共 DNS，或检查本机 VPN/防病毒拦截，让 TUN 接管 53 端口的查询。", strings.Join(p.sysAnswers, ", "), sysDNS)
+		}
 	case p.tun:
 		if overlaps(p.sysAnswers, p.coreAnswers) {
 			item.Status = model.LeakOK
@@ -395,7 +400,11 @@ func dnsCompareItem(p dnsCompareProbe) model.LeakItem {
 	case len(suspicious) > 0:
 		item.Status = model.LeakWarn
 		item.Summary = i18n.Tf("系统解析器对 %s 的结果与内核和公共 DNS 都不同", strings.Join(suspicious, "、"))
-		item.Detail = i18n.T("系统 DNS 返回的地址既不是内核解析到的，也不是公共 DNS 解析到的，可能被运营商劫持或污染。CDN 域名在不同地区本来就会返回不同地址，若该域名使用 CDN，这可能是正常现象；若是普通域名，建议开启 TUN 或「自动设置系统 DNS」让查询经过澜流。")
+		if sysdns.Supported() {
+			item.Detail = i18n.T("系统 DNS 返回的地址既不是内核解析到的，也不是公共 DNS 解析到的，可能被运营商劫持或污染。CDN 域名在不同地区本来就会返回不同地址，若该域名使用 CDN，这可能是正常现象；若是普通域名，建议开启 TUN 或「自动设置系统 DNS」让查询经过澜流。")
+		} else {
+			item.Detail = i18n.T("系统 DNS 返回的地址既不是内核解析到的，也不是公共 DNS 解析到的，可能被运营商劫持或污染。CDN 域名在不同地区本来就会返回不同地址，若该域名使用 CDN，这可能是正常现象；若是普通域名，建议开启 TUN 让查询经过澜流。")
+		}
 	case len(unresolved) > 0:
 		item.Status = model.LeakWarn
 		item.Summary = i18n.Tf("无法完成 %s 的解析对比", strings.Join(unresolved, "、"))

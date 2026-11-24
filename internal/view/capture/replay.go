@@ -2,6 +2,7 @@ package capture
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -184,12 +185,21 @@ func (p *Page) sendReplay() {
 	}()
 }
 
-// curl renders the editor as a curl command (single-quoted for a POSIX
-// shell). Call with mu held.
+// curl renders the editor as a curl command for the current OS shell.
+// Call with mu held.
 func (r *replayState) curl() string {
+	return r.curlFor(runtime.GOOS)
+}
+
+func (r *replayState) curlFor(goos string) string {
+	bin := "curl"
 	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+	if goos == "windows" {
+		bin = "curl.exe"
+		q = func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+	}
 	req := r.request()
-	parts := []string{"curl"}
+	parts := []string{bin}
 	if req.Method != "" && req.Method != "GET" {
 		parts = append(parts, "-X", q(req.Method))
 	}

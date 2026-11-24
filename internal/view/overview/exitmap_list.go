@@ -7,7 +7,6 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"lanflow/internal/geo"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -87,9 +86,7 @@ func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct
 				ui.Box(c).Size(10, 10).Radius(2).Background(col).Shrink(0)
 				name := rt.Node
 				if rt.place != nil {
-					if f := geo.Flag(rt.place.Country); f != "" {
-						name = f + " " + name
-					}
+					name = env.FlagPrefixFor(p.e.Mac, rt.place.Country) + name
 				}
 				size := float32(13)
 				if i > 0 {

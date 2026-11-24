@@ -4,6 +4,7 @@ package app
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -15,5 +16,9 @@ func iconSubject(path string) string {
 	if path == "" || !filepath.IsAbs(path) {
 		return ""
 	}
-	return filepath.Clean(path)
+	cleaned := filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(cleaned)
+	}
+	return cleaned
 }

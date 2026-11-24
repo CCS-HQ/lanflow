@@ -78,7 +78,7 @@ func main() {
 	args := split.ParseArgs(os.Args[1:])
 	switch {
 	case split.SingleProcess(app.DefaultOptions("Lanflow").DataDir):
-		runSingle()
+		runSingle(false)
 	case args.Service:
 		runService(args)
 	default:
@@ -87,9 +87,10 @@ func main() {
 }
 
 // runSingle is Lanflow in one process, as before the split: the service,
-// the window, the tray and the shortcuts together.
-func runSingle() {
-	if !mygo.App.RequestSingleInstanceLock() {
+// the window, the tray and the shortcuts together. locked is true when the
+// caller (runWindow fallback) already acquired the single-instance lock.
+func runSingle(locked bool) {
+	if !locked && !mygo.App.RequestSingleInstanceLock() {
 		return // the running instance takes over
 	}
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyRegular)
@@ -237,14 +238,16 @@ func newMainWindow(shell *view.Shell, hidden bool) *mygo.Window {
 	return win
 }
 
-// registerURLScheme registers lanflow:// on Windows and Linux, where
+// registerURLScheme registers lanflow:// and clash:// on Windows and Linux, where
 // portable builds have no installer to do it.
 func registerURLScheme() {
 	if runtime.GOOS == "darwin" {
 		return
 	}
-	if err := mygo.App.RegisterURLScheme("lanflow"); err != nil {
-		log.Printf("lanflow: url scheme: %v", err)
+	for _, scheme := range []string{"lanflow", "clash"} {
+		if err := mygo.App.RegisterURLScheme(scheme); err != nil {
+			log.Printf("lanflow: url scheme %s: %v", scheme, err)
+		}
 	}
 }
 

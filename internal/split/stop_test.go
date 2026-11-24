@@ -51,6 +51,7 @@ func useFakeProc(t *testing.T, p *fakeProc) {
 	procOps.kill = func(int) error { p.step("kill", p.onKill); return nil }
 	procOps.pin = nil
 	procOps.poll = 5 * time.Millisecond
+	procOps.terminateIsKill = false
 	t.Cleanup(func() { procOps = old })
 }
 

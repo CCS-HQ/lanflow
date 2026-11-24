@@ -19,7 +19,16 @@ func writePID(workDir string, pid int) {
 	_ = fsx.WriteFile(filepath.Join(workDir, pidFileName), []byte(strconv.Itoa(pid)), 0o600)
 }
 
-func removePID(workDir string) { _ = os.Remove(filepath.Join(workDir, pidFileName)) }
+func removePIDIf(workDir string, pid int) {
+	path := filepath.Join(workDir, pidFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && n == pid {
+		_ = os.Remove(path)
+	}
+}
 
 // killOrphan stops a Mihomo left running by a previous Lanflow, identified
 // by the PID file in workDir. It only kills the process if it is still a
@@ -43,7 +52,12 @@ func killOrphan(workDir string) {
 	if err != nil {
 		return
 	}
-	_ = interrupt(p)
+	defer p.Release()
+	if err := interrupt(p); err != nil {
+		_ = p.Kill()
+		time.Sleep(200 * time.Millisecond)
+		return
+	}
 	for i := 0; i < 25; i++ { // up to 5 s
 		time.Sleep(200 * time.Millisecond)
 		if processName(pid) == "" {

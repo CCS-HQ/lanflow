@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,21 @@ import (
 
 	"lanflow/internal/platform/helper/service"
 )
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("invalid handle") }
+
+func TestTolerantMultiWriter(t *testing.T) {
+	var buf bytes.Buffer
+	w := tolerantMultiWriter(failingWriter{}, &buf)
+	if _, err := w.Write([]byte("scm log line\n")); err != nil {
+		t.Fatalf("tolerantMultiWriter failed: %v", err)
+	}
+	if got := buf.String(); got != "scm log line\n" {
+		t.Fatalf("second writer got %q", got)
+	}
+}
 
 func TestParseInstall(t *testing.T) {
 	sum := strings.Repeat("ab", 32)

@@ -25,14 +25,15 @@ const unixSocketPathLimit = 100
 // execRunner starts Mihomo as a plain child process of the current user.
 // It only ever manages the process it spawned itself.
 type execRunner struct {
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	adopted  *os.Process // a Mihomo taken over from a previous Lanflow (adopt.go); cmd is nil then
-	spec     Spec
-	logf     *rotatingFile
-	done     chan struct{} // closed when Wait returns
-	exited   chan error    // replaced on every Start
-	stopping bool          // Stop was called; the exit is expected
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	adopted   *os.Process // a Mihomo taken over from a previous Lanflow (adopt.go); cmd is nil then
+	spec      Spec
+	logf      *rotatingFile
+	done      chan struct{} // closed when Wait returns
+	releaseCh chan struct{} // closed when Release abandons an adopted process
+	exited    chan error    // replaced on every Start
+	stopping  bool          // Stop was called; the exit is expected
 }
 
 // ownPIDs are the cores execRunner started and that still run; on Windows
@@ -87,7 +88,7 @@ func (r *execRunner) Start(ctx context.Context, spec Spec) error {
 
 	cmd := exec.Command(spec.Bin, buildArgs(spec)...)
 	cmd.Dir = spec.WorkDir
-	cmd.Env = append(os.Environ(), spec.Env...)
+	cmd.Env = append(append(os.Environ(), extraEnv()...), spec.Env...)
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	cmd.SysProcAttr = sysProcAttr()
@@ -103,6 +104,7 @@ func (r *execRunner) Start(ctx context.Context, spec Spec) error {
 	r.spec = spec
 	r.logf = logf
 	r.stopping = false
+	r.releaseCh = nil
 	r.done = make(chan struct{})
 	r.exited = make(chan error, 1)
 	go r.wait(cmd, logf, spec, r.done, r.exited)
@@ -115,7 +117,7 @@ func (r *execRunner) wait(cmd *exec.Cmd, logf *rotatingFile, spec Spec, done cha
 	untrackServer(cmd.Process.Pid)
 	_ = logf.Close()
 	cleanupController(spec)
-	removePID(spec.WorkDir)
+	removePIDIf(spec.WorkDir, cmd.Process.Pid)
 
 	r.mu.Lock()
 	stopping := r.stopping

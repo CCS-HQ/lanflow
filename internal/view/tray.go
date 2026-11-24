@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -30,6 +31,8 @@ type tray struct {
 	drawn string                    // look.key() + ink of the icon set last
 	node  string                    // the main group's current node, for the title
 	title string                    // text beside the icon (macOS)
+	tip   string                    // notification area tooltip (Windows)
+	tipAt time.Time                 // last live speed tooltip update
 	icons map[string]*mygo.MenuIcon // group icons by reference (traycmd.go)
 
 	// The node delays the menu shows: a change of them alone rebuilds the
@@ -73,7 +76,15 @@ func startTray(h host) (*tray, error) {
 		return nil, err
 	}
 	tr.t = t
-	t.OnAppearanceChange(func() { tr.drawIcon(true) })
+	t.OnAppearanceChange(func() {
+		tr.mu.Lock()
+		tr.icons = nil
+		tr.mu.Unlock()
+		tr.drawIcon(true)
+		if runtime.GOOS == "windows" {
+			tr.refresh(true)
+		}
+	})
 	if runtime.GOOS == "windows" {
 		// Left click opens the window, right click the menu.
 		t.OnClick(func() { h.showWindow("") })
@@ -115,6 +126,9 @@ func (tr *tray) changed(t app.Topic) {
 		st := tr.h.hostAPI().Status()
 		tr.setTitle(st)
 		tr.updateGraph()
+		if runtime.GOOS == "windows" {
+			tr.setToolTip(st, tr.h.hostAPI().CaptureStatus().Enabled, false)
+		}
 	case app.TopicStatus, app.TopicProxies, app.TopicSubs, app.TopicSettings, app.TopicCapture:
 		tr.refresh(false)
 	}
@@ -193,14 +207,63 @@ func (tr *tray) refresh(force bool) {
 		if runtime.GOOS != "windows" {
 			tr.t.SetMenu(menu)
 		}
-		tip := i18n.T("澜流 Lanflow")
+		tr.setToolTip(st, capOn, true)
+	} else if it := menu.ItemByID("status"); it != nil {
+		it.SetLabel(statusLine(st))
+		if runtime.GOOS == "windows" {
+			tr.setToolTip(st, capOn, true)
+		}
+	}
+}
+
+func (tr *tray) setToolTip(st model.Status, capOn, force bool) {
+	if tr.t == nil {
+		return
+	}
+	var tip string
+	if runtime.GOOS == "windows" {
+		tip = winToolTip(st, capOn)
+	} else {
+		tip = i18n.T("澜流 Lanflow")
 		if capOn {
 			tip += " · " + i18n.T("HTTPS 解密中")
 		}
-		tr.t.SetToolTip(tip)
-	} else if it := menu.ItemByID("status"); it != nil {
-		it.SetLabel(statusLine(st))
 	}
+	now := time.Now()
+	tr.mu.Lock()
+	same := tip == tr.tip
+	throttled := !force && now.Sub(tr.tipAt) < trayDelayGap
+	if !same && !throttled {
+		tr.tip = tip
+		tr.tipAt = now
+	}
+	tr.mu.Unlock()
+	if !same && !throttled {
+		tr.t.SetToolTip(tip)
+	}
+}
+
+func winToolTip(st model.Status, capOn bool) string {
+	tip := i18n.T("澜流 Lanflow") + " · " + statusLine(st)
+	if capOn {
+		tip += " · " + i18n.T("HTTPS 解密中")
+	}
+	return trimUTF16(tip, 127)
+}
+
+func trimUTF16(s string, maxUnits int) string {
+	units := 0
+	for i, r := range s {
+		n := utf16.RuneLen(r)
+		if n < 0 {
+			n = 1
+		}
+		if units+n > maxUnits {
+			return s[:i]
+		}
+		units += n
+	}
+	return s
 }
 
 // mainGroup returns the group the tray's node submenu lists: GLOBAL in
@@ -293,14 +356,18 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 			curSub = sub.Name
 		}
 	}
+	openAccel, quitAccel := "CmdOrCtrl+O", "CmdOrCtrl+Q"
+	if runtime.GOOS == "windows" {
+		openAccel, quitAccel = "", ""
+	}
 	items = append(items,
 		&mygo.MenuItem{Label: i18n.Tf("订阅：%s", curSub), Disabled: len(subs) == 0, Submenu: tr.subItems(subs)},
 		mygo.Separator(),
 		&mygo.MenuItem{Label: i18n.T("复制终端代理命令"), Submenu: tr.commandItems(st.MixedPort)},
-		&mygo.MenuItem{Label: i18n.T("打开澜流"), Accelerator: "CmdOrCtrl+O", Click: func(*mygo.MenuItem, *mygo.Window) { h.showWindow("") }},
+		&mygo.MenuItem{Label: i18n.T("打开澜流"), Accelerator: openAccel, Click: func(*mygo.MenuItem, *mygo.Window) { h.showWindow("") }},
 		&mygo.MenuItem{ID: "feedback", Label: i18n.T("反馈问题…"), Click: func(*mygo.MenuItem, *mygo.Window) { h.showWindow(OpenFeedback) }},
 		mygo.Separator(),
-		&mygo.MenuItem{Label: i18n.T("退出澜流"), Accelerator: "CmdOrCtrl+Q", Click: func(*mygo.MenuItem, *mygo.Window) { h.quit() }},
+		&mygo.MenuItem{Label: i18n.T("退出澜流"), Accelerator: quitAccel, Click: func(*mygo.MenuItem, *mygo.Window) { h.quit() }},
 	)
 	return mygo.NewMenu(items)
 }
@@ -320,6 +387,7 @@ func (tr *tray) captureItem() *mygo.MenuItem {
 			// Turning it on asks in the window (the 抓包 page), never from
 			// the menu alone.
 			it.Checked = false
+			tr.refresh(true)
 			h.showWindow(OpenCapture)
 		}}
 }

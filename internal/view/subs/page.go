@@ -308,8 +308,12 @@ func (p *Page) cell(c *ui.Context, s model.Subscription, col string, switching s
 			case s.NeedsURL:
 				// From lanflow.yaml with a keychain reference this machine
 				// does not have (docs/config-sync.md): 编辑 asks for the link.
+				tip := i18n.T("这个订阅来自配置同步，本机钥匙串里没有它的链接。请在「编辑」中重新输入订阅链接。")
+				if !p.e.Mac {
+					tip = i18n.T("这个订阅来自配置同步，本机凭据管理器里没有它的链接。请在「编辑」中重新输入订阅链接。")
+				}
 				ui.Text(c, i18n.T("需要重新输入链接")).FontSize(12).TextColor(t.Warning).
-					Tooltip(i18n.T("这个订阅来自配置同步，本机钥匙串里没有它的链接。请在「编辑」中重新输入订阅链接。"))
+					Tooltip(tip)
 			default:
 				ui.Text(c, env.FmtAgo(s.UpdatedAt)).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum")
 				if s.LastError != "" {
@@ -362,7 +366,7 @@ func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, s model.Subscription) {
 		show = i18n.T("在资源管理器中显示")
 	}
 	if m.Item(show).Disabled(sub.FilePath == "").Chosen() {
-		mygo.Shell.ShowItemInFolder(sub.FilePath)
+		env.RevealInFolder(sub.FilePath)
 	}
 	m.Separator()
 	del := m.Item(i18n.T("删除…")).Danger().Disabled(sub.Current)

@@ -183,10 +183,10 @@ func (s *Supervisor) stage(spec protocol.Spec, withData bool) (string, error) {
 	if withData {
 		keep := map[string]bool{}
 		for _, rel := range cfg.ProviderPaths {
-			keep[rel] = true
+			keep[pathKey(rel)] = true
 		}
 		for rel := range hashed {
-			keep[rel] = true
+			keep[pathKey(rel)] = true
 		}
 		if n := pruneWorkDir(root, keep, time.Now().Add(-pruneAge)); n > 0 {
 			s.Logf("work dir: removed %d old files nothing refers to", n)
@@ -237,7 +237,7 @@ func pruneWorkDir(root *os.Root, keep map[string]bool, before time.Time) (remove
 			dirs = append(dirs, rel)
 			return nil
 		}
-		if keep[rel] {
+		if keep[pathKey(rel)] {
 			return nil
 		}
 		fi, err := d.Info()

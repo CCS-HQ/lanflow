@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"lanflow/internal/platform/helper/protocol"
 )
 
 func samePath(a, b string) bool { return strings.EqualFold(a, b) }
@@ -255,12 +256,15 @@ func systemDirs() []string {
 	return dirs
 }
 
-// checkNotSystemDir refuses a drive root, the Users root itself and
-// anything inside a system location.
+// checkNotSystemDir refuses UNC paths, drive roots, the Users root itself
+// and anything inside a system location.
 func checkNotSystemDir(path string) error {
 	p := filepath.Clean(path)
+	if strings.HasPrefix(p, `\\`) {
+		return fmt.Errorf("数据目录不能是网络路径: %s", path)
+	}
 	vol := filepath.VolumeName(p)
-	if vol == "" || p == vol || p == vol+`\` {
+	if len(vol) != 2 || vol[1] != ':' || p == vol || p == vol+`\` {
 		return fmt.Errorf("数据目录不能是盘符根目录: %s", path)
 	}
 	if samePath(p, filepath.Join(vol+`\`, "Users")) {
@@ -286,6 +290,9 @@ func checkController(_ *Policy, controller string) (string, error) {
 	const prefix = `\\.\pipe\lanflow-`
 	if !strings.HasPrefix(controller, prefix) || len(controller) == len(prefix) {
 		return "", fmt.Errorf(`控制器管道名必须以 %s 开头: %s`, prefix, controller)
+	}
+	if strings.EqualFold(controller, protocol.PipeName) {
+		return "", fmt.Errorf("控制器管道名不能与权限组件冲突: %s", controller)
 	}
 	if strings.ContainsAny(controller[len(prefix):], `\/`) {
 		return "", fmt.Errorf("控制器管道名无效: %s", controller)

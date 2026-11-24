@@ -98,9 +98,21 @@ func (winReal) legacySetPAC(url string) error {
 	return nil
 }
 
-// get reads the LAN's registry values. WinINet keeps them in step with the
-// LAN's per-connection options, whichever of the two was written.
+// get reads the LAN's effective proxy settings via WinINet first (so
+// PROXY_TYPE_AUTO_PROXY_URL decides PACURL accurately) and falls back to
+// reading the legacy registry values when WinINet is unavailable.
 func get() (State, error) {
+	if c, err := (winReal{}).queryConn(winLAN); err == nil {
+		st := State{
+			Enabled: c.Flags&winProxyTypeProxy != 0,
+			Bypass:  parseProxyOverride(c.Bypass),
+		}
+		st.Host, st.Port = parseProxyServer(c.Server)
+		if c.Flags&winProxyTypeAutoURL != 0 {
+			st.PACURL = c.AutoConfig
+		}
+		return st, nil
+	}
 	k, err := openSettings(registry.QUERY_VALUE)
 	if err != nil {
 		return State{}, err
@@ -124,6 +136,8 @@ func get() (State, error) {
 	}
 	if pac, _, err := k.GetStringValue("AutoConfigURL"); err == nil {
 		st.PACURL = pac
+	} else if !errors.Is(err, registry.ErrNotExist) {
+		return State{}, fmt.Errorf("读取 AutoConfigURL 失败：%w", err)
 	}
 	return st, nil
 }

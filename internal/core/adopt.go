@@ -82,19 +82,30 @@ func (r *execRunner) Adopt(ctx context.Context, spec Spec) error {
 	r.spec = spec
 	r.stopping = false
 	r.done = make(chan struct{})
+	r.releaseCh = make(chan struct{})
 	r.exited = make(chan error, 1)
-	go r.watchAdopted(pid, spec, adoptPoll, r.done, r.exited)
+	go r.watchAdopted(pid, spec, adoptPoll, r.done, r.releaseCh, r.exited)
 	return nil
 }
 
 // watchAdopted reports the end of an adopted process.
-func (r *execRunner) watchAdopted(pid int, spec Spec, every time.Duration, done chan struct{}, exited chan error) {
+func (r *execRunner) watchAdopted(pid int, spec Spec, every time.Duration, done chan struct{}, releaseCh <-chan struct{}, exited chan error) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
 	for processName(pid) != "" {
-		time.Sleep(every)
+		select {
+		case <-releaseCh:
+			untrackServer(pid)
+			r.mu.Lock()
+			close(done)
+			r.mu.Unlock()
+			return
+		case <-tick.C:
+		}
 	}
 	untrackServer(pid)
 	cleanupController(spec)
-	removePID(spec.WorkDir)
+	removePIDIf(spec.WorkDir, pid)
 	r.mu.Lock()
 	stopping := r.stopping
 	close(done)
@@ -106,6 +117,7 @@ func (r *execRunner) watchAdopted(pid int, spec Spec, every time.Duration, done 
 
 // stopAdopted stops an adopted process: the graceful signal, then kill.
 func (r *execRunner) stopAdopted(ctx context.Context, p *os.Process, done chan struct{}) error {
+	defer p.Release()
 	select {
 	case <-done:
 	default:
@@ -175,7 +187,17 @@ func (m *manager) adopt(ctx context.Context, spec Spec, r Runner) error {
 // Release forgets an adopted process without stopping it.
 func (r *execRunner) Release() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	p := r.adopted
+	ch := r.releaseCh
 	r.stopping = true
 	r.adopted = nil
+	r.releaseCh = nil
+	r.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+	if p != nil {
+		untrackServer(p.Pid)
+		_ = p.Release()
+	}
 }

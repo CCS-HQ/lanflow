@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -50,7 +51,9 @@ var CaptureAgentCommand = func() (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	return exec.Command(exe, "capture-agent"), nil
+	cmd := exec.Command(exe, "capture-agent")
+	hideWindow(cmd)
+	return cmd, nil
 }
 
 // TrustHooks install and remove the root in the user's trust store and
@@ -571,7 +574,8 @@ func (s *Service) startAgentLocked(set model.CaptureSettings, caPEM []byte, port
 	always, private := CaptureBypassSplit(set)
 	st := agent.Start{Op: "serve", CAPEM: string(caPEM), Config: agent.Config{
 		Listen: listen, Selectors: sels, UpAddr: fmt.Sprintf("127.0.0.1:%d", upPort), UpUser: "lanflow", UpPass: upPass,
-		Domains: set.Domains, Bypass: always, Private: private, AllowPrivate: captureAllowPrivate(set), NoRecord: set.NoRecord, Enabled: true, Controller: ctrlAddr,
+		Domains: set.Domains, Bypass: always, Private: private, AllowPrivate: captureAllowPrivate(set), NoRecord: set.NoRecord,
+		Enabled: true, Controller: ctrlAddr, CoreWorkDir: s.workDir,
 		SpillDir: filepath.Join(s.capDir(), "spill"), MaxFlows: captureMaxFlows,
 	}}
 	r, ready, err := s.agentStart(st)
@@ -856,7 +860,11 @@ func (s *Service) AddCaptureApp(processPath, process string, enable bool) error 
 	set := cloneCaptureSettings(c.set)
 	c.mu.Unlock()
 	for _, a := range set.Apps {
-		if a.Match == app.Match && a.Kind == app.Kind {
+		same := a.Match == app.Match
+		if runtime.GOOS == "windows" {
+			same = strings.EqualFold(a.Match, app.Match)
+		}
+		if same && a.Kind == app.Kind {
 			app.Name = ""
 		}
 	}

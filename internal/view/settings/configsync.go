@@ -40,7 +40,11 @@ func (p *Page) configSyncSection(c *ui.Context, t *ui.Theme) {
 	p.mu.Lock()
 	busy := p.sync.busy
 	p.mu.Unlock()
-	e.Kit.Section(c, i18n.T("配置同步"), i18n.T("把设置、覆写、自定义规则和订阅保存为 lanflow.yaml，放进会同步的文件夹，在多台设备间保持一致；订阅链接留在钥匙串中"), func() {
+	syncDesc := i18n.T("把设置、覆写、自定义规则和订阅保存为 lanflow.yaml，放进会同步的文件夹，在多台设备间保持一致；订阅链接留在钥匙串中")
+	if !e.Mac {
+		syncDesc = i18n.T("把设置、覆写、自定义规则和订阅保存为 lanflow.yaml，放进会同步的文件夹，在多台设备间保持一致；订阅链接留在凭据管理器中")
+	}
+	e.Kit.Section(c, i18n.T("配置同步"), syncDesc, func() {
 		off, icloud, folder := i18n.T("关闭"), i18n.T("iCloud 云盘"), i18n.T("自定义文件夹…")
 		opts := []string{off}
 		if st.ICloudAvailable || st.Mode == model.SyncICloud {
@@ -79,14 +83,14 @@ func (p *Page) configSyncSection(c *ui.Context, t *ui.Theme) {
 		if st.Path == "" {
 			return
 		}
-		e.Kit.Row(c, i18n.T("同步文件"), syncStateText(st), func() {
+		e.Kit.Row(c, i18n.T("同步文件"), syncStateText(st, e.Mac), func() {
 			ui.Row(c).Gap(8).Children(func() {
 				if st.Mode == model.SyncFolder {
 					if ui.Button(c, i18n.T("更改…")).Disabled(busy).Clicked() {
 						go p.pickSyncFolder()
 					}
 				}
-				ui.Button(c, revealLabel(e)).OnClick(func() { mygo.Shell.ShowItemInFolder(st.Path) })
+				ui.Button(c, revealLabel(e)).OnClick(func() { env.RevealInFolder(st.Path) })
 			})
 		})
 		p.syncPassphraseRows(c, st, busy)
@@ -97,11 +101,15 @@ func (p *Page) configSyncSection(c *ui.Context, t *ui.Theme) {
 }
 
 // syncStateText is the 同步文件 row's description.
-func syncStateText(st model.ConfigSyncStatus) string {
+func syncStateText(st model.ConfigSyncStatus, mac bool) string {
 	parts := []string{st.Path}
 	switch {
 	case st.State == model.SyncStateWaiting:
-		parts = append(parts, i18n.T("正在等待 iCloud 下载文件…"))
+		if mac {
+			parts = append(parts, i18n.T("正在等待 iCloud 下载文件…"))
+		} else {
+			parts = append(parts, i18n.T("正在等待云盘下载文件…"))
+		}
 	case !st.LastAppliedAt.IsZero() && st.LastAppliedAt.After(st.LastWrittenAt):
 		parts = append(parts, i18n.Tf("上次加载：%s", env.FmtDateTime(st.LastAppliedAt.Local())))
 	case !st.LastWrittenAt.IsZero():
@@ -120,7 +128,7 @@ func (p *Page) syncBanners(c *ui.Context, st model.ConfigSyncStatus, busy bool) 
 			msg = i18n.Tf("同步文件第 %d 行的修改没有加载，配置保持不变：%s", st.ErrorLine, st.Error)
 		}
 		e.Kit.Banner(c, "error", msg, func() {
-			ui.Button(c, revealLabel(e)).OnClick(func() { mygo.Shell.ShowItemInFolder(st.Path) })
+			ui.Button(c, revealLabel(e)).OnClick(func() { env.RevealInFolder(st.Path) })
 		})
 	}
 	for _, name := range st.Conflicts {
@@ -139,7 +147,11 @@ func (p *Page) syncBanners(c *ui.Context, st model.ConfigSyncStatus, busy bool) 
 		})
 	}
 	if n := len(st.MissingSecrets); n > 0 {
-		e.Kit.Banner(c, "info", i18n.Tf("%d 个订阅的链接不在本机钥匙串中（%s），请在「订阅」页编辑并重新输入链接。", n, strings.Join(st.MissingSecrets, i18n.T("、"))), func() {
+		msg := i18n.Tf("%d 个订阅的链接不在本机钥匙串中（%s），请在「订阅」页编辑并重新输入链接。", n, strings.Join(st.MissingSecrets, i18n.T("、")))
+		if !e.Mac {
+			msg = i18n.Tf("%d 个订阅的链接不在本机凭据管理器中（%s），请在「订阅」页编辑并重新输入链接。", n, strings.Join(st.MissingSecrets, i18n.T("、")))
+		}
+		e.Kit.Banner(c, "info", msg, func() {
 			ui.Button(c, i18n.T("前往订阅")).OnClick(func() { e.Navigate(env.Subs, "") })
 		})
 	}
@@ -153,7 +165,11 @@ func (p *Page) syncBanners(c *ui.Context, st model.ConfigSyncStatus, busy bool) 
 		})
 	}
 	if st.WebDAVPasswordMissing && !st.Locked {
-		e.Kit.Banner(c, "info", i18n.T("同步文件中设置了 WebDAV 密码，但本机钥匙串里没有；需要备份到 WebDAV 时请重新输入密码。"), nil)
+		msg := i18n.T("同步文件中设置了 WebDAV 密码，但本机钥匙串里没有；需要备份到 WebDAV 时请重新输入密码。")
+		if !e.Mac {
+			msg = i18n.T("同步文件中设置了 WebDAV 密码，但本机凭据管理器里没有；需要备份到 WebDAV 时请重新输入密码。")
+		}
+		e.Kit.Banner(c, "info", msg, nil)
 	}
 }
 

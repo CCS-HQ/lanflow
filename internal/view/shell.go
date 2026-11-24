@@ -40,22 +40,22 @@ const (
 	DefaultWidth  = 1180
 	DefaultHeight = 780
 	MinWidth      = 1000
-	MinHeight     = 680
+	MinHeight     = 600
 	SidebarWidth  = 200
 )
 
 // FitWorkArea returns the default window size clamped to the work area
 // (a display without the menu bar, Dock and taskbars) for a first launch,
-// leaving a margin around the window; it never goes below the minimum. A
-// zero work area (no display information) gives the default.
+// leaving a margin around the window; it respects MinWidth/MinHeight
+// unless the work area itself is smaller.
 func FitWorkArea(wa mygo.Rectangle) (width, height int) {
 	width, height = DefaultWidth, DefaultHeight
 	if wa.Width <= 0 || wa.Height <= 0 {
 		return width, height
 	}
 	const margin = 40
-	width = max(min(width, wa.Width-margin), MinWidth)
-	height = max(min(height, wa.Height-margin), MinHeight)
+	width = min(wa.Width, max(min(width, wa.Width-margin), MinWidth))
+	height = min(wa.Height, max(min(height, wa.Height-margin), MinHeight))
 	return width, height
 }
 

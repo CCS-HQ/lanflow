@@ -65,8 +65,8 @@ func TestApplyRun(t *testing.T) {
 		{name: "the executable moved: rewritten, Task Manager's switch kept",
 			st: fakeRun{cmd: `"D:\old\Lanflow.exe" --service --login`, has: true, disabled: true}, on: true,
 			wantChanged: true, wantOps: []string{"set"}, wantDisabled: true, wantHas: true},
-		{name: "turned off", st: fakeRun{cmd: want, has: true}, wantChanged: true, wantOps: []string{"delete"}},
-		{name: "off and absent", st: fakeRun{}},
+		{name: "turned off", st: fakeRun{cmd: want, has: true, disabled: true}, wantChanged: true, wantOps: []string{"delete", "approve"}},
+		{name: "off and absent", st: fakeRun{}, wantOps: []string{"approve"}},
 		{name: "the write fails", st: fakeRun{setErr: boom, disabled: true}, on: true, wantErr: boom, wantOps: []string{"set"}, wantDisabled: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
