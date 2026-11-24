@@ -1,7 +1,7 @@
 {
   "name": "Lanflow",
   "identifier": "com.lanflow.app",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "urlSchemes": ["lanflow", "clash"],
   "out": "build",
   "updates": {

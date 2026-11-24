@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -26,6 +27,9 @@ type installEnv struct {
 	// its error.
 	fail   map[string]error
 	counts map[string]int
+	// prints are what successive launchctl print calls return ("" once
+	// they run out: not loaded).
+	prints []string
 }
 
 func newInstallEnv(t *testing.T) *installEnv {
@@ -52,6 +56,7 @@ func newInstallEnv(t *testing.T) *installEnv {
 		configPath: filepath.Join(root, "Support", "config.json"),
 		plistPath:  filepath.Join(daemons, Label+".plist"),
 		logDir:     filepath.Join(root, "Logs"),
+		logPath:    filepath.Join(root, "Logs", "helper.log"),
 		euid:       func() int { return 0 },
 		self:       func() (string, error) { return e.self, nil },
 		launchctl: func(_ context.Context, args ...string) error {
@@ -61,8 +66,30 @@ func newInstallEnv(t *testing.T) *installEnv {
 		},
 		chown:      func(string, int, int) error { return nil },
 		waitSocket: func(context.Context, time.Duration) error { return nil },
+		printService: func(context.Context) string {
+			e.calls = append(e.calls, "print")
+			if len(e.prints) == 0 {
+				return ""
+			}
+			out := e.prints[0]
+			e.prints = e.prints[1:]
+			return out
+		},
+		procs:    procs{alive: func(int) bool { return false }, poll: time.Millisecond},
+		exitWait: 50 * time.Millisecond,
 	}
 	return e
+}
+
+// launchctlCalls are the recorded launchctl calls without the prints.
+func (e *installEnv) launchctlCalls() string {
+	var out []string
+	for _, c := range e.calls {
+		if c != "print" {
+			out = append(out, c)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 func (e *installEnv) options() InstallOptions {
@@ -209,7 +236,7 @@ func TestDarwinInstall(t *testing.T) {
 			if got := e.installed(); got != tc.want {
 				t.Errorf("installed = %s, want %s", got, tc.want)
 			}
-			if got := strings.Join(e.calls, " "); got != tc.wantCalls {
+			if got := e.launchctlCalls(); got != tc.wantCalls {
 				t.Errorf("launchctl calls = %q, want %q", got, tc.wantCalls)
 			}
 			if tc.previous && tc.wantErr != "" && e.read(e.in.plistPath) != "plist v1" {
@@ -229,6 +256,114 @@ func TestDarwinInstall(t *testing.T) {
 			}
 			e.clean(t)
 		})
+	}
+}
+
+// launchctl bootout may return while the old helper still stops its
+// core. The new helper is loaded only once the old process has ended,
+// or it would race the old one for the core's pid file and the socket.
+func TestDarwinInstallWaitsForOldHelper(t *testing.T) {
+	const running = "system/com.lanflow.helper = {\n\tstate = running\n\tpid = 4242\n}\n"
+	for _, tc := range []struct {
+		name       string
+		exitsAfter int    // polls before the old helper ends by itself (-1 = never)
+		exe        string // what the pid runs ("" = the installed helper)
+		wantKill   bool
+	}{
+		{name: "ends by itself", exitsAfter: 3},
+		{name: "killed when it hangs", exitsAfter: -1, wantKill: true},
+		{name: "pid taken by another process", exitsAfter: -1, exe: "/usr/bin/other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newInstallEnv(t)
+			e.previous(t)
+			e.prints = []string{running}
+			alive, polls, killed := true, 0, false
+			var order []string
+			exe := tc.exe
+			if exe == "" {
+				exe = e.in.helperBin
+			}
+			e.in.procs = procs{
+				alive: func(pid int) bool {
+					if pid != 4242 {
+						t.Errorf("alive(%d)", pid)
+					}
+					polls++
+					if tc.exitsAfter >= 0 && polls > tc.exitsAfter {
+						alive = false
+					}
+					return alive
+				},
+				exePath: func(int) (string, error) { return exe, nil },
+				signal: func(pid int, sig syscall.Signal) error {
+					if sig == syscall.SIGKILL {
+						killed = true
+						alive = false
+						order = append(order, "kill")
+					}
+					return nil
+				},
+				poll: time.Millisecond,
+			}
+			lc := e.in.launchctl
+			e.in.launchctl = func(ctx context.Context, args ...string) error {
+				if args[0] == "bootstrap" && alive && tc.exe == "" {
+					t.Error("the new helper was loaded while the old one still ran")
+				}
+				order = append(order, args[0])
+				return lc(ctx, args...)
+			}
+			if err := e.in.install(context.Background(), e.options(), t.Logf); err != nil {
+				t.Fatal(err)
+			}
+			if killed != tc.wantKill {
+				t.Errorf("killed = %v, want %v", killed, tc.wantKill)
+			}
+			want := "bootout bootstrap"
+			if tc.wantKill {
+				want = "bootout kill bootstrap"
+			}
+			if got := strings.Join(order, " "); got != want {
+				t.Errorf("order = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A helper that does not come up: the error carries what it logged and
+// launchd's view of it, since the user sees nothing else.
+func TestDarwinInstallReportsWhyTheHelperDidNotStart(t *testing.T) {
+	e := newInstallEnv(t)
+	e.previous(t)
+	writeFile(t, e.in.logPath, "older run\n", 0o644)
+	e.in.waitSocket = func(context.Context, time.Duration) error {
+		f, err := os.OpenFile(e.in.logPath, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = f.WriteString("lanflow-helper 0.2.0 starting\nlanflow-helper: 监听失败\n")
+		f.Close()
+		e.prints = []string{"\tstate = waiting\n\truns = 2\n\tlast exit code = 1\n"}
+		return errors.New("权限组件已安装但未在 30 秒内启动")
+	}
+	err := e.in.install(context.Background(), e.options(), t.Logf)
+	if err == nil {
+		t.Fatal("install succeeded")
+	}
+	for _, want := range []string{"30 秒", "lanflow-helper: 监听失败", "last exit code = 1", "runs = 2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "older run") {
+		t.Errorf("error %q quotes an older run", err)
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error %q spans lines", err)
+	}
+	if got := e.installed(); got != "helper v1|core v1|"+sha([]byte("core v1")) {
+		t.Errorf("installed = %s", got)
 	}
 }
 

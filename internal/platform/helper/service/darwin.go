@@ -44,20 +44,36 @@ const (
 type installer struct {
 	helperDir, helperBin, coreBin string
 	configDir, configPath         string
-	plistPath, logDir             string
+	plistPath, logDir, logPath    string
 
 	euid       func() int
 	self       func() (string, error)
 	launchctl  func(ctx context.Context, args ...string) error
 	chown      func(path string, uid, gid int) error
 	waitSocket func(ctx context.Context, d time.Duration) error
+	// printService returns what launchd reports of the service (launchctl
+	// print), "" when it is not loaded.
+	printService func(ctx context.Context) string
+	// procs finds and ends a helper process that outlives its bootout.
+	procs procs
+	// exitWait is how long a booted-out helper gets to end on its own
+	// before it is killed: launchd's default ExitTimeOut (20 s) plus a
+	// margin, so normally launchd ends it first.
+	exitWait time.Duration
 }
+
+// socketWait is how long install waits for the new helper's socket.
+// launchd throttles a daemon that exits soon after starting for 10 s
+// before it starts it again, and a helper that finds a core its
+// predecessor left behind spends up to 2*StopGrace ending it before it
+// listens: both have to fit.
+const socketWait = 30 * time.Second
 
 func systemInstaller() *installer {
 	return &installer{
 		helperDir: HelperDir, helperBin: HelperBin, coreBin: CoreBin,
 		configDir: ConfigDir, configPath: ConfigPath,
-		plistPath: PlistPath, logDir: LogDir,
+		plistPath: PlistPath, logDir: LogDir, logPath: LogPath,
 		euid: os.Geteuid,
 		self: func() (string, error) {
 			self, err := os.Executable()
@@ -69,9 +85,12 @@ func systemInstaller() *installer {
 			}
 			return self, nil
 		},
-		launchctl:  launchctl,
-		chown:      os.Chown,
-		waitSocket: waitForSocket,
+		launchctl:    launchctl,
+		chown:        os.Chown,
+		waitSocket:   waitForSocket,
+		printService: printService,
+		procs:        systemProcs(),
+		exitWait:     25 * time.Second,
 	}
 }
 
@@ -171,7 +190,7 @@ func (in *installer) install(ctx context.Context, o InstallOptions, logf Logf) (
 	// Everything is ready: stop the previous instance and switch.
 	_, statErr := os.Lstat(in.plistPath)
 	hadService := statErr == nil
-	_ = in.launchctl(ctx, "bootout", "system/"+Label)
+	in.stopService(ctx, logf)
 	restore := func() {
 		files.rollback()
 		if hadService {
@@ -186,18 +205,82 @@ func (in *installer) install(ctx context.Context, o InstallOptions, logf Logf) (
 		restore()
 		return fmt.Errorf("替换权限组件文件失败: %w", err)
 	}
+	logStart := logSize(in.logPath)
 	if err := in.launchctl(ctx, "bootstrap", "system", in.plistPath); err != nil {
 		restore()
 		return fmt.Errorf("加载 LaunchDaemon 失败: %w", err)
 	}
 	logf("installed; waiting for socket")
-	if err := in.waitSocket(ctx, 10*time.Second); err != nil {
-		_ = in.launchctl(ctx, "bootout", "system/"+Label)
+	if err := in.waitSocket(ctx, socketWait); err != nil {
+		// What the new helper wrote and what launchd knows of it, taken
+		// before it is stopped: the error is all the user gets to see.
+		diag := in.diagnose(ctx, logStart)
+		logf("the new helper did not start: %s", diag)
+		in.stopService(ctx, logf)
 		restore()
-		return err
+		return fmt.Errorf("%w（%s）", err, diag)
 	}
 	files.finish()
 	return nil
+}
+
+// stopService boots the helper out of launchd and waits until its
+// process has ended. launchctl bootout can return while the process is
+// still stopping its core (up to 2*StopGrace); a helper started meanwhile
+// would find that core in the pid file and spend its own start ending it,
+// and the old helper, once done, removed the socket path the new one had
+// just created (helpers before 0.1.5 remove it unconditionally), so the
+// new helper ran but could not be reached.
+func (in *installer) stopService(ctx context.Context, logf Logf) {
+	pid := launchdPID(in.printService(ctx))
+	_ = in.launchctl(ctx, "bootout", "system/"+Label)
+	if pid <= 0 {
+		return
+	}
+	p := in.procs
+	if waitGone(ctx, p, pid, in.exitWait) {
+		return
+	}
+	// Only the helper itself is killed: the pid is checked to still run
+	// the installed helper binary.
+	if exe, err := p.exePath(pid); err != nil || exe != in.helperBin {
+		return
+	}
+	logf("helper pid=%d did not exit after bootout; killing it", pid)
+	if err := p.signal(pid, syscall.SIGKILL); err != nil {
+		logf("kill pid %d: %v", pid, err)
+	}
+	if !waitGone(ctx, p, pid, 5*time.Second) {
+		logf("helper pid=%d could not be stopped", pid)
+	}
+}
+
+// diagnose describes a helper that did not start: the last lines it
+// wrote to its log since start (where launchd sends its stdout and
+// stderr), and launchd's state and last exit status of the service.
+func (in *installer) diagnose(ctx context.Context, start int64) string {
+	var parts []string
+	if tail := logTail(in.logPath, start, 6); tail != "" {
+		parts = append(parts, "helper.log: "+tail)
+	} else {
+		parts = append(parts, "helper.log 没有新内容，进程可能未能启动")
+	}
+	var st []string
+	for _, line := range strings.Split(in.printService(ctx), "\n") {
+		line = strings.TrimSpace(line)
+		k, _, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case "state", "pid", "runs", "last exit code", "last exit reason", "spawn type", "job state":
+			st = append(st, line)
+		}
+	}
+	if len(st) > 0 {
+		parts = append(parts, "launchd: "+strings.Join(st, ", "))
+	}
+	return strings.Join(parts, "；")
 }
 
 // Uninstall unloads the LaunchDaemon (which stops Mihomo via the helper's
@@ -256,14 +339,29 @@ func launchctl(ctx context.Context, args ...string) error {
 	return nil
 }
 
+// printService returns launchctl print of the service, "" when it is
+// not loaded or launchctl fails.
+func printService(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "/bin/launchctl", "print", "system/"+Label).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// waitForSocket waits until a helper accepts connections on the socket:
+// a socket file alone may be one a previous helper left behind.
 func waitForSocket(ctx context.Context, d time.Duration) error {
 	deadline := time.Now().Add(d)
 	for {
 		if fi, err := os.Lstat(protocol.SocketPath); err == nil && fi.Mode()&os.ModeSocket != 0 {
-			return nil
+			if c, err := net.DialTimeout("unix", protocol.SocketPath, time.Second); err == nil {
+				_ = c.Close()
+				return nil
+			}
 		}
 		if time.Now().After(deadline) {
-			return errors.New("权限组件已安装但未在 10 秒内启动，请查看 " + LogPath)
+			return fmt.Errorf("权限组件已安装但未在 %d 秒内启动，请查看 %s", int(d/time.Second), LogPath)
 		}
 		select {
 		case <-ctx.Done():
@@ -355,12 +453,20 @@ func Run(ctx context.Context, version string, logf Logf) error {
 	if err != nil {
 		return fmt.Errorf("监听 %s 失败: %w", protocol.SocketPath, err)
 	}
+	// The socket path is removed at the end only while it still is this
+	// helper's socket: when a new helper is installed it may already have
+	// created its own there, which closing this listener (Go unlinks the
+	// path on Close by default) or a plain remove would take away.
+	own, _ := os.Lstat(protocol.SocketPath)
+	if ul, ok := l.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	srv := &protocol.Server{Handler: NewHandler(sup, version), Authorize: Authorizer(cfg.UID), Logf: logf}
 	logf("lanflow-helper %s listening on %s for uid %s", version, protocol.SocketPath, cfg.UID)
 	err = srv.Serve(ctx, l)
 	sup.Shutdown()
-	_ = os.Remove(protocol.SocketPath)
+	removeOwnSocket(protocol.SocketPath, own)
 	return err
 }

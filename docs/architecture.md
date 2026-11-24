@@ -45,6 +45,7 @@ Mihomo 子进程：代理协议、路由规则、DNS
 - 应用覆盖项与订阅原始文件分开保存。订阅不得覆盖本地 controller、secret、监听地址和 TUN 开关。
 - 「允许局域网」关闭时，订阅自己带的监听也收敛到回环（`internal/profile/lan.go`，合成时在各覆写层之前对订阅层执行）：`listeners` 每一项的 `listen` 改为 `127.0.0.1`，`tunnels` 的本地地址、`dns.listen`（澜流接管 DNS 时由澜流自己写，不在此列）改成回环地址，本地地址无法识别的隧道和 `dns.listen` 直接移除，每处改动记一条告警。覆写是用户自己写的内容，保持原样；澜流后加的监听（探测、HTTPS 解密、高级选项）也不受影响。
 - 权限组件（`internal/platform/helper`、`cmd/lanflow-helper`）：
+  - macOS 升级替换（helper 0.1.5 起）：`launchctl bootout` 可能在旧 helper 还在停止内核时就返回，安装程序先从 `launchctl print` 取得旧进程 pid，等它真正退出（25 秒，超时且仍是已安装的 helper 才 SIGKILL）后再加载新的 LaunchDaemon；否则新 helper 会去回收旧内核，旧 helper 收尾时又把新 helper 刚建的套接字删掉，新组件在运行却连不上，安装超时回滚。helper 退出时只删除仍是自己创建的那个套接字（关闭监听时不再由 Go 自动删除路径）。安装等待新 helper 的套接字可连接最多 30 秒（launchd 对启动后很快退出的守护进程有 10 秒的重启节流）；失败时错误信息带上 `helper.log` 中本次新写入的最后几行和 launchd 记录的状态与退出码。
   - 安装必须带 `--core-sha256`。内核文件在用户可写的位置，应用在请求管理员授权前先算好它的 SHA-256，提权后的安装程序只接受摘要一致的副本（按写入的字节计算，授权期间文件被换掉即拒绝）；缺少或格式不对的摘要一律拒绝安装，不退回到「不校验」。`--core` 本身是符号链接也拒绝。
   - 启动内核时，数据目录内的工作目录与配置文件路径不允许经过符号链接（Windows 上为任何重解析点），即使它此刻指向数据目录内部；数据目录之上的链接（如链接的主目录）是用户自己的布局，仍允许。这一步只是尽早给出看得懂的拒绝，真正的保护是下一条。
   - 特权内核不在用户的文件上运行（helper 0.1.4 起，`service/stage.go`、`service/sanitize.go`）。helper 自己有一个只有 root/SYSTEM 可写的工作目录：macOS 是 `/Library/Application Support/Lanflow Helper/work`（0700），Windows 是 `%ProgramData%\Lanflow Helper\work`（DACL 只给 SYSTEM 和 Administrators）。每次启动：
