@@ -37,13 +37,14 @@ const (
 // Look is everything the icon shows.
 type Look struct {
 	State   State
+	TUN     bool      // TUN mode active: drawn in a distinct colour
 	Capture bool      // HTTPS decryption on
 	Graph   []float64 // nil = no graph; else bar heights 0..1, oldest first
 }
 
 func (l Look) Key() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d|%v|%v|", l.State, l.Capture, l.Graph != nil)
+	fmt.Fprintf(&b, "%d|%v|%v|%v|", l.State, l.TUN, l.Capture, l.Graph != nil)
 	for _, v := range l.Graph {
 		fmt.Fprintf(&b, "%.2f,", v)
 	}
@@ -51,11 +52,13 @@ func (l Look) Key() string {
 }
 
 // Ink is the icon's colour scheme (docs/design.md §3.7, §7): macOS
-// uses template icons (black with alpha, the bar tints them); Windows
-// draws in colour: the system accent when running, grey when stopped.
+// uses template icons (black with alpha, the bar tints them), except for
+// the error badge and TUN's distinct colour; Windows draws in colour: the
+// system accent when running, emerald green when TUN is active, grey when
+// stopped.
 type Ink struct {
 	Windows bool
-	Dark    bool        // the bar is dark (error icon on macOS, grey on Windows)
+	Dark    bool        // the bar is dark (error/TUN icon on macOS, grey/TUN on Windows)
 	Accent  color.NRGBA // Windows accent; zero = default blue
 }
 
@@ -133,10 +136,21 @@ func SVG(l Look) string {
 	return b.String()
 }
 
+// tunColor returns the distinct icon colour used when TUN mode is active,
+// tuned for contrast against light and dark taskbars / menu bars.
+func tunColor(dark bool) color.NRGBA {
+	if dark {
+		return color.NRGBA{52, 211, 126, 255} // bright emerald on dark bar
+	}
+	return color.NRGBA{16, 158, 86, 255} // emerald green on light bar
+}
+
 // PNG renders the icon at 2× (36 pixels tall).
 func PNG(l Look, ink Ink) []byte {
 	var col color.NRGBA
-	if ink.Windows {
+	if l.TUN && l.State == On {
+		col = tunColor(ink.Dark)
+	} else if ink.Windows {
 		accent := ink.Accent
 		if accent.A == 0 {
 			accent = color.NRGBA{0, 120, 212, 255} // Windows default blue

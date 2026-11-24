@@ -61,7 +61,7 @@ func (p *Page) menuBarPreview(c *ui.Context, t *ui.Theme, s model.Settings) {
 			}
 		}
 	}
-	look := trayart.Look{State: trayart.StateOf(st), Capture: api.CaptureStatus().Enabled}
+	look := trayart.Look{State: trayart.StateOf(st), TUN: st.Core == model.CoreRunning && st.TUN, Capture: api.CaptureStatus().Enabled}
 	if s.TrayGraph {
 		up, down := api.TrafficHistory()
 		look.Graph = trayart.Graph(up, down)
