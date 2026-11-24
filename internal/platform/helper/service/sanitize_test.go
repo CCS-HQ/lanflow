@@ -180,7 +180,17 @@ func TestSanitizeConfigRefusesReservedProviderPaths(t *testing.T) {
 // The check is linear in the size of the config: decoding into Go maps
 // took 27 s for 80 000 keys (this one: 0.3 s, 3 s under the race
 // detector; 350 000 keys take 1.1 s). What aliases can blow up is refused.
+//
+// The limits only catch a blow-up, not small slowdowns: under the race
+// detector, on a busy shared CI runner, the 3 s above were measured at
+// 6.4 s, so there they are three times as long.
 func TestSanitizeConfigIsLinear(t *testing.T) {
+	limit := func(d time.Duration) time.Duration {
+		if raceEnabled {
+			return 3 * d
+		}
+		return d
+	}
 	var b strings.Builder
 	for i := 0; i < 80000; i++ {
 		fmt.Fprintf(&b, "k%d: %d\n", i, i)
@@ -203,7 +213,7 @@ func TestSanitizeConfigIsLinear(t *testing.T) {
 		t.Fatalf("paths %d, removed %v", len(got.ProviderPaths), got.Removed)
 	}
 	t.Logf("%d bytes, 90000 keys: %v", len(in), took)
-	if took > 8*time.Second {
+	if took > limit(8*time.Second) {
 		t.Fatalf("took %v", took)
 	}
 
@@ -218,7 +228,7 @@ func TestSanitizeConfigIsLinear(t *testing.T) {
 	if _, err := sanitizeConfig([]byte(b.String())); err == nil {
 		t.Fatal("a merge bomb was accepted")
 	}
-	if took := time.Since(start); took > 5*time.Second {
+	if took := time.Since(start); took > limit(5*time.Second) {
 		t.Fatalf("refusing a merge bomb took %v", took)
 	}
 
