@@ -18,17 +18,30 @@ func hasPathPrefix(p, prefix string) bool {
 	return len(p) >= len(prefix) && strings.EqualFold(p[:len(prefix)], prefix)
 }
 
-// ownerMatches reports whether the directory path is owned by the user
-// SID uid. It is used for the data directory at install time (the
-// controller is a named pipe on Windows). The directory is opened without
-// following a reparse point and must not be a drive root or lie in a
-// system location (Windows, Program Files, ProgramData, the Users root):
-// those are never a per-user data directory, and a SYSTEM service working
-// there could be turned against the machine.
+// ownerMatches reports whether the directory path belongs to the user SID
+// uid. It is used for the data directory at install time (the controller is
+// a named pipe on Windows). The directory is opened without following a
+// reparse point and must not be a drive root or lie in a system location
+// (Windows, Program Files, ProgramData, the Users root): those are never a
+// per-user data directory, and a SYSTEM service working there could be
+// turned against the machine.
+//
+// On Windows, a process running elevated (for example "Run as
+// administrator", UAC disabled, or the built-in Administrator account) has
+// TokenOwner = BUILTIN\Administrators (S-1-5-32-544), so directories it
+// creates — including %APPDATA%\Lanflow — are owned by BUILTIN\Administrators
+// rather than the user's own SID, while inheriting a Full Control ACE for
+// the user from their profile directory. When the owner is
+// BUILTIN\Administrators, we accept the directory only if the DACL
+// specifically grants uid Full Control (and does not deny it), so another
+// user cannot claim an admin-owned or shared directory.
 func ownerMatches(path string, uid string) (bool, error) {
 	want, err := windows.StringToSid(uid)
 	if err != nil {
 		return false, fmt.Errorf("用户标识无效: %q", uid)
+	}
+	if isWellKnownNonUserSID(want) {
+		return false, nil
 	}
 	if err := checkNotSystemDir(path); err != nil {
 		return false, err
@@ -38,7 +51,7 @@ func ownerMatches(path string, uid string) (bool, error) {
 		return false, err
 	}
 	defer windows.CloseHandle(h)
-	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return false, fmt.Errorf("无法读取目录属主: %w", err)
 	}
@@ -46,7 +59,111 @@ func ownerMatches(path string, uid string) (bool, error) {
 	if err != nil || owner == nil {
 		return false, errors.New("无法读取目录属主")
 	}
-	return owner.Equals(want), nil
+	if owner.Equals(want) {
+		return true, nil
+	}
+	if !owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		return false, nil
+	}
+	return daclGrantsFullControl(sd, want), nil
+}
+
+// isWellKnownNonUserSID reports whether sid is a built-in system, service,
+// or broad group SID rather than a per-user account SID.
+func isWellKnownNonUserSID(sid *windows.SID) bool {
+	if sid == nil {
+		return true
+	}
+	for _, wk := range []windows.WELL_KNOWN_SID_TYPE{
+		windows.WinLocalSystemSid,
+		windows.WinBuiltinAdministratorsSid,
+		windows.WinBuiltinUsersSid,
+		windows.WinWorldSid,
+		windows.WinAuthenticatedUserSid,
+		windows.WinLocalServiceSid,
+		windows.WinNetworkServiceSid,
+		windows.WinCreatorOwnerSid,
+		windows.WinInteractiveSid,
+	} {
+		if sid.IsWellKnown(wk) {
+			return true
+		}
+	}
+	return false
+}
+
+// isBroadPrincipal reports whether sid is a broad group that includes
+// ordinary interactive users, used when evaluating ACCESS_DENIED ACEs.
+func isBroadPrincipal(sid *windows.SID) bool {
+	return sid.IsWellKnown(windows.WinWorldSid) ||
+		sid.IsWellKnown(windows.WinAuthenticatedUserSid) ||
+		sid.IsWellKnown(windows.WinBuiltinUsersSid)
+}
+
+// Win32 file/directory access masks (winnt.h).
+const (
+	fileAllAccess    windows.ACCESS_MASK = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1FF
+	fileGenericRead  windows.ACCESS_MASK = windows.STANDARD_RIGHTS_READ | windows.FILE_READ_DATA | windows.FILE_READ_ATTRIBUTES | windows.FILE_READ_EA | windows.SYNCHRONIZE
+	fileGenericWrite windows.ACCESS_MASK = windows.STANDARD_RIGHTS_WRITE | windows.FILE_WRITE_DATA | windows.FILE_WRITE_ATTRIBUTES | windows.FILE_WRITE_EA | windows.FILE_APPEND_DATA | windows.SYNCHRONIZE
+	fileGenericExec  windows.ACCESS_MASK = windows.STANDARD_RIGHTS_EXECUTE | windows.FILE_READ_ATTRIBUTES | windows.FILE_EXECUTE | windows.SYNCHRONIZE
+)
+
+func expandFileMask(m windows.ACCESS_MASK) windows.ACCESS_MASK {
+	if m&windows.GENERIC_ALL != 0 {
+		m |= fileAllAccess
+	}
+	if m&windows.GENERIC_READ != 0 {
+		m |= fileGenericRead
+	}
+	if m&windows.GENERIC_WRITE != 0 {
+		m |= fileGenericWrite
+	}
+	if m&windows.GENERIC_EXECUTE != 0 {
+		m |= fileGenericExec
+	}
+	return m
+}
+
+// daclGrantsFullControl reports whether sd's DACL explicitly grants want
+// FILE_ALL_ACCESS on the directory itself (evaluating ACEs in order so an
+// earlier deny ACE blocks later allow ACEs). A nil (unrestricted) DACL or
+// broad-group-only grants (Everyone, Users, Authenticated Users) do not
+// satisfy this check.
+func daclGrantsFullControl(sd *windows.SECURITY_DESCRIPTOR, want *windows.SID) bool {
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return false
+	}
+	var granted, denied windows.ACCESS_MASK
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return false
+		}
+		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
+			continue
+		}
+		switch ace.Header.AceType {
+		case windows.ACCESS_ALLOWED_ACE_TYPE, windows.ACCESS_DENIED_ACE_TYPE:
+		default:
+			continue
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if !sid.IsValid() {
+			continue
+		}
+		mask := expandFileMask(ace.Mask)
+		if ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
+			if sid.Equals(want) || isBroadPrincipal(sid) {
+				denied |= mask &^ granted
+			}
+			continue
+		}
+		if sid.Equals(want) {
+			granted |= mask &^ denied
+		}
+	}
+	return granted&fileAllAccess == fileAllAccess
 }
 
 // openNoReparse opens path for reading its attributes and security
