@@ -117,11 +117,19 @@ func systemRoot() string {
 	return `C:\Windows`
 }
 
+// PipeClientAccess is the client access mask for helper and controller pipes
+// (FILE_GENERIC_READ | FILE_GENERIC_WRITE without FILE_CREATE_PIPE_INSTANCE).
+const PipeClientAccess = windows.STANDARD_RIGHTS_READ | windows.SYNCHRONIZE |
+	windows.FILE_READ_DATA | windows.FILE_WRITE_DATA |
+	windows.FILE_READ_EA | windows.FILE_WRITE_EA |
+	windows.FILE_READ_ATTRIBUTES | windows.FILE_WRITE_ATTRIBUTES
+
 // PipeSDDL is the DACL for both the helper pipe and the Mihomo controller
-// pipe: full access for SYSTEM and Administrators, read/write for the
-// installing user, nothing for anyone else.
+// pipe: deny network logon, full access for SYSTEM and Administrators,
+// read/write (without FILE_CREATE_PIPE_INSTANCE) for the installing user,
+// nothing for anyone else.
 func PipeSDDL(sid string) string {
-	return "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;" + sid + ")"
+	return "D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x0012019b;;;" + sid + ")"
 }
 
 func defaultHooks() Hooks { return Hooks{} }

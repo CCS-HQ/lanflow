@@ -21,6 +21,9 @@ func TestShellCommandFor(t *testing.T) {
 	if cmds := ShellCommands(0); len(cmds) != 4 || !strings.Contains(cmds[1].Cmd, ":7890") {
 		t.Errorf("default port: %+v", cmds)
 	}
+	if cmd := ShellCommands(7891)[3].Cmd; cmd != `set "https_proxy=http://127.0.0.1:7891" && set "http_proxy=http://127.0.0.1:7891" && set "all_proxy=socks5://127.0.0.1:7891"` {
+		t.Errorf("cmd escaping = %q", cmd)
+	}
 }
 
 // TestThenWithoutShell: an Env without RunThen (a page's test) runs the

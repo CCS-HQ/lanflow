@@ -16,8 +16,8 @@ var (
 // peerListener closes connections whose peer is not the current user.
 type peerListener struct{ net.Listener }
 
-// verify is the peer check (a variable for tests).
-var verify = verifyPeer
+// verify is the server-side client check (a variable for tests).
+var verify = verifyClient
 
 func (l *peerListener) Accept() (net.Conn, error) {
 	for {

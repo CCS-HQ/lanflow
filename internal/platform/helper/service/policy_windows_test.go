@@ -10,6 +10,8 @@ import (
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
+
+	"lanflow/internal/platform/helper/protocol"
 )
 
 func TestOwnerMatchesWindows(t *testing.T) {
@@ -39,7 +41,7 @@ func TestOwnerMatchesWindows(t *testing.T) {
 }
 
 func TestCheckNotSystemDir(t *testing.T) {
-	for _, bad := range []string{`C:\`, `C:\Windows\Temp\x`, `C:\Program Files\Lanflow`, `C:\ProgramData\Lanflow`, `C:\Users`} {
+	for _, bad := range []string{`C:\`, `C:\Windows\Temp\x`, `C:\Program Files\Lanflow`, `C:\ProgramData\Lanflow`, `C:\Users`, `\\attacker\share\Lanflow`} {
 		if err := checkNotSystemDir(bad); err == nil {
 			t.Errorf("%s accepted", bad)
 		}
@@ -99,5 +101,8 @@ func TestCheckControllerRefusesExistingPipe(t *testing.T) {
 	defer l.Close()
 	if _, err := checkController(nil, name); err == nil {
 		t.Fatal("squatted pipe name accepted")
+	}
+	if _, err := checkController(nil, protocol.PipeName); err == nil {
+		t.Fatal("helper pipe name accepted for controller")
 	}
 }

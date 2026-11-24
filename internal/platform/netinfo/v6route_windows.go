@@ -2,12 +2,20 @@
 
 package netinfo
 
-import "context"
+import (
+	"context"
 
-func ipv6Route(ctx context.Context) V6Route {
-	out, err := runCommand(ctx, "route", "print", "-6")
+	"golang.org/x/sys/windows"
+)
+
+func ipv6Route(context.Context) V6Route {
+	adapters, err := listAdapters()
 	if err != nil {
 		return V6Route{}
 	}
-	return parseWindowsV6Routes(out)
+	routes, err := listRoutes(windows.AF_INET6)
+	if err != nil {
+		return V6Route{}
+	}
+	return analyzeWindowsV6Routes(adapters, routes)
 }

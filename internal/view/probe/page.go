@@ -257,7 +257,7 @@ func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 					default:
 						ui.Text(c, rep.IP).FontSize(20).FontFeatures("tnum").Selectable()
 						ui.Column(c).Gap(5).Children(func() {
-							kv(c, i18n.T("位置"), placeText(rep.Place), nil)
+							kv(c, i18n.T("位置"), placeText(e.Mac, rep.Place), nil)
 							kv(c, i18n.T("运营商"), orgText(rep.ASN, rep.Org), nil)
 							kv(c, i18n.T("IP 类型"), "", func() { e.Kit.Tag(c, kindText(rep.Kind), kindTagKind(rep.Kind)) })
 							kv(c, i18n.T("原生 IP"), "", func() {
@@ -509,7 +509,7 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 	byLabel := map[string]string{}
 	found := false
 	for i, r := range regions {
-		labels[i] = fmt.Sprintf("%s%s (%d)", env.FlagPrefix(r.Country), countryText(r.Country), len(r.Nodes))
+		labels[i] = fmt.Sprintf("%s%s (%d)", env.FlagPrefixFor(e.Mac, r.Country), countryText(r.Country), len(r.Nodes))
 		byLabel[labels[i]] = r.Country
 		if r.Country == p.region {
 			p.regionName, found = labels[i], true
@@ -596,7 +596,8 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 				}
 			case "place":
 				if r.Probed {
-					ui.Text(c, placeText(r.Exit.Place)).SingleLine().Tooltip(placeText(r.Exit.Place))
+					pt := placeText(e.Mac, r.Exit.Place)
+					ui.Text(c, pt).SingleLine().Tooltip(pt)
 				} else {
 					ui.Text(c, "—").TextColor(t.TextMuted)
 				}
@@ -656,7 +657,7 @@ func sortRows(rows []regionRow, s ui.SortOrder) {
 				return a.Exit.IP < b.Exit.IP
 			}
 		case "place":
-			pa, pb := placeText(a.Exit.Place), placeText(b.Exit.Place)
+			pa, pb := placeText(false, a.Exit.Place), placeText(false, b.Exit.Place)
 			if pa != pb {
 				return pa < pb
 			}
@@ -703,7 +704,7 @@ func countryText(cc string) string {
 	return cc
 }
 
-func placeText(pl *model.Place) string {
+func placeText(mac bool, pl *model.Place) string {
 	if pl == nil {
 		return i18n.T("未知")
 	}
@@ -711,7 +712,7 @@ func placeText(pl *model.Place) string {
 	if name == "" {
 		name = countryText(pl.Country)
 	}
-	return env.FlagPrefix(pl.Country) + name
+	return env.FlagPrefixFor(mac, pl.Country) + name
 }
 
 func orgText(asn, org string) string {

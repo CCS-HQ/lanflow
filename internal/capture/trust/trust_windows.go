@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"unsafe"
 
@@ -18,6 +19,7 @@ func openRoot() (windows.Handle, error) {
 	name, _ := windows.UTF16PtrFromString("ROOT")
 	h, err := windows.CertOpenStore(windows.CERT_STORE_PROV_SYSTEM, 0, 0,
 		windows.CERT_SYSTEM_STORE_CURRENT_USER, uintptr(unsafe.Pointer(name)))
+	runtime.KeepAlive(name)
 	if err != nil {
 		return 0, fmt.Errorf("open CurrentUser\\Root: %w", err)
 	}
@@ -25,6 +27,9 @@ func openRoot() (windows.Handle, error) {
 }
 
 func install(der []byte) error {
+	if len(der) == 0 {
+		return errors.New("empty certificate")
+	}
 	st, err := openRoot()
 	if err != nil {
 		return err
@@ -63,14 +68,16 @@ func each(fn func(c *windows.CertContext, der []byte) bool) error {
 func remove(der []byte) error {
 	want := SHA1(der)
 	var derr error
-	each(func(c *windows.CertContext, d []byte) bool {
+	if err := each(func(c *windows.CertContext, d []byte) bool {
 		if SHA1(d) != want {
 			return true
 		}
 		dup := windows.CertDuplicateCertificateContext(c)
 		derr = windows.CertDeleteCertificateFromStore(dup) // frees dup
 		return false
-	})
+	}); err != nil {
+		return err
+	}
 	if derr != nil && !errors.Is(derr, windows.ERROR_NOT_FOUND) {
 		return derr
 	}

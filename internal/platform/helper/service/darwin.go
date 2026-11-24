@@ -470,3 +470,6 @@ func Run(ctx context.Context, version string, logf Logf) error {
 	removeOwnSocket(protocol.SocketPath, own)
 	return err
 }
+
+// CleanupLogDir is a no-op on macOS (uninstall removes LogDir directly).
+func CleanupLogDir() {}

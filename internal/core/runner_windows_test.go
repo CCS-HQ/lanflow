@@ -49,6 +49,28 @@ func TestDialChecksControllerServer(t *testing.T) {
 	c.Close()
 }
 
+func TestTrustWorkDir(t *testing.T) {
+	tu, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd := t.TempDir()
+	writePID(wd, os.Getpid())
+	if trustedCoreServer(os.Getpid(), tu.User.Sid, `C:\Users\alice\mihomo.exe`) {
+		t.Fatal("untrusted work dir was accepted")
+	}
+	TrustWorkDir(wd)
+	if !trustedCoreServer(os.Getpid(), tu.User.Sid, `C:\Users\alice\mihomo.exe`) {
+		t.Fatal("trusted work dir with matching mihomo.pid was rejected")
+	}
+	if trustedCoreServer(os.Getpid(), tu.User.Sid, `C:\Users\alice\notepad.exe`) {
+		t.Fatal("non-mihomo executable was accepted")
+	}
+	if trustedCoreServer(os.Getpid()+99999, tu.User.Sid, `C:\Users\alice\mihomo.exe`) {
+		t.Fatal("mismatched PID was accepted")
+	}
+}
+
 // ownsConsole reports whether this process is attached to a console:
 // AttachConsole then fails with ERROR_ACCESS_DENIED. If it succeeds the
 // process had none and is detached again.

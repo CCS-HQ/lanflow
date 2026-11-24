@@ -18,6 +18,7 @@ func runSubcommand(args []string) (code int, ok bool) {
 	}
 	switch args[0] {
 	case "ctl":
+		attachParentConsole()
 		return ctl.Main(args[1:], ctl.Env{Version: mygo.App.Version()}), true
 	case "mcp":
 		return mcp.Main(mygo.App.Version()), true

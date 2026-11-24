@@ -19,6 +19,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/platform/sysproxy"
 	"lanflow/internal/view/env"
 	"lanflow/internal/view/logs"
 )
@@ -417,7 +418,7 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 	}, func() {
 		e.Kit.Section(c, i18n.T("数据"), "", func() {
 			e.Kit.Row(c, i18n.T("配置文件夹"), e.API.ConfigDir(), func() {
-				ui.Button(c, revealLabel(e)).OnClick(func() { mygo.Shell.ShowItemInFolder(e.API.ConfigDir()) })
+				ui.Button(c, revealLabel(e)).OnClick(func() { env.RevealInFolder(e.API.ConfigDir()) })
 			})
 			e.Kit.Row(c, i18n.T("导出 / 导入设置"), i18n.T("设置、覆写与自定义规则保存为 lanflow.yaml；导入会按文件内容应用"), func() {
 				ui.Row(c).Gap(8).Children(func() {
@@ -588,7 +589,7 @@ func (p *Page) bypassDialog(c *ui.Context, t *ui.Theme, s model.Settings) {
 	})
 }
 
-var defaultBypass = []string{"localhost", "127.0.0.1", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "*.local"}
+var defaultBypass = sysproxy.DefaultBypass
 
 // ---- 内核 ----
 
@@ -624,7 +625,7 @@ func (p *Page) kernel(c *ui.Context, t *ui.Theme, s model.Settings, st model.Sta
 					if s.CorePath != "" && s.CoreVersion == "" {
 						ui.Button(c, i18n.T("恢复内置")).Disabled(dl.Active).OnClick(func() { p.useCore("") })
 					}
-					ui.Button(c, i18n.T("更改…")).Disabled(dl.Active).OnClick(p.chooseCore)
+					ui.Button(c, i18n.T("更改…")).Disabled(dl.Active).OnClick(func() { go p.chooseCore() })
 				})
 			})
 			lvlOpts := []string{i18n.T("调试"), i18n.T("信息"), i18n.T("警告"), i18n.T("错误"), i18n.T("静默")}
@@ -681,24 +682,39 @@ func (p *Page) checkUpdate(current string) {
 // pickCoreFile is the system's file dialog for a Mihomo binary (a
 // variable so that tests can answer it).
 var pickCoreFile = func() ([]string, error) {
-	return mygo.Dialog.Open(mygo.OpenDialogOptions{Title: i18n.T("选择 Mihomo 内核文件"), Message: i18n.T("选择一个 Mihomo 可执行文件；留空则使用内置内核。")})
+	opts := mygo.OpenDialogOptions{
+		Title:   i18n.T("选择 Mihomo 内核文件"),
+		Message: i18n.T("选择一个 Mihomo 可执行文件；留空则使用内置内核。"),
+	}
+	if runtime.GOOS == "windows" {
+		opts.Filters = []mygo.FileFilter{{Name: "Mihomo", Extensions: []string{"exe"}}}
+	}
+	return mygo.Dialog.Open(opts)
 }
 
-// chooseCore opens the system's file dialog for a Mihomo binary. The
-// dialog runs its own loop, so it is called on the UI thread.
+// chooseCore opens the system's file dialog for a Mihomo binary. On
+// the live UI button click it runs off the UI thread so MyGo's blocking
+// Dialog.Open never stalls or deadlocks the loop; tests also invoke
+// chooseCore() directly.
 func (p *Page) chooseCore() {
 	paths, err := pickCoreFile()
 	if err != nil || len(paths) == 0 {
 		return
 	}
-	// The snapshot is taken now, not before the dialog: it stays open as
-	// long as the user likes, frames are drawn and settings saved behind
-	// it, and a snapshot from before would count all of that as this
-	// control's change and take it back.
-	s := p.current()
-	s.CorePath = paths[0]
-	s.CoreVersion = "" // a hand-picked file is not one of the installed versions
-	p.save(s, i18n.T("已更换内核文件，重启内核后生效"), nil)
+	chosen := paths[0]
+	apply := func() {
+		// The snapshot is taken on the UI thread after the dialog
+		// closes: settings saved behind it are preserved.
+		s := p.current()
+		s.CorePath = chosen
+		s.CoreVersion = "" // a hand-picked file is not one of the installed versions
+		p.save(s, i18n.T("已更换内核文件，重启内核后生效"), nil)
+	}
+	if p.e.RunThen != nil {
+		p.e.OnUI(apply)
+	} else {
+		apply()
+	}
 }
 
 func (p *Page) geoSection(c *ui.Context, t *ui.Theme, s model.Settings, running bool) {

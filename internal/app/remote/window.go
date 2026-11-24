@@ -38,6 +38,7 @@ var retry = []time.Duration{100 * time.Millisecond, 250 * time.Millisecond, 500 
 // watch waits for conn to end and reconnects.
 func (cl *Client) watch(conn *rpc.Conn) {
 	<-conn.Done()
+	_ = conn.Close()
 	cl.mu.Lock()
 	if cl.conn == conn {
 		cl.conn = nil
@@ -52,6 +53,7 @@ func (cl *Client) watch(conn *rpc.Conn) {
 		r.OnState(false, conn.Err())
 	}
 	cl.forgetAll()
+	var lastStart time.Time
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			time.Sleep(retry[min(attempt-1, len(retry)-1)])
@@ -67,8 +69,11 @@ func (cl *Client) watch(conn *rpc.Conn) {
 		}
 		next, err := cl.dial(context.Background())
 		if errors.Is(err, rpc.ErrNotRunning) && r.Start != nil {
-			if serr := r.Start(); serr != nil {
-				log.Printf("lanflow: start the service: %v", serr)
+			if lastStart.IsZero() || time.Since(lastStart) >= 5*time.Second {
+				lastStart = time.Now()
+				if serr := r.Start(); serr != nil {
+					log.Printf("lanflow: start the service: %v", serr)
+				}
 			}
 			continue
 		}

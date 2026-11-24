@@ -148,7 +148,7 @@ func (p *Page) setShortcut(s model.Settings, action, acc string) {
 			p.setHotkeyErr(action, err.Error())
 			return
 		}
-		if other := hotkey.Conflict(s, action, acc); other != "" {
+		if other := hotkey.ConflictFor(s, action, acc, p.e.Mac); other != "" {
 			p.setHotkeyErr(action, i18n.Tf("%s 已用于「%s」，请换一个组合键。", hotkey.Display(acc, p.e.Mac), hotkey.ActionName(other)))
 			return
 		}

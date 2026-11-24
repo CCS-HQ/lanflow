@@ -14,6 +14,22 @@
   StrCmp $INSTDIR "$LOCALAPPDATA\Programs\Lanflow" 0 lanflow_init_done
   ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.example.lanflow" "InstallLocation"
   StrCmp $0 "" lanflow_init_done
+  StrCpy $1 $0 1
+  StrCmp $1 '"' 0 lanflow_unquote_tail
+  StrCpy $0 $0 "" 1
+  lanflow_unquote_tail:
+  StrCpy $1 $0 1 -1
+  StrCmp $1 '"' 0 lanflow_set_instdir
+  StrCpy $0 $0 -1
+  lanflow_set_instdir:
+  StrCmp $0 "" lanflow_init_done
   StrCpy $INSTDIR $0
   lanflow_init_done:
+!macroend
+
+!macro customUnInstall
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "lanflow.service"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Lanflow"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "lanflow.service"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "Lanflow"
 !macroend

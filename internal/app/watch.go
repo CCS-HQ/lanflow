@@ -119,7 +119,8 @@ func ifaceAddrs() map[string]string {
 			continue
 		}
 		name := strings.ToLower(i.Name)
-		if strings.HasPrefix(name, "utun") || strings.HasPrefix(name, "tun") || strings.Contains(name, "wintun") || strings.HasPrefix(name, "mihomo") {
+		if strings.HasPrefix(name, "utun") || strings.HasPrefix(name, "tun") || strings.Contains(name, "wintun") ||
+			strings.HasPrefix(name, "mihomo") || strings.HasPrefix(name, "lanflow") || strings.HasPrefix(name, "meta") {
 			continue
 		}
 		addrs, err := i.Addrs()

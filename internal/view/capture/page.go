@@ -568,7 +568,11 @@ func (p *Page) handleArg(a string, st model.CaptureStatus) {
 	case strings.HasPrefix(a, "add-app:"):
 		path, name, _ := strings.Cut(strings.TrimPrefix(a, "add-app:"), "\n")
 		sel := app.CaptureAppFor(path, name)
-		e.Confirm(i18n.Tf("解密程序 %s？", sel.Name), i18n.Tf("将添加选择项「%s」：这个程序（及其辅助进程）访问的所有 HTTPS 主机都会解密，跳过列表除外。", sel.Match)+tail, okLabel, false, func() {
+		body := i18n.Tf("将添加选择项「%s」：这个程序（及其辅助进程）访问的所有 HTTPS 主机都会解密，跳过列表除外。", sel.Match)
+		if !e.Mac {
+			body = i18n.Tf("将添加选择项「%s」：这个程序访问的所有 HTTPS 主机都会解密，跳过列表除外。", sel.Match)
+		}
+		e.Confirm(i18n.Tf("解密程序 %s？", sel.Name), body+tail, okLabel, false, func() {
 			e.Run(func() error { return e.API.AddCaptureApp(path, name, enable) }, "")
 			p.afterAdd(st)
 		})
@@ -585,7 +589,11 @@ var saveDialog = func(o mygo.SaveDialogOptions) (string, error) { return mygo.Di
 func (p *Page) exportHAR(bodies bool) {
 	e, title := p.e, i18n.T("导出 HAR")
 	p.spawn(func() {
-		path, err := saveDialog(mygo.SaveDialogOptions{Title: title, DefaultPath: "lanflow-capture.har"})
+		path, err := saveDialog(mygo.SaveDialogOptions{
+			Title:       title,
+			DefaultPath: "lanflow-capture.har",
+			Filters:     []mygo.FileFilter{{Name: "HAR", Extensions: []string{"har"}}},
+		})
 		if err != nil || path == "" {
 			return
 		}
@@ -599,9 +607,16 @@ func (p *Page) exportHAR(bodies bool) {
 func (p *Page) exportCA() {
 	e, title := p.e, i18n.T("导出根证书")
 	p.spawn(func() {
-		path, err := saveDialog(mygo.SaveDialogOptions{Title: title, DefaultPath: "lanflow-ca.pem"})
+		path, err := saveDialog(mygo.SaveDialogOptions{
+			Title:       title,
+			DefaultPath: "lanflow-ca.pem",
+			Filters:     []mygo.FileFilter{{Name: "PEM / CRT", Extensions: []string{"pem", "crt"}}},
+		})
 		if err != nil || path == "" {
 			return
+		}
+		if filepath.Ext(path) == "" {
+			path += ".pem"
 		}
 		e.Run(func() error { return e.API.ExportCACert(path) }, i18n.Tf("已导出到 %s", filepath.Base(path)))
 	})

@@ -105,7 +105,7 @@ func (f *fakeWin) legacyRestore(saved windowsSaved) error {
 }
 
 const (
-	testServer   = "http=127.0.0.1:7890;https=127.0.0.1:7890;socks=127.0.0.1:7890"
+	testServer   = "127.0.0.1:7890"
 	testOverride = "localhost;<local>"
 )
 

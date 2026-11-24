@@ -43,7 +43,7 @@ type candidate struct {
 // tunnelHints are interface names (lower case prefixes) of virtual
 // adapters besides those isTunnelName knows: Windows TUN adapters are
 // named by the program that creates them.
-var tunnelHints = []string{"wintun", "meta", "mihomo", "clash", "sing-box", "singbox", "wireguard", "tailscale", "zerotier", "openvpn", "vethernet", "vmware", "virtualbox"}
+var tunnelHints = []string{"lanflow", "wintun", "meta", "mihomo", "clash", "sing-box", "singbox", "wireguard", "tailscale", "zerotier", "openvpn", "vethernet", "vmware", "virtualbox"}
 
 // isVirtualName reports whether name looks like a TUN or other virtual
 // interface that must not be used as the physical outbound interface.

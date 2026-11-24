@@ -3,8 +3,10 @@ package app
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,24 +44,32 @@ func (s *Service) procIconsLocked() *procIconCache {
 	return s.state.procIcons
 }
 
+func procIconCacheKey(subject string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(filepath.Clean(subject))
+	}
+	return subject
+}
+
 // ProcessIcon implements API.ProcessIcon.
 func (s *Service) ProcessIcon(path string) []byte {
 	subject := iconSubject(strings.TrimSpace(path))
 	if subject == "" || s.d.fileIcon == nil {
 		return nil
 	}
+	key := procIconCacheKey(subject)
 	s.mu.Lock()
 	c := s.procIconsLocked()
 	s.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if d, ok := c.data[subject]; ok {
+	if d, ok := c.data[key]; ok {
 		return d
 	}
-	if c.failed[subject] || c.pending[subject] {
+	if c.failed[key] || c.pending[key] {
 		return nil
 	}
-	c.pending[subject] = true
+	c.pending[key] = true
 	s.goBackground(func() { s.loadProcIcon(c, subject) })
 	return nil
 }
@@ -67,9 +77,10 @@ func (s *Service) ProcessIcon(path string) []byte {
 // loadProcIcon fills the cache for subject from disk or the platform, and
 // emits TopicProcIcons when an icon was found.
 func (s *Service) loadProcIcon(c *procIconCache, subject string) {
+	key := procIconCacheKey(subject)
 	var data []byte
 	var err error
-	switch cached := s.procIconPath(subject); {
+	switch cached := s.procIconPath(key, subject); {
 	case cached == "":
 		err = &iconError{"not found"}
 	case readProcIcon(cached, &data):
@@ -83,17 +94,17 @@ func (s *Service) loadProcIcon(c *procIconCache, subject string) {
 		}
 	}
 	c.mu.Lock()
-	delete(c.pending, subject)
+	delete(c.pending, key)
 	if err != nil {
 		if len(c.failed) >= maxProcIconsInMem {
 			c.failed = map[string]bool{} // bounded like data; a miss is looked up again
 		}
-		c.failed[subject] = true
+		c.failed[key] = true
 	} else {
 		if len(c.data) >= maxProcIconsInMem {
 			c.data = map[string][]byte{}
 		}
-		c.data[subject] = data
+		c.data[key] = data
 	}
 	c.mu.Unlock()
 	if err != nil {
@@ -104,13 +115,19 @@ func (s *Service) loadProcIcon(c *procIconCache, subject string) {
 }
 
 // procIconPath is where subject's icon is cached: CacheDir/procicons/<key>.png,
-// or "" when the subject cannot be stat'ed (and so has no icon either).
-func (s *Service) procIconPath(subject string) string {
+// or "" when the subject cannot be stat'ed (other than permission denied, e.g.
+// protected WindowsApps binaries whose shell icon can still be extracted).
+func (s *Service) procIconPath(key, subject string) string {
+	var mtime int64
 	info, err := os.Stat(subject)
 	if err != nil {
-		return ""
+		if !errors.Is(err, os.ErrPermission) {
+			return ""
+		}
+	} else {
+		mtime = info.ModTime().UnixNano()
 	}
-	return filepath.Join(s.opt.CacheDir, procIconsDir, procIconKey(subject, info.ModTime().UnixNano())+".png")
+	return filepath.Join(s.opt.CacheDir, procIconsDir, procIconKey(key, mtime)+".png")
 }
 
 // procIconKey names the cache file of a subject at a modification time.

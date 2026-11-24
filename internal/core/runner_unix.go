@@ -90,3 +90,6 @@ func isExecutable(info os.FileMode) bool { return info&0o111 != 0 }
 
 // binaryName is the bundled core file name on this platform.
 const binaryName = "mihomo"
+
+func extraEnv() []string  { return nil }
+func trustWorkDir(string) {}

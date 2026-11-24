@@ -74,7 +74,7 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := verify(nc); err != nil {
+	if err := verifyServer(nc); err != nil {
 		_ = nc.Close()
 		return nil, err
 	}
@@ -159,6 +159,10 @@ func (c *Conn) read() {
 		delete(c.pending, id)
 	}
 	c.mu.Unlock()
+	// Close the underlying connection when the read loop ends so Windows named
+	// pipe client handles are released immediately when the service exits,
+	// allowing a restarted service to rebind the first pipe instance.
+	_ = c.c.Close()
 	close(c.closed)
 	c.qmu.Lock()
 	c.qdone = true

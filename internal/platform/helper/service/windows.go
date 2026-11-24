@@ -36,6 +36,9 @@ var (
 )
 
 func programFiles() string {
+	if d, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0); err == nil && d != "" {
+		return d
+	}
 	if v := os.Getenv("ProgramFiles"); v != "" {
 		return v
 	}
@@ -43,6 +46,9 @@ func programFiles() string {
 }
 
 func programData() string {
+	if d, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0); err == nil && d != "" {
+		return d
+	}
 	if v := os.Getenv("ProgramData"); v != "" {
 		return v
 	}
@@ -74,6 +80,9 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) (err error) {
 	self, err := os.Executable()
 	if err != nil {
 		return err
+	}
+	if real, err := filepath.EvalSymlinks(self); err == nil {
+		self = real
 	}
 	m, err := mgr.Connect()
 	if err != nil {
@@ -120,6 +129,7 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) (err error) {
 	// Everything is ready: stop the previous service and switch.
 	s, err := m.OpenService(ServiceName)
 	wasRunning := false
+	created := false
 	if err == nil {
 		if st, qerr := s.Query(); qerr == nil && st.State != svc.Stopped {
 			wasRunning = true
@@ -133,8 +143,11 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) (err error) {
 		s = nil
 	}
 	restore := func() {
+		if created && s != nil {
+			_ = s.Delete()
+		}
 		files.rollback()
-		if s != nil && wasRunning {
+		if !created && s != nil && wasRunning {
 			if rerr := s.Start(); rerr != nil {
 				logf("restore the previous helper: %v", rerr)
 			} else {
@@ -151,18 +164,25 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) (err error) {
 	}
 
 	conf := mgr.Config{
+		ServiceType:  windows.SERVICE_WIN32_OWN_PROCESS,
 		DisplayName:  "Lanflow Helper",
-		Description:  "澜流 TUN 模式权限组件：以系统权限运行 Mihomo 内核。",
+		Description:  "Lanflow TUN mode privileged helper (runs Mihomo core).",
 		StartType:    mgr.StartAutomatic,
 		ErrorControl: mgr.ErrorNormal,
 	}
 	if s == nil {
 		s, err = m.CreateService(ServiceName, HelperBin, conf, "run")
 		if err != nil {
+			if errors.Is(err, windows.ERROR_SERVICE_MARKED_FOR_DELETE) {
+				s = nil
+				restore()
+				return errors.New("旧的服务正在等待系统清理（请关闭服务管理器「services.msc」或稍后重试）")
+			}
 			s = nil
 			restore()
 			return fmt.Errorf("注册服务失败: %w", err)
 		}
+		created = true
 	} else {
 		conf.BinaryPathName = windows.ComposeCommandLine([]string{HelperBin, "run"})
 		if err := s.UpdateConfig(conf); err != nil {
@@ -177,14 +197,47 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) (err error) {
 		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
 	}, 86400)
+	_ = s.SetRecoveryActionsOnNonCrashFailures(true)
 	if err := s.Start(); err != nil {
 		restore()
 		return fmt.Errorf("启动服务失败: %w", err)
+	}
+	if err := waitServiceRunning(ctx, s, 30*time.Second); err != nil {
+		_ = stopService(context.Background(), s)
+		restore()
+		return err
 	}
 	files.finish()
 	logf("service started")
 	return nil
 }
+
+func waitServiceRunning(ctx context.Context, s *mgr.Service, d time.Duration) error {
+	deadline := time.Now().Add(d)
+	for {
+		st, err := s.Query()
+		if err != nil {
+			return fmt.Errorf("查询服务状态失败: %w", err)
+		}
+		switch st.State {
+		case svc.Running:
+			return nil
+		case svc.Stopped:
+			return fmt.Errorf("权限组件服务启动后立即退出，详情见 %s", LogPath)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("权限组件服务未能在 %d 秒内就绪，详情见 %s", int(d/time.Second), LogPath)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// CleanupLogDir removes LogDir after uninstall logs have been closed.
+func CleanupLogDir() { _ = os.RemoveAll(LogDir) }
 
 // Uninstall stops and deletes the service and removes the files.
 func Uninstall(ctx context.Context, logf Logf) error {
@@ -202,14 +255,39 @@ func Uninstall(ctx context.Context, logf Logf) error {
 		}
 		s.Close()
 	}
+	self, _ := os.Executable()
+	if real, err := filepath.EvalSymlinks(self); err == nil {
+		self = real
+	}
 	var firstErr error
-	for _, p := range []string{HelperBin, CoreBin, ConfigPath} {
+	for _, p := range []string{CoreBin, ConfigPath} {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
 			firstErr = err
 		}
 	}
+	// Remove leftover backup files or staged files inside InstallDir and WorkDir.
+	if matches, err := filepath.Glob(filepath.Join(InstallDir, "*"+oldSuffix)); err == nil {
+		for _, match := range matches {
+			_ = os.Remove(match)
+		}
+	}
+	_ = os.RemoveAll(WorkDir)
+	if err := os.Remove(HelperBin); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if samePath(self, HelperBin) {
+			// Running from the installed copy itself: schedule deletion on reboot
+			// instead of failing uninstall with ERROR_ACCESS_DENIED.
+			if p1, e1 := windows.UTF16PtrFromString(HelperBin); e1 == nil {
+				_ = windows.MoveFileEx(p1, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
+			}
+			if p2, e2 := windows.UTF16PtrFromString(InstallDir); e2 == nil {
+				_ = windows.MoveFileEx(p2, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
+			}
+			logf("helper binary is currently running; scheduled %s for removal on reboot", HelperBin)
+		} else if firstErr == nil {
+			firstErr = err
+		}
+	}
 	_ = os.Remove(InstallDir)
-	_ = os.RemoveAll(LogDir)
 	return firstErr
 }
 
@@ -305,7 +383,7 @@ type handler struct {
 }
 
 func (h *handler) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
-	changes <- svc.Status{State: svc.StartPending}
+	changes <- svc.Status{State: svc.StartPending, WaitHint: 15000, CheckPoint: 1}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	ready := make(chan struct{})
@@ -338,7 +416,7 @@ func (h *handler) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 			case svc.Interrogate:
 				changes <- c.CurrentStatus
 			case svc.Stop, svc.Shutdown:
-				changes <- svc.Status{State: svc.StopPending}
+				changes <- svc.Status{State: svc.StopPending, WaitHint: uint32((3 * StopGrace) / time.Millisecond), CheckPoint: 1}
 				cancel()
 				select {
 				case <-done:

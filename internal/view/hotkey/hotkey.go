@@ -155,6 +155,15 @@ func (c Combo) String() string {
 	return strings.Join(append(parts, c.Key), "+")
 }
 
+// Normalize resolves platform-specific aliases ("CmdOrCtrl" -> Ctrl off macOS)
+// so shortcuts that trigger the same keystroke compare equal.
+func (c Combo) Normalize(mac bool) Combo {
+	if !mac && c.Mods&Cmd != 0 {
+		c.Mods = (c.Mods &^ Cmd) | Ctrl
+	}
+	return c
+}
+
 // Display formats the combo for the user: "⌘⇧S" on macOS, "Ctrl+Shift+S"
 // elsewhere. Order follows the platform's menus.
 func (c Combo) Display(mac bool) string {

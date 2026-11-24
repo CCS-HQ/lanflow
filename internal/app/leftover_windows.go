@@ -3,6 +3,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,16 +71,34 @@ func isCaptureAgent(pid int, recorded time.Time) bool {
 		return false
 	}
 	exe, err := os.Executable()
-	if err != nil || !strings.EqualFold(filepath.Base(img), filepath.Base(exe)) {
+	if err != nil {
+		return false
+	}
+	if real, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = real
+	}
+	if realImg, rerr := filepath.EvalSymlinks(img); rerr == nil {
+		img = realImg
+	}
+	if !strings.EqualFold(filepath.Clean(img), filepath.Clean(exe)) {
 		return false
 	}
 	return !start.After(recorded.Add(2 * time.Second))
 }
 
+func sys32Exe(name string) string {
+	if dir, err := windows.GetSystemDirectory(); err == nil && dir != "" {
+		return filepath.Join(dir, name)
+	}
+	return name
+}
+
 // portOwner names the program listening on TCP port ("" = unknown), from
-// netstat.
+// netstat (both IPv4 and IPv6).
 func portOwner(port int) string {
-	cmd := exec.Command("netstat", "-ano", "-p", "TCP")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, sys32Exe("netstat.exe"), "-ano")
 	hideWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
@@ -95,4 +114,9 @@ func portOwner(port int) string {
 	return "PID " + strconv.Itoa(pid)
 }
 
-func hideWindow(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} }
+func hideWindow(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
+}

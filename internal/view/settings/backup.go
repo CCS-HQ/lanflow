@@ -87,8 +87,14 @@ func (p *Page) backupConfigDialog(c *ui.Context, t *ui.Theme, s model.Settings, 
 				})
 				p.davField(c, t, i18n.T("用户名"), "", "dav-user", &f.davUser, w.User, 200, func(v string) { s.WebDAV.User = v; p.save(s, "", nil) })
 				pwDesc := i18n.T("保存在系统钥匙串中")
+				if !e.Mac {
+					pwDesc = i18n.T("保存在系统凭据管理器中")
+				}
 				if info.PasswordStore == model.PasswordStoreFile {
 					pwDesc = i18n.T("本机没有可用的钥匙串：密码经混淆后保存在设置目录（仅当前用户可读），并非加密")
+					if !e.Mac {
+						pwDesc = i18n.T("本机没有可用的凭据管理器：密码经混淆后保存在设置目录（仅当前用户可读），并非加密")
+					}
 				}
 				if !info.HasPassword {
 					pwDesc = i18n.Tf("未设置；%s", pwDesc)

@@ -6,7 +6,6 @@ package logs
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -346,7 +345,7 @@ func ExportDiagnostics(e *env.Env) {
 		if err := e.API.ExportDiagnostics(path); err != nil {
 			return err
 		}
-		mygo.Shell.ShowItemInFolder(path)
+		env.RevealInFolder(path)
 		return nil
 	}, i18n.Tf("已导出到 %s", filepath.Base(path)))
 }
@@ -354,12 +353,7 @@ func ExportDiagnostics(e *env.Env) {
 // revealLogFile selects the log file in the file manager; before it has
 // ever been written, it opens the log folder instead.
 func revealLogFile(dir, name string) {
-	file := filepath.Join(dir, name)
-	if _, err := os.Stat(file); err == nil {
-		mygo.Shell.ShowItemInFolder(file)
-		return
-	}
-	_ = mygo.Shell.OpenPath(dir)
+	env.RevealInFolder(filepath.Join(dir, name))
 }
 
 // visible returns the indexes in all of the entries the level filter and

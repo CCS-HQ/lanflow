@@ -26,9 +26,14 @@ func applyRun(st runStore, want string, on bool) (bool, error) {
 	have, ok := st.Get()
 	if !on {
 		if !ok {
+			st.ClearApproval()
 			return false, nil
 		}
-		return true, st.Delete()
+		if err := st.Delete(); err != nil {
+			return false, err
+		}
+		st.ClearApproval()
+		return true, nil
 	}
 	switch {
 	case !ok:
@@ -40,7 +45,10 @@ func applyRun(st runStore, want string, on bool) (bool, error) {
 	case !strings.EqualFold(have, want):
 		// The executable moved: the same entry, the user's choice in Task
 		// Manager stays.
-		return true, st.Set(want)
+		if err := st.Set(want); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	return false, nil
 }

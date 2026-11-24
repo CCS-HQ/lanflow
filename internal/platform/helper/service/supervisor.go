@@ -118,8 +118,14 @@ func (s *Supervisor) Status() protocol.Response {
 // WorkDir and spawns Mihomo there. It fails when a process is already
 // running.
 func (s *Supervisor) StartCore(ctx context.Context, spec protocol.Spec) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.stageMu.Lock()
 	defer s.stageMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if s.proc != nil {
 		s.mu.Unlock()
@@ -142,9 +148,9 @@ func (s *Supervisor) StartCore(ctx context.Context, spec protocol.Spec) error {
 	if err != nil {
 		return err
 	}
-	if s.aborted {
-		// A stop that arrived while the start was preparing must not be
-		// followed by a running core.
+	if s.aborted || ctx.Err() != nil {
+		// A stop that arrived (or client request cancelled) while the start
+		// was preparing must not be followed by a running core.
 		return errors.New("启动 Mihomo 的请求已被停止请求取消")
 	}
 	run := resolved

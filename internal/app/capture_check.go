@@ -343,7 +343,8 @@ func probeUpstream(r *captureRun, host string, port int, useTLS bool) *probeErr 
 	// reached shows as the connection closing right after
 	closed := func(err error) bool {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-			errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) {
+			errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) ||
+			errors.Is(err, syscall.Errno(10053)) || errors.Is(err, syscall.Errno(10054)) {
 			return true
 		}
 		// Windows words the same thing its own way (wsarecv: "An

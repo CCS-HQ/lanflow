@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"lanflow/internal/platform/helper/protocol"
+	"lanflow/internal/platform/helper/service"
 )
 
 // platformDial connects to the helper pipe and verifies who serves it.
@@ -22,7 +23,7 @@ import (
 // service fail rather than share the name; checking the server process
 // here makes sure the app never talks to such a squatter instead.
 func platformDial(ctx context.Context) (net.Conn, error) {
-	conn, err := winio.DialPipeContext(ctx, protocol.PipeName)
+	conn, err := winio.DialPipeAccess(ctx, protocol.PipeName, service.PipeClientAccess)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +76,10 @@ func verifyPipeServer(conn net.Conn) error {
 // installedHelperPath is where the service executable is installed
 // (service.HelperBin).
 func installedHelperPath() string {
-	pf := os.Getenv("ProgramFiles")
+	pf, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
+	if err != nil || pf == "" {
+		pf = os.Getenv("ProgramFiles")
+	}
 	if pf == "" {
 		pf = `C:\Program Files`
 	}

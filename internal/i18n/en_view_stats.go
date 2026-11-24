@@ -36,7 +36,7 @@ func init() {
 		"没有匹配“%s”的项目":                 "Nothing matches \"%s\"",
 		"此范围内暂无数据":                    "No data in this range",
 		"复制名称":                        "Copy Name",
-		"本机":                          "This Mac",
+		"本机":                          "This Device",
 	} {
 		en[k] = v
 	}

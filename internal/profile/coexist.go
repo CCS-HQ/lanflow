@@ -14,6 +14,10 @@ const layerCoexist = "aTrust 兼容"
 // it can always be told apart from other tunnels such as aTrust's.
 const TUNDevice = "utun1700"
 
+// WindowsTUNDevice is the adapter name Lanflow gives its Wintun interface on
+// Windows so it does not collide with other Meta/Mihomo clients.
+const WindowsTUNDevice = "Lanflow"
+
 // Coexist describes a split-tunnel VPN (Sangfor aTrust) running beside
 // Lanflow and how its traffic is kept out of Lanflow. The app works the
 // lists out from detection and the user's configuration; the zero value

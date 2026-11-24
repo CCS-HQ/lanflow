@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/windows"
+
 	"lanflow/internal/platform/helper/protocol"
 )
 
@@ -15,12 +17,16 @@ import (
 // (the real one needs SYSTEM's DACL) next to a user data directory.
 func winStage(t *testing.T) (*Supervisor, protocol.Spec) {
 	t.Helper()
+	tu, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
 	d := winTempDir(t)
 	user := filepath.Join(d, "data", "core")
 	if err := os.MkdirAll(user, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := NewSupervisor(&Policy{Config: Config{UID: "S-1-5-18"}})
+	s := NewSupervisor(&Policy{Config: Config{UID: tu.User.Sid.String()}})
 	s.Logf = t.Logf
 	s.WorkDir = filepath.Join(d, "helper-work")
 	s.PrepareWorkDir = func(dir string) error { return os.MkdirAll(dir, 0o700) }
@@ -111,6 +117,14 @@ func TestStageWindowsRefusesLinks(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(s.WorkDir, "geoip.metadb")); err == nil {
 			t.Fatal("a database was copied through a junction")
+		}
+	})
+	t.Run("config owned by another sid", func(t *testing.T) {
+		s, spec := winStage(t)
+		s.Policy.Config.UID = "S-1-5-18"
+		winWrite(t, spec.Config, "mixed-port: 7890\n")
+		if _, err := s.stage(spec, true); err == nil {
+			t.Fatal("staged a config whose owner did not match UID")
 		}
 	})
 }

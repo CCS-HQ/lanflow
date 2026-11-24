@@ -78,7 +78,7 @@ log() { printf '%s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
 
 host_goos() {
-	if command -v go >/dev/null 2>&1; then go env GOOS; return; fi
+	if command -v go >/dev/null 2>&1; then go env GOOS | tr -d '\r'; return; fi
 	case "$(uname -s)" in
 	Darwin) echo darwin ;;
 	Linux) echo linux ;;
@@ -88,7 +88,7 @@ host_goos() {
 }
 
 host_goarch() {
-	if command -v go >/dev/null 2>&1; then go env GOARCH; return; fi
+	if command -v go >/dev/null 2>&1; then go env GOARCH | tr -d '\r'; return; fi
 	case "$(uname -m)" in
 	x86_64 | amd64) echo amd64 ;;
 	arm64 | aarch64) echo arm64 ;;
@@ -144,13 +144,15 @@ asset_digest() {
 	local d=""
 	if command -v jq >/dev/null 2>&1; then
 		d="$(jq -r --arg n "$2" '.assets[] | select(.name == $n) | .digest // empty' "$1")"
-	elif command -v python3 >/dev/null 2>&1; then
+	elif python3 -I -c "" >/dev/null 2>&1; then
 		d="$(python3 -I -c 'import json,sys
-r=json.load(open(sys.argv[1]))
+with open(sys.argv[1], encoding="utf-8") as f:
+ r=json.load(f)
 print(next((a.get("digest") or "" for a in r.get("assets",[]) if a.get("name")==sys.argv[2]),""))' "$1" "$2")"
 	else
 		die "jq or python3 is needed to read the GitHub API answer"
 	fi
+	d="${d%$'\r'}"
 	case "$d" in
 	sha256:*) printf '%s\n' "${d#sha256:}" ;;
 	esac

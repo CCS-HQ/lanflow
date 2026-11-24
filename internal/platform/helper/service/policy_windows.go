@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"lanflow/internal/platform/helper/protocol"
 )
 
 func samePath(a, b string) bool { return strings.EqualFold(a, b) }
@@ -19,12 +20,9 @@ func hasPathPrefix(p, prefix string) bool {
 }
 
 // ownerMatches reports whether the directory path is owned by the user
-// SID uid. It is used for the data directory at install time (the
-// controller is a named pipe on Windows). The directory is opened without
-// following a reparse point and must not be a drive root or lie in a
-// system location (Windows, Program Files, ProgramData, the Users root):
-// those are never a per-user data directory, and a SYSTEM service working
-// there could be turned against the machine.
+// SID uid (or by BUILTIN\Administrators when uid is a user account with
+// explicit full control on the directory, as happens when Lanflow created
+// the directory while running elevated or under the built-in Administrator).
 func ownerMatches(path string, uid string) (bool, error) {
 	want, err := windows.StringToSid(uid)
 	if err != nil {
@@ -38,7 +36,7 @@ func ownerMatches(path string, uid string) (bool, error) {
 		return false, err
 	}
 	defer windows.CloseHandle(h)
-	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return false, fmt.Errorf("无法读取目录属主: %w", err)
 	}
@@ -46,7 +44,64 @@ func ownerMatches(path string, uid string) (bool, error) {
 	if err != nil || owner == nil {
 		return false, errors.New("无法读取目录属主")
 	}
-	return owner.Equals(want), nil
+	if owner.Equals(want) {
+		return true, nil
+	}
+	if owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) && isUserAccountSID(want) && daclGrantsFullControl(sd, want) {
+		return true, nil
+	}
+	return false, nil
+}
+
+func isUserAccountSID(sid *windows.SID) bool {
+	if sid == nil {
+		return false
+	}
+	for _, wk := range []windows.WELL_KNOWN_SID_TYPE{
+		windows.WinLocalSystemSid,
+		windows.WinLocalServiceSid,
+		windows.WinNetworkServiceSid,
+		windows.WinBuiltinAdministratorsSid,
+		windows.WinBuiltinUsersSid,
+		windows.WinWorldSid,
+		windows.WinAnonymousSid,
+		windows.WinAuthenticatedUserSid,
+	} {
+		if sid.IsWellKnown(wk) {
+			return false
+		}
+	}
+	return true
+}
+
+func daclGrantsFullControl(sd *windows.SECURITY_DESCRIPTOR, want *windows.SID) bool {
+	const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1FF
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return false
+	}
+	granted := false
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			continue
+		}
+		if ace.Header.AceFlags&0x08 != 0 { // INHERIT_ONLY_ACE
+			continue
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		switch ace.Header.AceType {
+		case windows.ACCESS_DENIED_ACE_TYPE:
+			if sid.Equals(want) {
+				return false
+			}
+		case windows.ACCESS_ALLOWED_ACE_TYPE:
+			if sid.Equals(want) && ((ace.Mask&fileAllAccess) == fileAllAccess || (ace.Mask&windows.GENERIC_ALL) != 0) {
+				granted = true
+			}
+		}
+	}
+	return granted
 }
 
 // openNoReparse opens path for reading its attributes and security
@@ -138,12 +193,15 @@ func systemDirs() []string {
 	return dirs
 }
 
-// checkNotSystemDir refuses a drive root, the Users root itself and
-// anything inside a system location.
+// checkNotSystemDir refuses UNC paths, drive roots, the Users root itself
+// and anything inside a system location.
 func checkNotSystemDir(path string) error {
 	p := filepath.Clean(path)
+	if strings.HasPrefix(p, `\\`) {
+		return fmt.Errorf("数据目录不能是网络路径: %s", path)
+	}
 	vol := filepath.VolumeName(p)
-	if vol == "" || p == vol || p == vol+`\` {
+	if len(vol) != 2 || vol[1] != ':' || p == vol || p == vol+`\` {
 		return fmt.Errorf("数据目录不能是盘符根目录: %s", path)
 	}
 	if samePath(p, filepath.Join(vol+`\`, "Users")) {
@@ -169,6 +227,9 @@ func checkController(_ *Policy, controller string) (string, error) {
 	const prefix = `\\.\pipe\lanflow-`
 	if !strings.HasPrefix(controller, prefix) || len(controller) == len(prefix) {
 		return "", fmt.Errorf(`控制器管道名必须以 %s 开头: %s`, prefix, controller)
+	}
+	if strings.EqualFold(controller, protocol.PipeName) {
+		return "", fmt.Errorf("控制器管道名不能与权限组件冲突: %s", controller)
 	}
 	if strings.ContainsAny(controller[len(prefix):], `\/`) {
 		return "", fmt.Errorf("控制器管道名无效: %s", controller)

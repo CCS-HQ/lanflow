@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/big"
 	"runtime"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -59,7 +60,9 @@ type cngKeys struct{}
 
 func provider() (uintptr, error) {
 	var p uintptr
-	r, _, _ := procOpenStorageProvider.Call(uintptr(unsafe.Pointer(&p)), uintptr(unsafe.Pointer(u16("Microsoft Software Key Storage Provider"))), 0)
+	provName := u16("Microsoft Software Key Storage Provider")
+	r, _, _ := procOpenStorageProvider.Call(uintptr(unsafe.Pointer(&p)), uintptr(unsafe.Pointer(provName)), 0)
+	runtime.KeepAlive(provName)
 	return p, status(r)
 }
 
@@ -68,25 +71,34 @@ func (cngKeys) Create(name string) (crypto.Signer, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer procFreeObject.Call(prov)
 	var key uintptr
-	r, _, _ := procCreatePersistedKey.Call(prov, uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(u16("ECDSA_P256"))),
-		uintptr(unsafe.Pointer(u16(name))), 0, ncryptOverwriteKeyFlag)
+	alg := u16("ECDSA_P256")
+	keyName := u16(name)
+	r, _, _ := procCreatePersistedKey.Call(prov, uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(alg)),
+		uintptr(unsafe.Pointer(keyName)), 0, ncryptOverwriteKeyFlag)
+	runtime.KeepAlive(alg)
+	runtime.KeepAlive(keyName)
 	if err := status(r); err != nil {
+		procFreeObject.Call(prov)
 		return nil, err
 	}
 	policy := uint32(0) // not exportable
-	r, _, _ = procSetProperty.Call(key, uintptr(unsafe.Pointer(u16("Export Policy"))), uintptr(unsafe.Pointer(&policy)), 4, ncryptPersistFlag)
+	prop := u16("Export Policy")
+	r, _, _ = procSetProperty.Call(key, uintptr(unsafe.Pointer(prop)), uintptr(unsafe.Pointer(&policy)), 4, ncryptPersistFlag)
+	runtime.KeepAlive(prop)
+	runtime.KeepAlive(&policy)
 	if err := status(r); err != nil {
 		procFreeObject.Call(key)
+		procFreeObject.Call(prov)
 		return nil, err
 	}
 	r, _, _ = procFinalizeKey.Call(key, 0)
 	if err := status(r); err != nil {
 		procFreeObject.Call(key)
+		procFreeObject.Call(prov)
 		return nil, err
 	}
-	return newCNGSigner(key)
+	return newCNGSigner(prov, key)
 }
 
 func (cngKeys) Open(name string) (crypto.Signer, error) {
@@ -94,13 +106,15 @@ func (cngKeys) Open(name string) (crypto.Signer, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer procFreeObject.Call(prov)
 	var key uintptr
-	r, _, _ := procOpenKey.Call(prov, uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(u16(name))), 0, 0)
+	keyName := u16(name)
+	r, _, _ := procOpenKey.Call(prov, uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(keyName)), 0, 0)
+	runtime.KeepAlive(keyName)
 	if err := status(r); err != nil {
+		procFreeObject.Call(prov)
 		return nil, err
 	}
-	return newCNGSigner(key)
+	return newCNGSigner(prov, key)
 }
 
 func (cngKeys) Delete(name string) error {
@@ -110,40 +124,72 @@ func (cngKeys) Delete(name string) error {
 	}
 	defer procFreeObject.Call(prov)
 	var key uintptr
-	r, _, _ := procOpenKey.Call(prov, uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(u16(name))), 0, 0)
+	keyName := u16(name)
+	r, _, _ := procOpenKey.Call(prov, uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(keyName)), 0, 0)
+	runtime.KeepAlive(keyName)
 	if err := status(r); err != nil {
 		if errors.Is(err, ErrNoKey) {
 			return nil
 		}
 		return err
 	}
-	r, _, _ = procDeleteKey.Call(key, 0) // frees the handle
-	return status(r)
+	r, _, _ = procDeleteKey.Call(key, 0) // frees the handle only on success
+	if err := status(r); err != nil {
+		procFreeObject.Call(key)
+		return err
+	}
+	return nil
+}
+
+type cngHandlePair struct {
+	prov uintptr
+	key  uintptr
+}
+
+func freeCNGPair(h cngHandlePair) {
+	if h.key != 0 {
+		procFreeObject.Call(h.key)
+	}
+	if h.prov != 0 {
+		procFreeObject.Call(h.prov)
+	}
 }
 
 type cngSigner struct {
-	key uintptr
-	pub *ecdsa.PublicKey
+	mu      sync.Mutex
+	prov    uintptr
+	key     uintptr
+	pub     *ecdsa.PublicKey
+	cleanup runtime.Cleanup
 }
 
-// newCNGSigner reads the public key of key and takes the handle over: it
-// is freed when the signer cannot be made.
-func newCNGSigner(key uintptr) (*cngSigner, error) {
-	s, err := cngPublic(key)
+func (s *cngSigner) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanup.Stop()
+	freeCNGPair(cngHandlePair{prov: s.prov, key: s.key})
+	s.prov, s.key = 0, 0
+	return nil
+}
+
+// newCNGSigner reads the public key of key and takes ownership of prov and
+// key: both are freed on error or when the signer is closed/collected.
+func newCNGSigner(prov, key uintptr) (*cngSigner, error) {
+	s, err := cngPublic(prov, key)
 	if err != nil {
-		procFreeObject.Call(key)
+		freeCNGPair(cngHandlePair{prov: prov, key: key})
 		return nil, err
 	}
+	s.cleanup = runtime.AddCleanup(s, freeCNGPair, cngHandlePair{prov: prov, key: key})
 	return s, nil
 }
 
-func cngPublic(key uintptr) (*cngSigner, error) {
+func cngPublic(prov, key uintptr) (*cngSigner, error) {
 	var n uint32
-	// The name stays a *uint16 and is converted in each call's argument
-	// list: a uintptr kept in a variable does not keep the string alive
-	// across the calls (unsafe.Pointer rule 4).
 	blobType := u16("ECCPUBLICBLOB")
 	r, _, _ := procExportKey.Call(key, 0, uintptr(unsafe.Pointer(blobType)), 0, 0, 0, uintptr(unsafe.Pointer(&n)), 0)
+	runtime.KeepAlive(blobType)
+	runtime.KeepAlive(&n)
 	if err := status(r); err != nil {
 		return nil, err
 	}
@@ -153,6 +199,8 @@ func cngPublic(key uintptr) (*cngSigner, error) {
 	buf := make([]byte, n)
 	r, _, _ = procExportKey.Call(key, 0, uintptr(unsafe.Pointer(blobType)), 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(n), uintptr(unsafe.Pointer(&n)), 0)
 	runtime.KeepAlive(blobType)
+	runtime.KeepAlive(buf)
+	runtime.KeepAlive(&n)
 	if err := status(r); err != nil {
 		return nil, err
 	}
@@ -165,18 +213,26 @@ func cngPublic(key uintptr) (*cngSigner, error) {
 	}
 	//lint:ignore SA1019 the CNG blob carries the raw coordinates; the key is only read.
 	pub := &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(buf[8 : 8+sz]), Y: new(big.Int).SetBytes(buf[8+sz : 8+2*sz])}
-	return &cngSigner{key: key, pub: pub}, nil
+	return &cngSigner{prov: prov, key: key, pub: pub}, nil
 }
 
 func (s *cngSigner) Public() crypto.PublicKey { return s.pub }
 
-// Sign signs a digest; CNG returns r||s, Go wants ASN.1.
+// Sign signs a digest; CNG returns r||s, Go wants ASN.1. NCRYPT_KEY_HANDLE
+// is not thread-safe, so calls are serialized under s.mu.
 func (s *cngSigner) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
 	if len(digest) == 0 {
 		return nil, errors.New("ncrypt: empty digest")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.key == 0 {
+		return nil, errors.New("ncrypt: key closed")
+	}
 	var n uint32
 	r, _, _ := procSignHash.Call(s.key, 0, uintptr(unsafe.Pointer(&digest[0])), uintptr(len(digest)), 0, 0, uintptr(unsafe.Pointer(&n)), 0)
+	runtime.KeepAlive(digest)
+	runtime.KeepAlive(&n)
 	if err := status(r); err != nil {
 		return nil, err
 	}
@@ -185,6 +241,9 @@ func (s *cngSigner) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]byt
 	}
 	sig := make([]byte, n)
 	r, _, _ = procSignHash.Call(s.key, 0, uintptr(unsafe.Pointer(&digest[0])), uintptr(len(digest)), uintptr(unsafe.Pointer(&sig[0])), uintptr(n), uintptr(unsafe.Pointer(&n)), 0)
+	runtime.KeepAlive(digest)
+	runtime.KeepAlive(sig)
+	runtime.KeepAlive(&n)
 	if err := status(r); err != nil {
 		return nil, err
 	}

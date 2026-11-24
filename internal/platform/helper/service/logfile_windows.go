@@ -17,10 +17,24 @@ import (
 // openLogFile rotates path at LogRotateSize (keeping path.1) and opens it
 // for appending. path lies in the user's data directory and is opened by
 // SYSTEM, so see openFileNoReparse for the checks.
-func openLogFile(path string, _ string) (io.WriteCloser, error) {
+func openLogFile(path string, uid string) (io.WriteCloser, error) {
 	rotateLog(path)
-	f, _, err := openFileNoReparse(path)
-	return f, err
+	f, owner, err := openFileNoReparse(path)
+	if err != nil {
+		return nil, err
+	}
+	if uid != "" {
+		want, serr := windows.StringToSid(uid)
+		if serr != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("用户标识无效: %q", uid)
+		}
+		if !isAdminOwner(owner) && !owner.Equals(want) {
+			_ = f.Close()
+			return nil, fmt.Errorf("日志文件属主 %v 与用户 %s 不符", owner, uid)
+		}
+	}
+	return f, nil
 }
 
 // rotateLog renames a log of LogRotateSize or more to <name>.1.
@@ -221,9 +235,15 @@ func finalPath(h windows.Handle) (string, error) {
 	}
 }
 
-// adminDirSDDL grants SYSTEM and Administrators full control, inherited
-// by everything below, and nobody else any access.
-const adminDirSDDL = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+// logDirSDDL grants SYSTEM and Administrators full control, and authenticated
+// users read-only access (so ExportDiagnostics and users can read helper.log
+// and install.log). Set owner to BUILTIN\Administrators so NoDefaultAdminOwner=1
+// hosts still pass isAdminOwner.
+const logDirSDDL = "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FR;;;AU)"
+
+// workDirSDDL grants SYSTEM and Administrators full control, inherited by
+// everything below, and nobody else any access (protects runtime.yaml).
+const workDirSDDL = "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
 
 // isAdminOwner reports whether sid is SYSTEM or the Administrators group.
 func isAdminOwner(sid *windows.SID) bool {
@@ -234,16 +254,11 @@ func isAdminOwner(sid *windows.SID) bool {
 }
 
 // PrepareLogDir creates LogDir (%ProgramData%\Lanflow Helper) with a DACL
-// for SYSTEM and Administrators only. %ProgramData% lets ordinary users
-// create subdirectories, so an existing LogDir not owned by SYSTEM or
-// Administrators (or one that is a reparse point) is refused: a user could
-// have planted it, with links that redirect the logs SYSTEM writes. An
-// existing admin-owned directory gets the DACL re-applied (older versions
-// created it with the inherited, user-writable one).
-func PrepareLogDir() error { return secureAdminDir(LogDir) }
+// for SYSTEM and Administrators (plus read-only for authenticated users).
+func PrepareLogDir() error { return secureAdminDirWithSDDL(LogDir, logDirSDDL, false) }
 
-func secureAdminDir(dir string) error {
-	sd, err := windows.SecurityDescriptorFromString(adminDirSDDL)
+func secureAdminDirWithSDDL(dir, sddl string, recursive bool) error {
+	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
 		return err
 	}
@@ -260,7 +275,7 @@ func secureAdminDir(dir string) error {
 	if !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		return fmt.Errorf("创建 %s 失败: %w", dir, err)
 	}
-	h, err := windows.CreateFile(p, windows.READ_CONTROL|windows.WRITE_DAC|windows.FILE_READ_ATTRIBUTES,
+	h, err := windows.CreateFile(p, windows.READ_CONTROL|windows.WRITE_DAC|windows.WRITE_OWNER|windows.FILE_READ_ATTRIBUTES,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
 		windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
@@ -293,16 +308,65 @@ func secureAdminDir(dir string) error {
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
 		return fmt.Errorf("设置 %s 权限失败: %w", dir, err)
 	}
+	if recursive {
+		applyProtectedDACLTree(dir, dacl, 0)
+	}
 	return nil
 }
 
-// OpenAdminLog opens a log file inside LogDir for appending. The file must
-// not be a reparse point or hard link; one not owned by SYSTEM or
-// Administrators (planted while the directory was still user-writable) is
-// deleted and created afresh.
+// applyProtectedDACLTree applies dacl (protected) to existing non-reparse
+// children inside a secured admin directory (e.g. upgrading WorkDir).
+func applyProtectedDACLTree(dir string, dacl *windows.ACL, depth int) {
+	if depth > 8 {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		full := filepath.Join(dir, e.Name())
+		p, err := windows.UTF16PtrFromString(full)
+		if err != nil {
+			continue
+		}
+		flags := uint32(windows.FILE_FLAG_OPEN_REPARSE_POINT)
+		if e.IsDir() {
+			flags |= windows.FILE_FLAG_BACKUP_SEMANTICS
+		}
+		h, err := windows.CreateFile(p, windows.READ_CONTROL|windows.WRITE_DAC|windows.FILE_READ_ATTRIBUTES,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
+			windows.OPEN_EXISTING, flags, 0)
+		if err != nil {
+			continue
+		}
+		var info windows.ByHandleFileInformation
+		gerr := windows.GetFileInformationByHandle(h, &info)
+		if gerr == nil && info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+			_ = windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT,
+				windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+			if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
+				windows.CloseHandle(h)
+				applyProtectedDACLTree(full, dacl, depth+1)
+				continue
+			}
+		}
+		windows.CloseHandle(h)
+	}
+}
+
+// OpenAdminLog opens a log file inside LogDir for appending (rotating at
+// LogRotateSize). The file must not be a reparse point or hard link; one not
+// owned by SYSTEM or Administrators (planted while the directory was still
+// user-writable) is deleted through its handle and created afresh with admin
+// ownership.
 func OpenAdminLog(path string) (*os.File, error) {
+	rotateLog(path)
 	for attempt := 0; ; attempt++ {
-		f, owner, err := openFileNoReparse(path)
+		f, owner, err := openAdminFileNoReparse(path)
 		if err != nil {
 			return nil, err
 		}
@@ -313,10 +377,65 @@ func OpenAdminLog(path string) (*os.File, error) {
 		if attempt > 0 {
 			return nil, fmt.Errorf("%s 的属主不是 SYSTEM 或 Administrators", path)
 		}
-		// Not a reparse point and singly linked: deleting the name
-		// removes only this file.
-		if err := os.Remove(path); err != nil {
-			return nil, err
+		if h, derr := openExistingNoReparse(path, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE); derr == nil {
+			_ = deleteByHandle(h)
+			windows.CloseHandle(h)
+		} else {
+			return nil, derr
 		}
 	}
+}
+
+func openAdminFileNoReparse(path string) (*os.File, *windows.SID, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	const access = windows.FILE_APPEND_DATA | windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL | windows.SYNCHRONIZE
+	const share = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
+	const flags = windows.FILE_ATTRIBUTE_NORMAL | windows.FILE_FLAG_OPEN_REPARSE_POINT
+	sd, err := windows.SecurityDescriptorFromString(logDirSDDL)
+	if err != nil {
+		return nil, nil, err
+	}
+	sa := &windows.SecurityAttributes{SecurityDescriptor: sd}
+	sa.Length = uint32(unsafe.Sizeof(*sa))
+	created := false
+	var h windows.Handle
+	for attempt := 0; ; attempt++ {
+		h, err = windows.CreateFile(p, access, share, nil, windows.OPEN_EXISTING, flags, 0)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+			return nil, nil, &os.PathError{Op: "open", Path: path, Err: err}
+		}
+		h, err = windows.CreateFile(p, access|windows.DELETE, share, sa, windows.CREATE_NEW, flags, 0)
+		if err == nil {
+			created = true
+			break
+		}
+		if !errors.Is(err, windows.ERROR_FILE_EXISTS) || attempt > 0 {
+			return nil, nil, &os.PathError{Op: "open", Path: path, Err: err}
+		}
+	}
+	fail := func(err error) (*os.File, *windows.SID, error) {
+		if created {
+			_ = deleteByHandle(h)
+		}
+		windows.CloseHandle(h)
+		return nil, nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	if err := checkOpened(h, path); err != nil {
+		return fail(err)
+	}
+	sdi, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return fail(err)
+	}
+	owner, _, err := sdi.Owner()
+	if err != nil {
+		return fail(err)
+	}
+	return os.NewFile(uintptr(h), path), owner, nil
 }

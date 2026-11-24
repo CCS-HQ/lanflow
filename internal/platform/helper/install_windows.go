@@ -27,6 +27,12 @@ func install(ctx context.Context, o InstallOptions) error {
 	if fi, err := os.Stat(o.HelperBin); err != nil || !fi.Mode().IsRegular() {
 		return fmt.Errorf("找不到权限组件程序: %s", o.HelperBin)
 	}
+	if real, err := filepath.EvalSymlinks(o.CoreBin); err == nil {
+		o.CoreBin = real
+	}
+	if fi, err := os.Stat(o.DataDir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("数据目录不可用: %s", o.DataDir)
+	}
 	if err := checkDowngrade(ctx, o.HelperBin); err != nil {
 		return err
 	}
@@ -52,25 +58,35 @@ func install(ctx context.Context, o InstallOptions) error {
 	return waitInstalled(ctx, 10*time.Second)
 }
 
-// lockVerifiedHelper opens the helper executable so that nobody can write,
-// replace, rename or delete it (sharing allows reading only; a directory
-// above it cannot be renamed while the file is open either), hashes it
-// through that handle and checks the digest recorded at build time
-// (ExpectedHelperSHA256). The app directory may be writable by the user,
-// and ShellExecute "runas" starts the file by path: without the lock a
-// process of the same user could swap the executable between this check
-// and the UAC prompt. release closes the handle.
+// lockVerifiedHelper opens the helper executable without following a
+// reparse point so that nobody can write, replace, rename or delete it
+// (sharing allows reading only; a directory above it cannot be renamed
+// while the file is open either), hashes it through that handle and
+// checks the digest recorded at build time (ExpectedHelperSHA256).
 func lockVerifiedHelper(bin string) (release func(), err error) {
 	p, err := windows.UTF16PtrFromString(bin)
 	if err != nil {
 		return nil, err
 	}
 	h, err := windows.CreateFile(p, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil,
-		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return nil, fmt.Errorf("无法读取权限组件程序: %w", err)
 	}
 	f := os.NewFile(uintptr(h), bin)
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("无法检查权限组件程序: %w", err)
+	}
+	if info.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DIRECTORY) != 0 {
+		f.Close()
+		return nil, fmt.Errorf("权限组件路径不是普通文件: %s", bin)
+	}
+	if final, err := finalDosPath(h); err == nil && !samePathFold(final, filepath.Clean(bin)) {
+		f.Close()
+		return nil, fmt.Errorf("权限组件路径经过重解析点: %s", bin)
+	}
 	sum, err := readerSHA256(f)
 	if err != nil {
 		f.Close()
@@ -81,6 +97,22 @@ func lockVerifiedHelper(bin string) (release func(), err error) {
 		return nil, err
 	}
 	return func() { f.Close() }, nil
+}
+
+func finalDosPath(h windows.Handle) (string, error) {
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), 0)
+	if err != nil || int(n) >= len(buf) {
+		return "", fmt.Errorf("GetFinalPathNameByHandle: %w", err)
+	}
+	s := windows.UTF16ToString(buf[:n])
+	switch {
+	case strings.HasPrefix(s, `\\?\UNC\`):
+		s = `\\` + s[len(`\\?\UNC\`):]
+	case strings.HasPrefix(s, `\\?\`):
+		s = s[len(`\\?\`):]
+	}
+	return s, nil
 }
 
 func uninstall(ctx context.Context) error {
@@ -103,19 +135,27 @@ func uninstall(ctx context.Context) error {
 	return waitUninstalled(ctx, 5*time.Second)
 }
 
-// helperBinary prefers the installed copy, else the one next to the app.
+// helperBinary prefers the bundled copy (next to the app or in resources/)
+// so uninstall does not run the installed binary that it tries to remove,
+// falling back to the installed copy when no bundled binary is present.
 func helperBinary() (string, error) {
+	if exe, err := os.Executable(); err == nil {
+		if real, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+			exe = real
+		}
+		dir := filepath.Dir(exe)
+		for _, c := range []string{
+			filepath.Join(dir, "lanflow-helper.exe"),
+			filepath.Join(dir, "resources", "lanflow-helper.exe"),
+		} {
+			if fi, err := os.Stat(c); err == nil && fi.Mode().IsRegular() {
+				return c, nil
+			}
+		}
+	}
 	installedBin := installedHelperPath()
 	if fi, err := os.Stat(installedBin); err == nil && fi.Mode().IsRegular() {
 		return installedBin, nil
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	c := filepath.Join(filepath.Dir(exe), "lanflow-helper.exe")
-	if fi, err := os.Stat(c); err == nil && fi.Mode().IsRegular() {
-		return c, nil
 	}
 	return "", errors.New("找不到权限组件程序，无法移除")
 }
@@ -156,6 +196,7 @@ type shellExecuteInfo struct {
 const (
 	seeMaskNoCloseProcess = 0x00000040
 	seeMaskNoAsync        = 0x00000100
+	seeMaskFlagNoUI       = 0x00000400
 )
 
 var (
@@ -176,7 +217,7 @@ func runElevated(ctx context.Context, exe string, args []string) error {
 		return err
 	}
 	info := shellExecuteInfo{
-		fMask:        seeMaskNoCloseProcess | seeMaskNoAsync,
+		fMask:        seeMaskNoCloseProcess | seeMaskNoAsync | seeMaskFlagNoUI,
 		lpVerb:       verb,
 		lpFile:       file,
 		lpParameters: params,
@@ -217,6 +258,9 @@ func runElevated(ctx context.Context, exe string, args []string) error {
 }
 
 func programData() string {
+	if d, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0); err == nil && d != "" {
+		return d
+	}
 	if v := os.Getenv("ProgramData"); v != "" {
 		return v
 	}

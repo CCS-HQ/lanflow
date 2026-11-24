@@ -159,7 +159,7 @@ func compose(in Input) (Output, error) {
 		if len(in.DNS.Hosts) > 0 {
 			c.set("hosts", kvMap(in.DNS.Hosts))
 		}
-	} else if d := deref(mapGet(root, "dns")); in.Managed.TUN && (d == nil || d.Kind != yaml.MappingNode || len(d.Content) == 0) {
+	} else if d := deref(mapGet(root, "dns")); in.Managed.TUN && dnsMissingOrDisabled(d) {
 		c.set("dns", dnsNode(model.DNSSettings{}, in.Managed.IPv6))
 	}
 
@@ -230,8 +230,11 @@ func compose(in Input) (Output, error) {
 	mapSet(tun, "auto-detect-interface", boolNode(true))
 	mapSet(tun, "dns-hijack", strSeq([]string{"any:53", "tcp://any:53"}))
 	mapSet(tun, "strict-route", boolNode(false))
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		mapSet(tun, "device", strNode(TUNDevice)) // a fixed name tells our utun from aTrust's
+	case "windows":
+		mapSet(tun, "device", strNode(WindowsTUNDevice))
 	}
 
 	// Probe listener and group are always removed first so that a stale
@@ -283,6 +286,14 @@ func compose(in Input) (Output, error) {
 }
 
 // ---- Lanflow sections ----
+
+func dnsMissingOrDisabled(d *yaml.Node) bool {
+	if d == nil || d.Kind != yaml.MappingNode || len(d.Content) == 0 {
+		return true
+	}
+	en := deref(mapGet(d, "enable"))
+	return en != nil && strings.EqualFold(strings.TrimSpace(en.Value), "false")
+}
 
 func kvMap(kv []model.KV) *yaml.Node {
 	n := mapNode()

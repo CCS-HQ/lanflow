@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+
+	"lanflow/internal/model"
 )
 
 func TestParseAndString(t *testing.T) {
@@ -73,5 +75,15 @@ func TestFromKey(t *testing.T) {
 	}
 	if _, ok := FromKey(0, ui.KeyF5, true); ok {
 		t.Error("a bare key must be refused")
+	}
+}
+
+func TestConflictForPlatform(t *testing.T) {
+	set := model.Settings{GlobalShortcut: "CmdOrCtrl+Shift+S"}
+	if got := ConflictFor(set, model.ShortcutWindow, "Ctrl+Shift+S", false); got != model.ShortcutSystemProxy {
+		t.Fatalf("windows conflict = %q, want %q", got, model.ShortcutSystemProxy)
+	}
+	if got := ConflictFor(set, model.ShortcutWindow, "Ctrl+Shift+S", true); got != "" {
+		t.Fatalf("mac conflict = %q, want empty", got)
 	}
 }

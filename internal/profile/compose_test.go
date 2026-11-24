@@ -240,6 +240,16 @@ func TestComposeTUNDefaultDNS(t *testing.T) {
 			t.Errorf("default dns expected: %v", dns)
 		}
 	})
+	t.Run("disabled dns counts as missing under TUN", func(t *testing.T) {
+		out, err := Compose(Input{Subscription: []byte(testSub + "dns:\n  enable: false\n  nameserver: [9.9.9.9]\n"), Managed: Managed{TUN: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dns, _ := decode(t, out.YAML)["dns"].(map[string]any)
+		if dns["enable"] != true {
+			t.Errorf("default dns expected when dns.enable=false under TUN: %v", dns)
+		}
+	})
 }
 
 func TestComposeDNSTakeOver(t *testing.T) {

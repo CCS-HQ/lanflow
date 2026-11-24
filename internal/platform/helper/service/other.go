@@ -24,3 +24,6 @@ func Uninstall(context.Context, Logf) error { return errUnsupported }
 
 // Run is unsupported on this platform.
 func Run(context.Context, string, Logf) error { return errUnsupported }
+
+// CleanupLogDir is a no-op on this platform.
+func CleanupLogDir() {}

@@ -6,7 +6,6 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"lanflow/internal/geo"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -696,10 +695,7 @@ func (p *Page) drawLabels(fr *mapFrame) {
 			continue
 		}
 		labelled[ed.place.City] = true
-		name := ed.place.City
-		if f := geo.Flag(ed.place.Country); f != "" {
-			name = f + " " + name
-		}
+		name := env.FlagPrefixFor(p.e.Mac, ed.place.Country) + ed.place.City
 		if s := speedIn[ed.r.Group]; s != "" {
 			name += " · " + s
 		}

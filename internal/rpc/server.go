@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -680,6 +681,9 @@ func besideSyncFile(path, syncFile string) bool {
 	dir, err := filepath.EvalSymlinks(filepath.Dir(syncFile))
 	if err != nil {
 		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Dir(real), dir)
 	}
 	return filepath.Dir(real) == dir
 }

@@ -12,6 +12,7 @@ import (
 
 	"lanflow/internal/model"
 	"lanflow/internal/netx"
+	"lanflow/internal/platform/sysdns"
 )
 
 // traceServer answers like Cloudflare's /cdn-cgi/trace for the given ip.
@@ -163,7 +164,11 @@ func TestLeakCheckTUNLeaks(t *testing.T) {
 	}
 	lk := h.s.LeakCheck()
 	dns := itemByName(lk.Items, "DNS")
-	if dns.Status != model.LeakFail || !strings.Contains(dns.Detail, "192.168.1.1") || !strings.Contains(dns.Detail, "自动设置系统 DNS") {
+	wantHint := "自动设置系统 DNS"
+	if !sysdns.Supported() {
+		wantHint = "系统网络设置"
+	}
+	if dns.Status != model.LeakFail || !strings.Contains(dns.Detail, "192.168.1.1") || !strings.Contains(dns.Detail, wantHint) {
 		t.Fatalf("DNS item = %+v", dns)
 	}
 	v6 := itemByName(lk.Items, "IPv6")

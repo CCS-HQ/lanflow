@@ -283,7 +283,7 @@ func (p *Page) directCard(c *ui.Context, t *ui.Theme, n model.NetInfo) {
 		}
 		ui.Text(c, you.IP).FontSize(20).FontFeatures("tnum").Selectable()
 		kvGrid(c, func() {
-			p.kvCell(c, t, i18n.T("位置"), placeText(you.Place), nil)
+			p.kvCell(c, t, i18n.T("位置"), placeText(e.Mac, you.Place), nil)
 			p.kvCell(c, t, i18n.T("运营商"), ispText(*you), nil)
 		})
 	})
@@ -342,7 +342,7 @@ func (p *Page) exitCard(c *ui.Context, t *ui.Theme, st model.Status) {
 		}
 		ui.Text(c, ip).FontSize(20).FontFeatures("tnum").Selectable()
 		kvGrid(c, func() {
-			p.kvCell(c, t, i18n.T("节点"), flagOf(x.Place)+main.Node, nil)
+			p.kvCell(c, t, i18n.T("节点"), flagOf(e.Mac, x.Place)+main.Node, nil)
 			p.kvCell(c, t, i18n.T("位置"), placeName(x.Place), func() {
 				switch x.Source {
 				case model.LocateProbe:
@@ -588,7 +588,11 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 			}
 			p.statusLine(c, t, i18n.T("嗅探"), func() { statusText(c, snf) }, env.Settings, "sniffer")
 			p.statusLine(c, t, "DNS", func() { statusText(c, dnsStatusText(p.effDNS)) }, env.Settings, "dns")
-			p.statusLine(c, t, i18n.T("控制接口"), func() { statusText(c, i18n.T("本机套接字，仅澜流可访问")) }, "", "")
+			ctrlDesc := i18n.T("本机套接字，仅澜流可访问")
+			if !e.Mac {
+				ctrlDesc = i18n.T("本机命名管道，仅澜流可访问")
+			}
+			p.statusLine(c, t, i18n.T("控制接口"), func() { statusText(c, ctrlDesc) }, "", "")
 			if a := st.ATrust; a.Running {
 				p.statusLine(c, t, i18n.T("aTrust 兼容"), func() {
 					e.Kit.Dot(c, "green")
@@ -819,11 +823,11 @@ func (p *Page) query() {
 // ---- helpers ----
 
 // flagOf is the flag of a place's country and a space, "" when unknown.
-func flagOf(pl *model.Place) string {
+func flagOf(mac bool, pl *model.Place) string {
 	if pl == nil {
 		return ""
 	}
-	return env.FlagPrefix(pl.Country)
+	return env.FlagPrefixFor(mac, pl.Country)
 }
 
 func placeName(pl *model.Place) string {
@@ -836,11 +840,11 @@ func placeName(pl *model.Place) string {
 	return pl.Country
 }
 
-func placeText(pl *model.Place) string {
+func placeText(mac bool, pl *model.Place) string {
 	if pl == nil {
 		return i18n.T("未知")
 	}
-	return flagOf(pl) + placeName(pl)
+	return flagOf(mac, pl) + placeName(pl)
 }
 
 func ispText(ep model.EndpointInfo) string {

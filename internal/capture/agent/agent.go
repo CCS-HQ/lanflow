@@ -64,15 +64,17 @@ type Config struct {
 	// without decrypting, attributing or storing them.
 	NoRecord bool `json:"noRecord,omitempty"`
 	// Controller is the core's controller address (socket / pipe) for the
-	// source check and attribution; "" skips both.
-	Controller string `json:"controller"`
-	SpillDir   string `json:"spillDir"`
-	MaxFlows   int    `json:"maxFlows"`
-	BodyCap    int64  `json:"bodyCap"`
-	MemLimit   int64  `json:"memLimit"`
-	MaxConns   int    `json:"maxConns"`
-	LoopWindow int    `json:"loopWindowMs"`
-	LoopMax    int    `json:"loopMax"`
+	// source check and attribution; "" skips both. CoreWorkDir is where the
+	// core writes mihomo.pid (trusted on Windows by the child agent).
+	Controller  string `json:"controller"`
+	CoreWorkDir string `json:"coreWorkDir,omitempty"`
+	SpillDir    string `json:"spillDir"`
+	MaxFlows    int    `json:"maxFlows"`
+	BodyCap     int64  `json:"bodyCap"`
+	MemLimit    int64  `json:"memLimit"`
+	MaxConns    int    `json:"maxConns"`
+	LoopWindow  int    `json:"loopWindowMs"`
+	LoopMax     int    `json:"loopMax"`
 	// NoLoopGuard turns the breaker off (tests measuring a loop).
 	NoLoopGuard bool `json:"noLoopGuard,omitempty"`
 }

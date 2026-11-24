@@ -4,19 +4,18 @@ package netinfo
 
 import (
 	"context"
-	"os/exec"
-	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
-func otherTUN(ctx context.Context) (string, bool) {
-	cmd := exec.CommandContext(ctx, "route", "print", "-4")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	out, err := cmd.Output()
+func otherTUN(context.Context) (string, bool) {
+	adapters, err := listAdapters()
 	if err != nil {
 		return "", false
 	}
-	if addr, ok := parseWindowsTUNRoute(string(out)); ok {
-		return "TUN（" + addr + "）", true
+	routes, err := listRoutes(windows.AF_INET)
+	if err != nil {
+		return "", false
 	}
-	return "", false
+	return detectWindowsTUN(adapters, routes)
 }

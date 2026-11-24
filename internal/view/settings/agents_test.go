@@ -27,4 +27,10 @@ func TestMCPConfig(t *testing.T) {
 			t.Fatalf("command = %s", got)
 		}
 	}
+	if got := quoteMCPExe(`C:\Apps\A&B\Lanflow.exe`, true); got != `"C:\Apps\A&B\Lanflow.exe"` {
+		t.Fatalf("windows quote metachars = %s", got)
+	}
+	if got := quoteMCPExe(`C:\Lanflow\Lanflow.exe`, true); got != `C:\Lanflow\Lanflow.exe` {
+		t.Fatalf("windows plain = %s", got)
+	}
 }

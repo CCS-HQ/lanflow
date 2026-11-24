@@ -175,7 +175,7 @@ func TestEnglish(t *testing.T) {
 	p := New(e)
 	tt := ui.NewTester(p.View, 1200, 760)
 	tt.Frame()
-	if !tt.HasText("Statistics") || !tt.HasText("This Mac") || !tt.HasText("Devices") {
+	if !tt.HasText("Statistics") || !tt.HasText("This Device") || !tt.HasText("Devices") {
 		t.Errorf("English texts missing: %q", tt.Texts())
 	}
 	p.dim = indexOf(dimLabels, "代理|统计")

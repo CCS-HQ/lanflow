@@ -25,7 +25,7 @@ func ShellCommands(port int) []ShellCommand {
 		{"bash / zsh", fmt.Sprintf("export https_proxy=%s http_proxy=%s all_proxy=%s", h, h, s)},
 		{"fish", fmt.Sprintf("set -gx https_proxy %s; set -gx http_proxy %s; set -gx all_proxy %s", h, h, s)},
 		{"PowerShell", fmt.Sprintf(`$env:HTTPS_PROXY="%s"; $env:HTTP_PROXY="%s"; $env:ALL_PROXY="%s"`, h, h, s)},
-		{"cmd", fmt.Sprintf("set https_proxy=%s && set http_proxy=%s && set all_proxy=%s", h, h, s)},
+		{"cmd", fmt.Sprintf(`set "https_proxy=%s" && set "http_proxy=%s" && set "all_proxy=%s"`, h, h, s)},
 	}
 }
 

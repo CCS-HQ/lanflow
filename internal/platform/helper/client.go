@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -216,7 +217,7 @@ type runner struct {
 }
 
 func newRunner() core.Runner {
-	return &runner{c: newClient(), pollInterval: time.Second, callTimeout: 15 * time.Second, exited: make(chan error, 1)}
+	return &runner{c: newClient(), pollInterval: time.Second, callTimeout: 30 * time.Second, exited: make(chan error, 1)}
 }
 
 func toWire(s core.Spec) *protocol.Spec {
@@ -429,9 +430,15 @@ func wrapTransport(err error) error {
 }
 
 func isTransport(err error) bool {
+	if err == nil {
+		return false
+	}
 	var ne net.Error
 	var opErr *net.OpError
-	return errors.As(err, &opErr) || errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded)
+	return errors.As(err, &opErr) || errors.As(err, &ne) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, net.ErrClosed) || isPlatformTransport(err)
 }
 
 func (r *runner) stallLimit() time.Duration {

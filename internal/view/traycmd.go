@@ -6,6 +6,7 @@ import (
 	"image/color"
 	_ "image/jpeg" // group icons may be JPEG
 	"image/png"
+	"runtime"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -27,7 +28,7 @@ func shellCommands(port int) []shellCommand { return env.ShellCommands(port) }
 
 // menuIconPNG renders icon bytes (SVG, PNG or JPEG) as a small PNG for a
 // menu item; nil when the data cannot be drawn.
-func menuIconPNG(data []byte, size int) []byte {
+func menuIconPNG(data []byte, size int, dark bool) []byte {
 	trimmed := bytes.TrimSpace(data)
 	var img image.Image
 	if bytes.HasPrefix(trimmed, []byte("<svg")) || bytes.HasPrefix(trimmed, []byte("<?xml")) {
@@ -35,7 +36,11 @@ func menuIconPNG(data []byte, size int) []byte {
 		if err != nil {
 			return nil
 		}
-		img = s.Image(size, size, color.NRGBA{0, 0, 0, 255})
+		fg := color.NRGBA{0, 0, 0, 255}
+		if dark && runtime.GOOS == "windows" {
+			fg = color.NRGBA{255, 255, 255, 255}
+		}
+		img = s.Image(size, size, fg)
 	} else {
 		decoded, _, err := image.Decode(bytes.NewReader(data))
 		if err != nil {
@@ -68,7 +73,8 @@ func (tr *tray) menuIcon(ref string) *mygo.MenuIcon {
 		return nil
 	}
 	var ic *mygo.MenuIcon
-	if pngData := menuIconPNG(data, 32); pngData != nil {
+	dark := tr.t != nil && tr.t.Dark()
+	if pngData := menuIconPNG(data, 32, dark); pngData != nil {
 		ic, _ = mygo.NewMenuIcon(pngData, false)
 	}
 	tr.mu.Lock()

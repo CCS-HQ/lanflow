@@ -69,7 +69,7 @@ func parseWindowsV6Routes(out string) V6Route {
 		if dst != "::/0" && !v6SplitDefaults[dst] {
 			continue
 		}
-		if strings.EqualFold(gw, "On-link") {
+		if strings.EqualFold(gw, "On-link") || gw == "在链路上" {
 			r.ViaTUN = true
 		} else if dst == "::/0" && r.Interface == "" {
 			r.Interface = "if#" + f[0]

@@ -86,13 +86,18 @@ func MCPConfig(exe string) string {
 
 // MCPCommand is the Claude Code command that registers the server.
 func MCPCommand(exe string) string {
-	q := exe
-	if runtime.GOOS == "windows" {
-		if strings.Contains(q, " ") {
-			q = `"` + q + `"`
+	return "claude mcp add --scope user lanflow -- " + quoteMCPExe(exe, runtime.GOOS == "windows") + " mcp"
+}
+
+func quoteMCPExe(q string, windowsOS bool) string {
+	if windowsOS {
+		if strings.ContainsAny(q, " \t&|<>^()%!\"'") {
+			return `"` + strings.ReplaceAll(q, `"`, `\"`) + `"`
 		}
-	} else if strings.ContainsAny(q, " '\"$") {
-		q = "'" + strings.ReplaceAll(q, "'", `'\''`) + "'"
+		return q
 	}
-	return "claude mcp add --scope user lanflow -- " + q + " mcp"
+	if strings.ContainsAny(q, " '\"$") {
+		return "'" + strings.ReplaceAll(q, "'", `'\''`) + "'"
+	}
+	return q
 }

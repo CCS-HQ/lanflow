@@ -43,7 +43,8 @@ func main() {
 		fmt.Printf("lanflow-helper %s (protocol %d)\n", version, protocol.Version)
 		return
 	case "run":
-		logger := newLogger(service.LogPath)
+		logger, closeLog := openLogger(service.LogPath)
+		defer closeLog()
 		logger.Printf("lanflow-helper %s starting", version)
 		err = service.Run(ctx, version, logger.Printf)
 	case "install":
@@ -51,7 +52,8 @@ func main() {
 		if o, err = parseInstall(os.Args[2:], os.Stderr); err != nil {
 			os.Exit(2)
 		}
-		logger := newLogger(filepath.Join(service.LogDir, "install.log"))
+		logger, closeLog := openLogger(filepath.Join(service.LogDir, "install.log"))
+		defer closeLog()
 		logger.Printf("install %s core=%s sha256=%s dataDir=%s uid=%s", version, o.CoreBin, o.CoreSHA256, o.DataDir, o.UID)
 		if err = service.Install(ctx, o, logger.Printf); err != nil {
 			logger.Printf("install failed: %v", err)
@@ -59,12 +61,17 @@ func main() {
 			logger.Printf("install ok")
 		}
 	case "uninstall":
-		logger := newLogger(filepath.Join(service.LogDir, "install.log"))
+		logger, closeLog := openLogger(filepath.Join(service.LogDir, "install.log"))
 		logger.Printf("uninstall %s", version)
 		if err = service.Uninstall(ctx, logger.Printf); err != nil {
 			logger.Printf("uninstall failed: %v", err)
+			closeLog()
 		} else {
 			logger.Printf("uninstall ok")
+			// Close install.log before removing LogDir so Windows does not
+			// fail RemoveDirectory with ERROR_DIR_NOT_EMPTY.
+			closeLog()
+			service.CleanupLogDir()
 		}
 	default:
 		usage()
@@ -103,14 +110,23 @@ func parseInstall(args []string, errOut io.Writer) (service.InstallOptions, erro
 	return o, nil
 }
 
-// newLogger logs to stderr and to path. Under launchd stderr already is
-// LogPath, so the file is skipped there to avoid duplicate lines; under the
-// Windows SCM there is no console, so the file is the only output.
+// newLogger logs to stderr and to path.
 func newLogger(path string) *log.Logger {
-	writers := []io.Writer{os.Stderr}
+	l, _ := openLogger(path)
+	return l
+}
+
+// openLogger logs to stderr and to path, returning a close function for the
+// opened log file (if any). Under launchd stderr already is LogPath, so the
+// file is skipped there to avoid duplicate lines; under the Windows SCM there
+// is no console (stderr writes fail with ERROR_INVALID_HANDLE), so errors
+// from a writer must not stop subsequent writers.
+func openLogger(path string) (*log.Logger, func()) {
+	noop := func() {}
 	if fi, err := os.Stderr.Stat(); err == nil && fi.Mode().IsRegular() && path == service.LogPath {
-		return log.New(os.Stderr, "", log.LstdFlags)
+		return log.New(os.Stderr, "", log.LstdFlags), noop
 	}
+	writers := []io.Writer{os.Stderr}
 	// LogDir is created (or re-secured) for SYSTEM/root only, and the
 	// file is opened without following links: install runs elevated, so a
 	// log path redirected by an unprivileged user must not be written.
@@ -118,8 +134,24 @@ func newLogger(path string) *log.Logger {
 		fmt.Fprintln(os.Stderr, "lanflow-helper: log dir:", err)
 	} else if f, err := service.OpenAdminLog(path); err == nil {
 		writers = append(writers, f)
+		return log.New(tolerantMultiWriter(writers...), "", log.LstdFlags), func() { _ = f.Close() }
 	} else {
 		fmt.Fprintln(os.Stderr, "lanflow-helper: log file:", err)
 	}
-	return log.New(io.MultiWriter(writers...), "", log.LstdFlags)
+	return log.New(tolerantMultiWriter(writers...), "", log.LstdFlags), noop
+}
+
+type tolerantWriter struct {
+	writers []io.Writer
+}
+
+func tolerantMultiWriter(writers ...io.Writer) io.Writer {
+	return tolerantWriter{writers: writers}
+}
+
+func (t tolerantWriter) Write(p []byte) (int, error) {
+	for _, w := range t.writers {
+		_, _ = w.Write(p)
+	}
+	return len(p), nil
 }

@@ -104,3 +104,5 @@ func parseLsof(out []byte) string {
 	}
 	return name + " (PID " + pid + ")"
 }
+
+func hideWindow(*exec.Cmd) {}

@@ -104,7 +104,7 @@ func (b *bound) dial(ctx context.Context, network, addr string) (net.Conn, error
 	}
 	var ips []netip.Addr
 	if ip, err := netip.ParseAddr(host); err == nil {
-		ips = []netip.Addr{ip}
+		ips = []netip.Addr{ip.Unmap()}
 	} else if ips, err = b.lookup(ctx, host); err != nil {
 		return nil, err
 	}

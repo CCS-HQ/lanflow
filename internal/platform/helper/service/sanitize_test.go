@@ -264,6 +264,12 @@ func TestSanitizeConfigRefuses(t *testing.T) {
 	if _, err := sanitizeConfig(bytes.Repeat([]byte("#"), maxConfigSize+1)); err == nil {
 		t.Error("an oversized config was accepted")
 	}
+	for _, reserved := range []string{"runtime.yaml.", "runtime.yaml ", "cache.db.", "geoip.metadb."} {
+		in := "proxy-providers:\n  a: {type: http, url: 'https://e/x', path: '" + reserved + "'}\n"
+		if _, err := sanitizeConfig([]byte(in)); err == nil {
+			t.Errorf("reserved name variant %q was accepted", reserved)
+		}
+	}
 }
 
 func TestSanitizeConfigAcceptsLocalProviderPaths(t *testing.T) {

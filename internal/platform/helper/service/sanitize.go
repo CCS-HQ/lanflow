@@ -69,7 +69,7 @@ var providerSections = map[string]bool{"proxy-providers": true, "rule-providers"
 // into a directory nobody but root could repair), the directories of
 // providers without a path, and the helper's temporary files.
 func reservedName(first string, whole bool) bool {
-	first = strings.ToLower(first)
+	first = strings.TrimRight(strings.ToLower(first), ". ")
 	switch {
 	case first == strings.ToLower(stagedConfigName), first == "cache.db", geoNames[first]:
 		return true

@@ -77,12 +77,7 @@ var keyTables = map[string]string{
 // to it: new text goes through T.
 var pendingUnwrapped = map[string]string{
 	// errors.New / fmt.Errorf with a Chinese text, shown by the launcher.
-	"澜流以单进程方式运行，已显示它自己的窗口":      "internal/split/start.go",
-	"另一个旧版本的澜流正在运行：请先退出它，再打开澜流": "internal/split/start.go",
-	"无法启动澜流后台服务: %w":            "internal/split/start.go",
-	"无法结束旧的澜流后台服务: %w":          "internal/split/start.go",
-	"旧的澜流后台服务没有退出":              "internal/split/stop.go",
-	"与澜流后台服务的连接已断开，正在重新连接":      "internal/app/remote/client.go",
+	"与澜流后台服务的连接已断开，正在重新连接": "internal/app/remote/client.go",
 	// fmt.Sprintf with the Chinese text, written into the exported YAML.
 	"(%d 项，已隐藏)": "internal/app/capture.go",
 	// The separator of a list inside a translated sentence.

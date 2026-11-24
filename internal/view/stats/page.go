@@ -405,8 +405,8 @@ func (p *Page) label(dim model.StatsDimension, b model.StatsBucket, lan string) 
 				name = cn
 			}
 		}
-		if f := geo.Flag(b.Key); f != "" {
-			name = f + " " + name
+		if f := env.FlagPrefixFor(p.e.Mac, b.Key); f != "" {
+			name = f + name
 		}
 		return name, b.Key
 	case model.StatsHost:

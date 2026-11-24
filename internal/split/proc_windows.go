@@ -9,8 +9,33 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func detach(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS, HideWindow: true}
+const terminateIsKill = true
+
+var procAllowSetForegroundWindow = windows.NewLazySystemDLL("user32.dll").NewProc("AllowSetForegroundWindow")
+
+func detachService(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS | windows.CREATE_NO_WINDOW,
+		HideWindow:    true,
+	}
+}
+
+func detachWindow(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS,
+	}
+}
+
+// AllowForeground permits pid (or any process when pid <= 0) to bring its
+// window to the foreground on Windows. Best effort.
+func AllowForeground(pid int) {
+	target := uintptr(0xFFFFFFFF) // ASFW_ANY
+	if pid > 0 {
+		target = uintptr(pid)
+	}
+	if procAllowSetForegroundWindow.Find() == nil {
+		_, _, _ = procAllowSetForegroundWindow.Call(target)
+	}
 }
 
 // Alive reports whether process pid still runs.

@@ -175,6 +175,7 @@ func TestConflictCopies(t *testing.T) {
 	for name, want := range map[string]bool{
 		"lanflow 2.yaml": true, "lanflow (1).yaml": true, "lanflow (Ann's conflicted copy 2026-01-02).yaml": true,
 		"lanflow-DESKTOP-1AB2C3D.yaml": true, "lanflow.sync-conflict-20260102-150405-ABC.yaml": true,
+		"lanflow - Copy.yaml": true, "lanflow - Copy (2).yaml": true, "lanflow - 副本.yaml": true,
 		".lanflow 2.yaml.icloud": true,
 		"lanflow.yaml":           false, ".lanflow.yaml.icloud": false, ".lanflow.yaml.tmp-123": false, "lanflow.yml": false,
 		"notes.yaml": false, "lanflow 2.json": false,
