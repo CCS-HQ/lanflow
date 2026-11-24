@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -11,6 +12,14 @@ import (
 
 	"lanflow/internal/model"
 )
+
+func mihomoTestPath() string {
+	name := "mihomo"
+	if runtime.GOOS == "windows" {
+		name = "mihomo.exe"
+	}
+	return filepath.Join("..", "..", "bin", name)
+}
 
 const testSub = `port: 7890
 socks-port: 7891
@@ -71,6 +80,7 @@ func topKeys(t *testing.T, data []byte) []string {
 }
 
 func TestComposeStripsAndManages(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{
 		Subscription: []byte(testSub),
 		Managed:      Managed{MixedPort: 7890, AllowLAN: false, Mode: model.ModeRule, LogLevel: "info", IPv6: true},
@@ -122,6 +132,7 @@ func TestComposeStripsAndManages(t *testing.T) {
 }
 
 func TestComposeAllowLANBindAddress(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{Subscription: []byte("proxies: [{name: a, type: ss, server: s, port: 1, cipher: aes-128-gcm, password: p}]\n"),
 		Managed: Managed{MixedPort: 1, AllowLAN: true}})
 	if err != nil {
@@ -134,6 +145,7 @@ func TestComposeAllowLANBindAddress(t *testing.T) {
 }
 
 func TestComposeDefaults(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{Subscription: []byte("proxies: []\n")})
 	if err != nil {
 		t.Fatal(err)
@@ -145,6 +157,7 @@ func TestComposeDefaults(t *testing.T) {
 }
 
 func TestComposeLayerOrder(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{
 		Subscription:   []byte(testSub),
 		SubOverride:    "log-level: silent\nipv6: false\nrules+:\n  - DOMAIN,sub.example,DIRECT\n",
@@ -170,6 +183,7 @@ func TestComposeLayerOrder(t *testing.T) {
 }
 
 func TestComposeOverrideWinsOverSubscriptionButNotManaged(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{
 		Subscription:   []byte(testSub),
 		SubOverride:    "mode: direct\nmixed-port: 1\n",
@@ -186,6 +200,7 @@ func TestComposeOverrideWinsOverSubscriptionButNotManaged(t *testing.T) {
 }
 
 func TestComposeOverrideErrorsNameLayerAndLine(t *testing.T) {
+	t.Parallel()
 	_, err := Compose(Input{Subscription: []byte(testSub), SubOverride: "a: 1\n+rules: nope\n"})
 	if err == nil || !strings.HasPrefix(err.Error(), "订阅覆写第 2 行") {
 		t.Fatalf("got %v", err)
@@ -201,6 +216,7 @@ func TestComposeOverrideErrorsNameLayerAndLine(t *testing.T) {
 }
 
 func TestComposeTUNDefaultDNS(t *testing.T) {
+	t.Parallel()
 	t.Run("added when missing", func(t *testing.T) {
 		out, err := Compose(Input{Subscription: []byte(testSub), Managed: Managed{TUN: true, TUNStack: "gvisor"}})
 		if err != nil {
@@ -253,6 +269,7 @@ func TestComposeTUNDefaultDNS(t *testing.T) {
 }
 
 func TestComposeDNSTakeOver(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{
 		Subscription: []byte(testSub + "dns:\n  enable: false\n  fallback: [8.8.8.8]\n"),
 		DNS: model.DNSSettings{
@@ -305,6 +322,7 @@ func TestComposeDNSTakeOver(t *testing.T) {
 }
 
 func TestComposeSniffer(t *testing.T) {
+	t.Parallel()
 	t.Run("enable only", func(t *testing.T) {
 		out, err := Compose(Input{
 			Subscription: []byte(testSub + "sniffer:\n  enable: false\n  force-domain: [+.v2ex.com]\n"),
@@ -362,6 +380,7 @@ func TestComposeSniffer(t *testing.T) {
 }
 
 func TestComposeGeo(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{
 		Subscription: []byte(testSub),
 		Geo: model.GeoSettings{
@@ -394,6 +413,7 @@ func TestComposeGeo(t *testing.T) {
 }
 
 func TestComposeProbe(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{
 		Subscription: []byte(testSub + "listeners:\n  - name: lanflow-probe\n    type: http\n    port: 1\n  - name: other\n    type: socks\n    port: 2\n"),
 		Managed:      Managed{ProbePort: 41234},
@@ -442,6 +462,7 @@ func TestComposeProbe(t *testing.T) {
 }
 
 func TestComposeCustomRules(t *testing.T) {
+	t.Parallel()
 	t.Run("prepended and validated", func(t *testing.T) {
 		out, err := Compose(Input{
 			Subscription: []byte(testSub),
@@ -499,6 +520,7 @@ func TestComposeCustomRules(t *testing.T) {
 }
 
 func TestComposeLines(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{
 		Subscription:   []byte(testSub),
 		SubOverride:    "unified-delay: true\nrules+:\n  - DOMAIN,sub.example,DIRECT\n",
@@ -564,6 +586,7 @@ func TestComposeLines(t *testing.T) {
 }
 
 func TestComposeDanglingAlias(t *testing.T) {
+	t.Parallel()
 	sub := "proxies:\n  - {name: a, type: ss, server: s, port: 1, cipher: aes-128-gcm, password: p}\ncommon: &c\n  url: https://x\nproxy-groups:\n  - name: G\n    type: url-test\n    <<: *c\n    proxies: [a]\n"
 	out, err := Compose(Input{Subscription: []byte(sub), GlobalOverride: "common!: {url: https://y}\n"})
 	if err != nil {
@@ -580,9 +603,10 @@ func TestComposeDanglingAlias(t *testing.T) {
 // TestComposeMihomoCheck pipes composed configs through `mihomo -t` when the
 // binary is available.
 func TestComposeMihomoCheck(t *testing.T) {
-	bin := filepath.Join("..", "..", "bin", "mihomo")
+	t.Parallel()
+	bin := mihomoTestPath()
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("./bin/mihomo not present")
+		t.Skipf("%s not present", bin)
 	}
 	cases := map[string]Input{
 		"basic": {Subscription: []byte(testSub), Managed: Managed{MixedPort: 17890}},

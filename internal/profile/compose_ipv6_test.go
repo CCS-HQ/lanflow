@@ -14,6 +14,7 @@ import (
 // address, so IPv6 enters the TUN whatever Lanflow's IPv6 setting is; that
 // setting decides AAAA answers and whether IPv6 destinations are refused.
 func TestComposeIPv6Policy(t *testing.T) {
+	t.Parallel()
 	subWithDNS := testSub + "dns:\n  enable: true\n  ipv6: true\n  nameserver: [1.1.1.1]\n"
 	t.Run("off", func(t *testing.T) {
 		out, err := Compose(Input{
@@ -86,9 +87,10 @@ func TestComposeIPv6Policy(t *testing.T) {
 // through `mihomo -t`, so the inet6-address key and the IP-CIDR6 rule are
 // what the bundled core accepts.
 func TestComposeIPv6MihomoCheck(t *testing.T) {
-	bin := filepath.Join("..", "..", "bin", "mihomo")
+	t.Parallel()
+	bin := mihomoTestPath()
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("./bin/mihomo not present")
+		t.Skipf("%s not present", bin)
 	}
 	for name, ipv6 := range map[string]bool{"tun-ipv6-off": false, "tun-ipv6-on": true} {
 		t.Run(name, func(t *testing.T) {

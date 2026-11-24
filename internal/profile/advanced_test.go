@@ -28,6 +28,7 @@ var fullAdvanced = model.AdvancedSettings{
 }
 
 func TestComposeAdvancedZeroEmitsNothing(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{Subscription: []byte(testSub), Managed: Managed{MixedPort: 17890, TUN: true}})
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +62,7 @@ func TestComposeAdvancedZeroEmitsNothing(t *testing.T) {
 }
 
 func TestComposeAdvancedFull(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{
 		Subscription: []byte(testSub),
 		DNS:          model.DNSSettings{TakeOver: true},
@@ -137,6 +139,7 @@ func TestComposeAdvancedFull(t *testing.T) {
 // they equal the mixed port or each other, and the subscription's ports
 // stay stripped.
 func TestComposeAdvancedPortsNeverCollide(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{Subscription: []byte(testSub), Managed: Managed{MixedPort: 17890}, Advanced: model.AdvancedSettings{HTTPPort: 17890, SocksPort: 17890}})
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +169,7 @@ func TestComposeAdvancedPortsNeverCollide(t *testing.T) {
 // TestComposeAdvancedDNSFollowsSubscription: the DNS extras land in the
 // subscription's dns section when Lanflow does not take DNS over.
 func TestComposeAdvancedDNSFollowsSubscription(t *testing.T) {
+	t.Parallel()
 	sub := testSub + "dns:\n  enable: true\n  nameserver: [223.5.5.5]\n"
 	out, err := Compose(Input{Subscription: []byte(sub), Managed: Managed{MixedPort: 17890}, Advanced: model.AdvancedSettings{DNSListen: "0.0.0.0:53", DNSPreferH3: true}})
 	if err != nil {
@@ -180,6 +184,7 @@ func TestComposeAdvancedDNSFollowsSubscription(t *testing.T) {
 // TestComposeAdvancedRouteExcludeMergesWithCoexist: the user's excluded
 // ranges and the aTrust layer's end up in one list without duplicates.
 func TestComposeAdvancedRouteExcludeMergesWithCoexist(t *testing.T) {
+	t.Parallel()
 	out, err := Compose(Input{
 		Subscription: []byte(testSub),
 		Managed:      Managed{MixedPort: 17890, TUN: true},
@@ -198,9 +203,10 @@ func TestComposeAdvancedRouteExcludeMergesWithCoexist(t *testing.T) {
 // TestComposeAdvancedMihomoCheck runs a config with every 高级 field set
 // through `mihomo -t`, so a key the core no longer knows is caught.
 func TestComposeAdvancedMihomoCheck(t *testing.T) {
-	bin := filepath.Join("..", "..", "bin", "mihomo")
+	t.Parallel()
+	bin := mihomoTestPath()
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("./bin/mihomo not present")
+		t.Skipf("%s not present", bin)
 	}
 	out, err := Compose(Input{
 		Subscription: []byte(testSub),

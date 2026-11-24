@@ -58,6 +58,7 @@ func captureInput() Input {
 }
 
 func TestComposeCapture(t *testing.T) {
+	t.Parallel()
 	out, err := compose(captureInput())
 	if err != nil {
 		t.Fatal(err)
@@ -177,6 +178,7 @@ func TestComposeCapture(t *testing.T) {
 }
 
 func TestComposeCaptureZero(t *testing.T) {
+	t.Parallel()
 	in := captureInput()
 	in.Capture = Capture{}
 	out, err := compose(in)
@@ -190,6 +192,7 @@ func TestComposeCaptureZero(t *testing.T) {
 }
 
 func TestComposeCaptureIPv6On(t *testing.T) {
+	t.Parallel()
 	in := captureInput()
 	in.Managed.IPv6 = true
 	in.Capture.IPv6 = true
@@ -217,9 +220,9 @@ func toStrings(v any) []string {
 // checkWithCore runs `mihomo -t` on the config when ./bin/mihomo exists.
 func checkWithCore(t *testing.T, y []byte) {
 	t.Helper()
-	bin, _ := filepath.Abs(filepath.Join("..", "..", "bin", "mihomo"))
+	bin, _ := filepath.Abs(mihomoTestPath())
 	if _, err := os.Stat(bin); err != nil {
-		t.Log("bin/mihomo not present: core validation skipped")
+		t.Logf("%s not present: core validation skipped", bin)
 		return
 	}
 	dir := t.TempDir()
@@ -232,6 +235,7 @@ func checkWithCore(t *testing.T, y []byte) {
 }
 
 func TestComposeCaptureForcesFindProcess(t *testing.T) {
+	t.Parallel()
 	in := captureInput()
 	in.Advanced.FindProcessMode = "off"
 	out, err := compose(in)
@@ -251,6 +255,7 @@ func TestComposeCaptureForcesFindProcess(t *testing.T) {
 // Selections allowed onto intranet destinations get their own rule without
 // the private-network set; the VPN's own processes stay ahead of capture.
 func TestComposeCapturePrivate(t *testing.T) {
+	t.Parallel()
 	in := captureInput()
 	in.Coexist.Processes = []string{"aTrustAgent"}
 	in.Capture.Apps = nil
@@ -295,6 +300,7 @@ func TestComposeCapturePrivate(t *testing.T) {
 // While decryption runs the core looks up every connection's process
 // (unless the user turned it off), so records name their program.
 func TestComposeCaptureFindProcess(t *testing.T) {
+	t.Parallel()
 	mode := func(in Input) string {
 		out, err := compose(in)
 		if err != nil {

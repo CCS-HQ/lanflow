@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,9 +23,13 @@ import (
 // read the runtime config, stop. It never touches the system proxy or the
 // TUN helper. Skipped when bin/mihomo is absent (scripts/fetch-core.sh).
 func TestEndToEndRealCore(t *testing.T) {
-	bin, _ := filepath.Abs("../../bin/mihomo")
+	coreName := "mihomo"
+	if runtime.GOOS == "windows" {
+		coreName = "mihomo.exe"
+	}
+	bin, _ := filepath.Abs(filepath.Join("..", "..", "bin", coreName))
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("bin/mihomo not found; run scripts/fetch-core.sh")
+		t.Skipf("bin/%s not found; run scripts/fetch-core.sh", coreName)
 	}
 	if testing.Short() {
 		t.Skip("short mode")
@@ -95,9 +101,17 @@ rules:
 		return false
 	})
 
-	// A slow local endpoint keeps the connection open long enough to see it.
+	// Hold the local endpoint open just until the active connection is
+	// observed in s.Connections(), avoiding a multi-second fixed sleep.
+	release := make(chan struct{})
+	var closeOnce sync.Once
+	unblock := func() { closeOnce.Do(func() { close(release) }) }
+	defer unblock()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2500 * time.Millisecond)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
 		io.WriteString(w, "ok")
 	}))
 	defer srv.Close()
@@ -121,13 +135,15 @@ rules:
 		}
 		return false
 	})
+	unblock()
 	if err := <-done; err != nil {
 		t.Fatalf("request through the core: %v", err)
 	}
 	e2eWait(t, 5*time.Second, "closed connection", func() bool { return len(s.ClosedConnections()) > 0 })
-	if up, down := s.TrafficHistory(); len(up) == 0 || len(down) == 0 {
-		t.Error("no traffic history")
-	}
+	e2eWait(t, 5*time.Second, "traffic history", func() bool {
+		up, down := s.TrafficHistory()
+		return len(up) > 0 && len(down) > 0
+	})
 	if rs := s.ExitRoutes(); len(rs) == 0 || rs[0].Group != "节点选择" || rs[0].Node != "直连节点2" {
 		t.Errorf("ExitRoutes = %+v", rs)
 	}
@@ -190,7 +206,7 @@ func e2eWait(t *testing.T, d time.Duration, what string, ok func() bool) {
 		if ok() {
 			return
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }

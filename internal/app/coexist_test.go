@@ -29,6 +29,7 @@ func lastCoexist(h *harness) profile.Coexist {
 }
 
 func TestATrustCoexist(t *testing.T) {
+	t.Parallel()
 	h := tunHarness(t, []string{"192.168.1.1"})
 	if err := h.s.SetSystemProxy(true); err != nil {
 		t.Fatal(err)
@@ -107,6 +108,7 @@ func TestATrustCoexist(t *testing.T) {
 }
 
 func TestATrustCompatSetting(t *testing.T) {
+	t.Parallel()
 	h := tunHarness(t, nil)
 	h.vpn.set(sampleATrust)
 	h.s.recheckCoexist()
@@ -151,6 +153,7 @@ var sampleConfig = model.ATrustConfig{
 // TestATrustConfigMerged: the user's lists join the detected ones, and
 // changing them reloads the core and the proxy bypass.
 func TestATrustConfigMerged(t *testing.T) {
+	t.Parallel()
 	h := tunHarness(t, nil)
 	if err := h.s.SetSystemProxy(true); err != nil {
 		t.Fatal(err)
@@ -200,6 +203,7 @@ func TestATrustConfigMerged(t *testing.T) {
 // TestATrustAlways: with 未运行 aTrust 时也应用 the lists apply without
 // aTrust, without its processes and without the UDP fallback.
 func TestATrustAlways(t *testing.T) {
+	t.Parallel()
 	h := tunHarness(t, nil)
 	set := h.s.Settings()
 	set.ATrust = sampleConfig
@@ -252,6 +256,7 @@ func TestATrustAlways(t *testing.T) {
 // TestCoexistDNSRanges: a detected range holding the system's or the
 // configured company DNS is never kept out of the TUN.
 func TestCoexistDNSRanges(t *testing.T) {
+	t.Parallel()
 	info := atrust.Info{Processes: []string{"aTrust"}, CIDRs: []string{"10.0.0.0/8", "172.16.0.0/12", "198.18.0.0/16"}}
 	set := model.Settings{ATrustCompat: true}
 
@@ -284,6 +289,7 @@ func TestCoexistDNSRanges(t *testing.T) {
 }
 
 func TestCoexistDetectedBeforeStart(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, func(h *harness) { h.vpn.set(sampleATrust) })
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
@@ -297,6 +303,7 @@ func TestCoexistDetectedBeforeStart(t *testing.T) {
 }
 
 func TestCoexistBypass(t *testing.T) {
+	t.Parallel()
 	base := []string{"localhost", "*.local"}
 	if got := coexistBypass(base, profile.Coexist{}); !slices.Equal(got, base) {
 		t.Fatal(got)
@@ -312,6 +319,7 @@ func TestCoexistBypass(t *testing.T) {
 }
 
 func TestIsOwnTUNByName(t *testing.T) {
+	t.Parallel()
 	if !isOwnTUN(profile.TUNDevice) {
 		t.Fatal("our device name not recognised")
 	}

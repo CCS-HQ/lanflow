@@ -103,6 +103,7 @@ func within(t *testing.T, what string, fn func()) {
 // prompt the cheap reads return at once, and a refused read is remembered
 // instead of being asked again by every refresh.
 func TestSecretReadsDoNotBlockTheUIOrLoop(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	ks := newGatedSecrets()
 	ks.fail(errors.New("user refused access"), nil)
@@ -186,6 +187,7 @@ func TestSecretReadsDoNotBlockTheUIOrLoop(t *testing.T) {
 // TestSecretSlotSharesOneRead: callers arriving during a read wait for
 // it and share its answer.
 func TestSecretSlotSharesOneRead(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	ks := newGatedSecrets()
 	ks.m[webdavSecretKey] = "s3cret"
@@ -218,6 +220,7 @@ func TestSecretSlotSharesOneRead(t *testing.T) {
 // TestLinkSecretFailureIsRemembered: a link the keychain refused is not
 // written again with every rewrite of the sync file.
 func TestLinkSecretFailureIsRemembered(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	ks := newGatedSecrets()
 	close(ks.gate)
@@ -289,6 +292,7 @@ func localChange(t *testing.T, h *harness, payload string) {
 // of this machine (its port is taken here) stays in the folder whatever
 // changes locally, and loads once the reason is gone.
 func TestSyncRefusedVersionIsKeptAndRetried(t *testing.T) {
+	t.Parallel()
 	h, _, dir := syncHarness(t)
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
@@ -363,6 +367,7 @@ func TestSyncRefusedVersionIsKeptAndRetried(t *testing.T) {
 
 // TestSyncRetryBacksOff: every failed retry waits longer.
 func TestSyncRetryBacksOff(t *testing.T) {
+	t.Parallel()
 	h, _, dir := syncHarness(t)
 	if err := h.s.SetConfigSync(model.SyncFolder, dir, ""); err != nil {
 		t.Fatal(err)
@@ -402,6 +407,7 @@ func TestSyncRetryBacksOff(t *testing.T) {
 // TestSyncInvalidVersionIsKept: a file that is simply wrong is not tried
 // again, and not written over either.
 func TestSyncInvalidVersionIsKept(t *testing.T) {
+	t.Parallel()
 	h, _, dir := syncHarness(t)
 	if err := h.s.SetConfigSync(model.SyncFolder, dir, ""); err != nil {
 		t.Fatal(err)
@@ -461,6 +467,7 @@ func TestSyncInvalidVersionIsKept(t *testing.T) {
 // in a way this build does not know, is not written over — not by a
 // local change, and not on request either.
 func TestSyncForeignFileIsNeverWritten(t *testing.T) {
+	t.Parallel()
 	for name, edit := range map[string]func(string) string{
 		"newer format": func(s string) string { return strings.Replace(s, "format: 1", "format: 2", 1) },
 		"unknown kdf": func(s string) string {
@@ -514,6 +521,7 @@ func TestSyncForeignFileIsNeverWritten(t *testing.T) {
 // TestSyncLoadIsAllOrNothing: when a step after the checks fails, what
 // was already stored is put back, and "not loaded" is true.
 func TestSyncLoadIsAllOrNothing(t *testing.T) {
+	t.Parallel()
 	for name, edit := range map[string]func(d *syncfile.Doc){
 		// the store alone changes: the reload after storing fails
 		"store only": func(d *syncfile.Doc) {},
@@ -604,6 +612,7 @@ func TestSyncLoadIsAllOrNothing(t *testing.T) {
 // TestSyncDropsSubscriptionsLast: a subscription the file no longer has
 // is still there when the load fails.
 func TestSyncDropsSubscriptionsLast(t *testing.T) {
+	t.Parallel()
 	h, ks, dir := syncHarness(t)
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
@@ -650,6 +659,7 @@ func TestSyncDropsSubscriptionsLast(t *testing.T) {
 // TestSettingsWarningCountsAsApplied: SaveSettings' "saved, but the
 // system proxy did not follow" is told apart from a refusal.
 func TestSettingsWarningCountsAsApplied(t *testing.T) {
+	t.Parallel()
 	var w *settingsWarning
 	err := error(&settingsWarning{errors.New("x")})
 	if !errors.As(fmt.Errorf("wrapped: %w", err), &w) {
@@ -669,6 +679,7 @@ func TestSettingsWarningCountsAsApplied(t *testing.T) {
 // TestSyncReadsAnUnchangedFileOnce: a file that has not changed (and is
 // old enough for its time to be trusted) is not read every second.
 func TestSyncReadsAnUnchangedFileOnce(t *testing.T) {
+	t.Parallel()
 	h, _, dir := syncHarness(t)
 	if err := h.s.SetConfigSync(model.SyncFolder, dir, ""); err != nil {
 		t.Fatal(err)
@@ -729,6 +740,7 @@ func TestSyncReadsAnUnchangedFileOnce(t *testing.T) {
 // file's secrets cannot turn sealing off (and take every other device's
 // sealed links out of the file).
 func TestSealLockedDeviceCannotTurnOff(t *testing.T) {
+	t.Parallel()
 	_, _, dir := sealedDevice(t)
 	b, _ := secondDevice(t, dir)
 	if st := b.s.ConfigSyncStatus(); !st.Encrypted || !st.Locked {
@@ -768,6 +780,7 @@ func TestSealLockedDeviceCannotTurnOff(t *testing.T) {
 // TestSyncUseLocalKeepsSealing: choosing this machine's configuration
 // over a sealed file is not a way to turn the passphrase off.
 func TestSyncUseLocalKeepsSealing(t *testing.T) {
+	t.Parallel()
 	_, _, dir := sealedDevice(t)
 	b, _, _ := syncHarness(t)
 	if err := b.s.SetConfigSync(model.SyncFolder, dir, model.SyncUseLocal); err != nil {
@@ -785,6 +798,7 @@ func TestSyncUseLocalKeepsSealing(t *testing.T) {
 // ---- WebDAV ----
 
 func TestBackupNameValidation(t *testing.T) {
+	t.Parallel()
 	ok := []string{
 		"lanflow-backup-20260102-150405.yaml",
 		"lanflow-backup-20260102-150405.json",
@@ -829,6 +843,7 @@ func TestBackupNameValidation(t *testing.T) {
 }
 
 func TestWebDAVPlainHTTPOnlyOnLocalNetworks(t *testing.T) {
+	t.Parallel()
 	for raw, ok := range map[string]bool{
 		"https://dav.example.com/dav":   true,
 		"http://127.0.0.1:8080/dav":     true,
@@ -857,6 +872,7 @@ func TestWebDAVPlainHTTPOnlyOnLocalNetworks(t *testing.T) {
 }
 
 func TestWebDAVOrigin(t *testing.T) {
+	t.Parallel()
 	for raw, want := range map[string]string{
 		"":                               "",
 		"  ":                             "",
@@ -875,6 +891,7 @@ func TestWebDAVOrigin(t *testing.T) {
 // through sync or an import gets no automatic backup (the password and
 // every subscription link) until the user confirms it on this machine.
 func TestAutoBackupWaitsForConfirmedServer(t *testing.T) {
+	t.Parallel()
 	h, dav := webdavHarness(t) // the server the user set up here
 	set := h.s.Settings()
 	set.WebDAV.AutoBackup = model.WebDAVDaily
@@ -944,6 +961,7 @@ func TestAutoBackupWaitsForConfirmedServer(t *testing.T) {
 // TestLocalWebDAVChangeNeedsNoConfirmation: an address the user types on
 // this machine is confirmed by typing it.
 func TestLocalWebDAVChangeNeedsNoConfirmation(t *testing.T) {
+	t.Parallel()
 	h, _ := webdavHarness(t)
 	other := newDAVFake("alice", "s3cret")
 	srv := httptest.NewServer(other)
@@ -965,6 +983,7 @@ func TestLocalWebDAVChangeNeedsNoConfirmation(t *testing.T) {
 // TestUpdateKeepsEditsMadeDuringDownload: the record read before a
 // download is not written back whole after it.
 func TestUpdateKeepsEditsMadeDuringDownload(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	ov, err := h.s.SaveOverrideEntry(model.Override{Name: "选中的", Enabled: true, Text: "ipv6: true\n"})
 	if err != nil {
@@ -1047,6 +1066,7 @@ func TestUpdateKeepsEditsMadeDuringDownload(t *testing.T) {
 // TestOverrideDownloadDoesNotHoldOpMu: while a URL override downloads,
 // operations that need opMu go through, and an edit made meanwhile stays.
 func TestOverrideDownloadDoesNotHoldOpMu(t *testing.T) {
+	t.Parallel()
 	gate := make(chan struct{})
 	started := make(chan struct{}, 8)
 	var body atomicText
@@ -1163,6 +1183,7 @@ func droppedPath(path string) bool {
 // either dropped from a report or named in reportKeptLists with a
 // reason. A new list field fails here until someone decides.
 func TestFeedbackSettingsListsClassified(t *testing.T) {
+	t.Parallel()
 	var lists []string
 	settingsLists(reflect.TypeOf(model.Settings{}), "", &lists)
 	if len(lists) < 20 {
@@ -1189,6 +1210,7 @@ func TestFeedbackSettingsListsClassified(t *testing.T) {
 // TestFeedbackSettingsDropPrivateValues: filled with marked values, the
 // settings a report carries hold none of the private ones.
 func TestFeedbackSettingsDropPrivateValues(t *testing.T) {
+	t.Parallel()
 	set := defaultSettings()
 	set.DNS.Policy = []model.KV{{Key: "+.corp.secret-domain.example", Value: "10.9.8.7"}}
 	set.DNS.Hosts = []model.KV{{Key: "intranet.secret-domain.example", Value: "10.1.1.1"}}
@@ -1335,6 +1357,7 @@ func filledSettings() model.Settings {
 // added to model.Settings (or to a struct inside it) without a line
 // there shares its backing array outside Service.mu, and fails here.
 func TestCopySettingsIsDeep(t *testing.T) {
+	t.Parallel()
 	orig := filledSettings()
 	want := filledSettings()
 	if !reflect.DeepEqual(orig, want) {
@@ -1375,6 +1398,7 @@ func TestCopySettingsIsDeep(t *testing.T) {
 // TestSettingsClonesAreDeep: the same for the Clone methods of the
 // settings' parts.
 func TestSettingsClonesAreDeep(t *testing.T) {
+	t.Parallel()
 	check := func(name string, orig, want, cp any, cpPtr reflect.Value) {
 		t.Helper()
 		if !reflect.DeepEqual(cp, orig) {
@@ -1403,6 +1427,7 @@ func TestSettingsClonesAreDeep(t *testing.T) {
 // own the switch recomposes the config (which confines or frees them);
 // without, it stays a hot patch.
 func TestAllowLANReloadsWhenSubscriptionListens(t *testing.T) {
+	t.Parallel()
 	toggle := func(h *harness) (reloaded, patched bool) {
 		t.Helper()
 		before := reloads(h)
@@ -1446,6 +1471,7 @@ func TestAllowLANReloadsWhenSubscriptionListens(t *testing.T) {
 // 允许局域网 needs a reload reads keys, not the word: a node called
 // "listen" or a dns.listen Lanflow replaces anyway must not cost a reload.
 func TestSubscriptionListenKeys(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, text    string
 		lists, dnsKey bool
@@ -1469,6 +1495,7 @@ func TestSubscriptionListenKeys(t *testing.T) {
 // replaced) and then waits for the user, where a failure that is plainly
 // this machine's (a port in use) keeps being retried.
 func TestLimitedRetryGivesUp(t *testing.T) {
+	t.Parallel()
 	if retry, limit := retryable(&retryError{err: errors.New("mihomo -t"), limited: true}); !retry || limit != syncRetryLimited {
 		t.Fatalf("limited failure: retry %v, limit %d", retry, limit)
 	}
