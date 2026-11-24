@@ -1,6 +1,7 @@
 package overview
 
 import (
+	"runtime"
 	"testing"
 	"time"
 
@@ -140,5 +141,87 @@ func TestSideDividerResizes(t *testing.T) {
 	p.setSide(1000)
 	if p.sideShare() != sideMax {
 		t.Fatalf("side share %v, want clamped to %v", p.sideShare(), sideMax)
+	}
+}
+
+type coreErrorAPI struct{ app.API }
+
+func (c coreErrorAPI) Status() model.Status {
+	st := c.API.Status()
+	st.Core = model.CoreError
+	st.CoreError = "unexpected exit"
+	return st
+}
+
+func TestTerminalRowVisibleOnResize(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		w, h float32
+		side float32
+		mac  bool
+		err  bool
+	}{
+		{"default", 980, 780, 0, false, false},
+		{"min-680", 800, 680, 0, false, false},
+		{"min-640", 800, 640, 0, false, false},
+		{"min-600", 800, 600, 0, false, false},
+		{"short-540", 800, 540, 0, false, false},
+		{"min-600-narrow-side", 800, 600, sideMin, false, false},
+		{"min-600-wide-side", 800, 600, sideMax, false, false},
+		{"min-600-mac", 800, 600, 0, true, false},
+		{"min-680-core-error-banner", 800, 680, 0, false, true},
+		{"min-600-core-error-banner", 800, 600, 0, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := fake.NewInstant()
+			e, r := testEnv(f)
+			if tc.err {
+				e.API = coreErrorAPI{f}
+			}
+			e.Mac = tc.mac
+			p := New(e)
+			if tc.side > 0 {
+				p.setSide(tc.side)
+			}
+			tt := ui.NewTester(p.View, int(tc.w), int(tc.h))
+			tt.Frame()
+			tt.Frame()
+			lbl, okLbl := tt.Find("终端代理")
+			btn, okBtn := tt.Find("复制终端代理命令")
+			goos := runtime.GOOS
+			if tc.mac {
+				goos = "darwin"
+			}
+			cmd := ProxyCommand(f.Status().MixedPort, goos)
+			cmdR, okCmd := tt.Find(cmd)
+			if !okLbl || !okBtn || !okCmd {
+				t.Fatalf("missing element: lbl=%v cmd=%v btn=%v", okLbl, okCmd, okBtn)
+			}
+			for _, item := range []struct {
+				name string
+				r    ui.Rect
+			}{
+				{"label", lbl},
+				{"cmd", cmdR},
+				{"copy", btn},
+			} {
+				if item.r.W <= 0 || item.r.H <= 0 {
+					t.Errorf("%s clipped to empty rect: %+v", item.name, item.r)
+				}
+				if item.r.Y < 0 || item.r.Y+item.r.H > tc.h {
+					t.Errorf("%s overflows vertically (h=%.0f): %+v", item.name, tc.h, item.r)
+				}
+				if item.r.X < 0 || item.r.X+item.r.W > tc.w {
+					t.Errorf("%s overflows horizontally (w=%.0f): %+v", item.name, tc.w, item.r)
+				}
+			}
+			// Verify the copy button is actually clickable at this size.
+			if err := tt.Click("复制终端代理命令"); err != nil {
+				t.Fatalf("click copy button: %v", err)
+			}
+			if len(r.toasts) == 0 || r.toasts[len(r.toasts)-1] != "已复制" {
+				t.Errorf("expected copy toast, got %v", r.toasts)
+			}
+		})
 	}
 }
