@@ -83,7 +83,7 @@ func lockVerifiedHelper(bin string) (release func(), err error) {
 		f.Close()
 		return nil, fmt.Errorf("权限组件路径不是普通文件: %s", bin)
 	}
-	if final, err := finalDosPath(h); err == nil && !samePathFold(final, filepath.Clean(bin)) {
+	if final, err := finalDosPath(h); err == nil && !samePathFold(final, longDosPath(bin)) {
 		f.Close()
 		return nil, fmt.Errorf("权限组件路径经过重解析点: %s", bin)
 	}
@@ -113,6 +113,23 @@ func finalDosPath(h windows.Handle) (string, error) {
 		s = s[len(`\\?\`):]
 	}
 	return s, nil
+}
+
+// longDosPath expands 8.3 short path components (e.g. C:\Users\RUNNER~1\...)
+// to their long names without following symlinks or junctions, so comparing
+// against GetFinalPathNameByHandle does not false-positive on short paths.
+func longDosPath(path string) string {
+	clean := filepath.Clean(path)
+	p, err := windows.UTF16PtrFromString(clean)
+	if err != nil {
+		return clean
+	}
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	n, err := windows.GetLongPathName(p, &buf[0], uint32(len(buf)))
+	if err != nil || n == 0 || int(n) >= len(buf) {
+		return clean
+	}
+	return windows.UTF16ToString(buf[:n])
 }
 
 func uninstall(ctx context.Context) error {
