@@ -50,7 +50,7 @@ func openUserFile(path string, uid string) (*os.File, error) {
 			return nil, fmt.Errorf("无法读取文件属主")
 		}
 		ok := owner.Equals(want)
-		if !ok && owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) && isUserAccountSID(want) && daclGrantsFullControl(sd, want) {
+		if !ok && owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !isWellKnownNonUserSID(want) && daclGrantsFullControl(sd, want) {
 			ok = true
 		}
 		if !ok {

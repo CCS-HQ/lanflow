@@ -1,0 +1,187 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"net"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"lanflow/internal/model"
+)
+
+func TestWaitTCPPortFree(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS port handoff")
+	}
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitTCPPortFree(ctx, port, false); !errors.Is(err, errPortListening) {
+		t.Fatalf("live listener: %v", err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitTCPPortFree(ctx, port, false); err != nil {
+		t.Fatalf("released listener: %v", err)
+	}
+}
+
+func TestWaitPortRelease(t *testing.T) {
+	t.Run("closed sockets drain", func(t *testing.T) {
+		checks := 0
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := waitPortRelease(ctx, time.Millisecond, func() bool {
+			checks++
+			return checks < 3
+		}, func() bool { return false })
+		if err != nil || checks != 3 {
+			t.Fatalf("wait = %v, checks = %d", err, checks)
+		}
+	})
+	t.Run("listener is a conflict", func(t *testing.T) {
+		err := waitPortRelease(context.Background(), time.Hour, func() bool { return true }, func() bool { return true })
+		if !errors.Is(err, errPortListening) {
+			t.Fatalf("wait = %v", err)
+		}
+	})
+	t.Run("deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		err := waitPortRelease(ctx, time.Millisecond, func() bool { return true }, func() bool { return false })
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("wait = %v", err)
+		}
+	})
+	t.Run("shutdown cancels even an available port", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := waitPortRelease(ctx, time.Millisecond, func() bool { return false }, func() bool { return false }); !errors.Is(err, context.Canceled) {
+			t.Fatalf("wait = %v", err)
+		}
+	})
+}
+
+func tunHandoffHarness(t *testing.T) *harness {
+	t.Helper()
+	h := newHarness(t, nil)
+	if err := h.s.InstallTUNHelper(); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.SetTUN(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// A stopped privileged core can leave its port unbindable for a while.
+// Both the switch and a settings edit must wait before starting the user
+// core, then enable the system proxy on the original port.
+func TestTUNToSystemProxyKeepsPort(t *testing.T) {
+	for _, viaSettings := range []bool{false, true} {
+		t.Run(map[bool]string{false: "switch", true: "settings"}[viaSettings], func(t *testing.T) {
+			h := tunHandoffHarness(t)
+			port := h.s.Settings().MixedPort
+			starts := mgrStarts(h)
+			h.mgr.mu.Lock()
+			h.mgr.onStop = func() { h.taken[port] = true }
+			h.mgr.mu.Unlock()
+			waited := false
+			h.s.d.waitPortFree = func(ctx context.Context, p int, lan bool) error {
+				if p != port || h.mgr.Running() || mgrStarts(h) != starts {
+					t.Fatal("port handoff did not happen between stop and start")
+				}
+				waited = true
+				h.taken[port] = false
+				return nil
+			}
+			var err error
+			if viaSettings {
+				set := h.s.Settings()
+				set.TUN = false
+				err = h.s.SaveSettings(set)
+			} else {
+				err = h.s.SetTUN(false)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.s.SetSystemProxy(true); err != nil {
+				t.Fatal(err)
+			}
+			st := h.s.Status()
+			proxy, _ := h.sys.Get()
+			if !waited || st.Core != model.CoreRunning || st.TUN || !st.SystemProxy || st.MixedPort != port || proxy.Port != port || h.s.Settings().MixedPort != port {
+				t.Fatalf("handoff: waited=%v, status=%+v, proxy=%+v", waited, st, proxy)
+			}
+			h.mgr.mu.Lock()
+			runner := h.mgr.runner.(namedRunner).name
+			h.mgr.onStop = nil
+			h.mgr.mu.Unlock()
+			if runner != "exec" {
+				t.Fatalf("runner = %q", runner)
+			}
+		})
+	}
+}
+
+func TestTUNHandoffFailureRestoresSettings(t *testing.T) {
+	for _, cause := range []error{errPortListening, context.DeadlineExceeded} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			h := tunHandoffHarness(t)
+			port := h.s.Settings().MixedPort
+			h.taken[port] = true
+			h.s.d.waitPortFree = func(context.Context, int, bool) error { return cause }
+			before := mgrStarts(h)
+			err := h.s.SetTUN(false)
+			if err == nil || !h.s.Settings().TUN || mgrStarts(h) != before {
+				t.Fatalf("failed handoff: err=%v, TUN=%v, starts=%d", err, h.s.Settings().TUN, mgrStarts(h))
+			}
+			conflict := strings.Contains(err.Error(), "已被其他程序")
+			if conflict != errors.Is(cause, errPortListening) {
+				t.Fatalf("wrong failure reason: %v", err)
+			}
+			stored, err := loadSettings(h.dir)
+			if err != nil || !stored.TUN {
+				t.Fatalf("stored TUN=%v, err=%v", stored.TUN, err)
+			}
+			h.taken[port] = false
+		})
+	}
+}
+
+func TestTUNStopFailureDoesNotStartAnotherCore(t *testing.T) {
+	h := tunHandoffHarness(t)
+	if err := h.s.SetSystemProxy(true); err != nil {
+		t.Fatal(err)
+	}
+	before := mgrStarts(h)
+	mgr := h.s.d.mgr
+	h.s.d.mgr = stopFailMgr{mgr}
+	err := h.s.SetTUN(false)
+	h.s.d.mgr = mgr
+	if err == nil || !strings.Contains(err.Error(), "helper did not answer") || mgrStarts(h) != before {
+		t.Fatalf("stop failure: err=%v, starts=%d", err, mgrStarts(h))
+	}
+	if st := h.s.Status(); st.Core != model.CoreError || !st.TUN || !st.SystemProxy || !h.s.Settings().TUN {
+		t.Fatalf("lost the old core's state: %+v", st)
+	}
+	if err := h.s.SetTUN(false); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if st := h.s.Status(); st.Core != model.CoreRunning || st.TUN || !st.SystemProxy || h.s.Settings().TUN || mgrStarts(h) != before+1 {
+		t.Fatalf("retry did not switch the core: %+v", st)
+	}
+}

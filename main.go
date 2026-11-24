@@ -93,6 +93,7 @@ func runSingle(locked bool) {
 	if !locked && !mygo.App.RequestSingleInstanceLock() {
 		return // the running instance takes over
 	}
+	mygo.App.SetActivationPolicy(mygo.ActivationPolicyRegular)
 	api := backend(i18n.FromSystem(mygo.App.PreferredLanguages()))
 	// A panic on the main goroutine (UI callbacks run here) is recorded in
 	// errors.jsonl, then raised again (internal/app/errlog.go).

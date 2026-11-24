@@ -267,8 +267,19 @@ func (s *Service) startLocked() (err error) {
 	fail := s.failStart
 	if prev != model.CoreRunning && s.d.portInUse(set.MixedPort, set.AllowLAN) {
 		// A core of ours the previous run left may hold it (takeover.go).
-		if !s.stopStray() || s.d.portInUse(set.MixedPort, set.AllowLAN) {
-			return fail(s.portTaken(set.MixedPort), model.CoreError)
+		s.stopStray()
+		if s.d.portInUse(set.MixedPort, set.AllowLAN) {
+			if s.d.waitPortFree == nil {
+				return fail(s.portTaken(set.MixedPort), model.CoreError)
+			}
+			s.alog.Infof("waiting for proxy port %d to become reusable", set.MixedPort)
+			err := s.d.waitPortFree(s.rootCtx, set.MixedPort, set.AllowLAN)
+			if errors.Is(err, errPortListening) {
+				return fail(s.portTaken(set.MixedPort), model.CoreError)
+			}
+			if err != nil {
+				return fail(fmt.Errorf(i18n.T("等待代理端口 %d 释放失败：%v。请稍后重试。"), set.MixedPort, err), model.CoreError)
+			}
 		}
 	}
 	s.detectCoexist() // compose with aTrust's routes when it is already running
@@ -486,10 +497,13 @@ func (s *Service) restartLocked() (err error) {
 	defer func() { s.logOp("restart core", err) }()
 	s.stopStreams()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	if serr := s.d.mgr.Stop(ctx); serr != nil {
-		s.alog.Warnf("restart core: stop: %v", serr) // the start below reports a core that stayed
-	}
+	serr := s.d.mgr.Stop(ctx)
 	cancel()
+	if serr != nil {
+		// The old core may still own the TUN, sockets and DNS. Do not
+		// replace its runner or start a second core over it.
+		return s.failStart(fmt.Errorf(i18n.T("停止内核失败：%v"), serr), model.CoreError)
+	}
 	s.mu.Lock()
 	s.state.st.Core = model.CoreStopped
 	s.mu.Unlock()

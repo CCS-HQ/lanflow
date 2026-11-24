@@ -250,10 +250,13 @@ func (s *Service) SetTUN(on bool) (err error) {
 			return err
 		}
 	}
-	var wasRunning bool
+	var wasRunning, oldTUN bool
 	err = s.updateSettings(func(set *model.Settings) {
+		oldTUN = set.TUN
 		set.TUN = on
-		wasRunning = s.state.st.Core == model.CoreRunning
+		// A failed stop leaves runningTUN set: retry the handoff instead
+		// of reporting success after merely changing the saved setting.
+		wasRunning = s.state.st.Core == model.CoreRunning || s.state.runningTUN
 	})
 	s.em.emit(TopicSettings)
 	if err != nil {
@@ -263,6 +266,12 @@ func (s *Service) SetTUN(on bool) (err error) {
 		return nil
 	}
 	if err := s.restartLocked(); err != nil {
+		// Match SaveSettings: a refused transition must not persist the
+		// requested mode while the old core may still be running.
+		if rerr := s.updateSettings(func(set *model.Settings) { set.TUN = oldTUN }); rerr != nil {
+			s.alog.Warnf("TUN: restore the stored mode: %v", rerr)
+		}
+		s.em.emit(TopicSettings)
 		return fmt.Errorf(i18n.T("切换 TUN 模式后重新启动内核失败：%v"), err)
 	}
 	return nil

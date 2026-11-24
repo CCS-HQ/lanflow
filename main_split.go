@@ -113,7 +113,10 @@ func runService(args split.Args) {
 	// Finder, the Dock or Spotlight open the app while only the service
 	// runs: LaunchServices activates this process instead of starting the
 	// app again. Bring up the window.
-	mygo.App.OnActivate(func(bool) { showWindow("") })
+	mygo.App.OnActivate(func(bool) {
+		mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+		showWindow("")
+	})
 	mygo.App.OnOpenURL(func(u string) { showWindow(u) })
 	if w, ok := api.(interface {
 		Resumed()
@@ -172,6 +175,11 @@ func runService(args split.Args) {
 	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { finish() })
 	mygo.App.WhenReady(func() {
+		// LaunchServices can promote the service of this regular app
+		// bundle while AppKit finishes launching. Reapply after launch,
+		// when the native application is ready, so only the UI owns a
+		// Dock icon.
+		mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 		bg.Start()
 		registerURLScheme()
 		dropLegacyInstallEntry()
@@ -231,6 +239,9 @@ func backgroundPrompt(bg *view.Background) rpc.PromptFunc {
 // the service process, which it starts when needed. Closing the window
 // ends this process; the service, the core and the connections stay.
 func runWindow(args split.Args) {
+	// The macOS bundle starts as LSUIElement so a service launch never
+	// gets a second Dock icon. Only the attached window becomes regular.
+	mygo.App.SetActivationPolicy(mygo.ActivationPolicyRegular)
 	exe := executable()
 	o := app.DefaultOptions("Lanflow")
 	version := mygo.App.Version()

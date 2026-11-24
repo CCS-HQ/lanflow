@@ -133,6 +133,8 @@ S1 在现有单进程里加了本机接口，界面仍直接调用进程内的 `
 - **界面进程**：`split.Connect` 连服务；`rpc.ErrNotRunning` 时用同一可执行文件带 `--service` 拉起服务（Unix 新会话 `setsid`，Windows `DETACHED_PROCESS`），最多等 20 秒；服务实在起不来时退回单进程，而不是什么都不显示。界面以 `remote.Client` 为 `app.API`，`view.Options.Remote` 只关掉三件事：托盘、全局快捷键（设置页经 `SetShortcut` 让服务注册）和登录项，以及 `System` 提醒的系统通知（由服务发）。
 - **单实例**：服务持有 mygo 的单实例锁。界面不取锁，靠 `AttachUI`：服务记住当前界面的连接；第二个界面进程的 `AttachUI(arg)` 让已有界面显示并打开 `arg`，自己退出。界面关窗前先 `DetachUI`，避免新开的界面被转发给正在退出的旧界面。
 - **macOS 的 Dock / Finder**：服务进程是同一 bundle 的 `NSApplication`，LaunchServices 视其为「正在运行的 Lanflow」，所以在 Finder、Dock、Spotlight 打开 Lanflow 时不会启动新进程，而是激活服务进程；服务在 `OnActivate` 中拉起界面（`OnOpenURL` 同理，深链接转交界面）。界面进程是普通前台应用，有 Dock 图标。
+
+  bundle 以 `LSUIElement` 启动，避免后台服务先被 LaunchServices 注册成前台应用而出现第二个 Dock 图标。只有窗口和单进程模式显式使用 `ActivationPolicyRegular`；服务在启动就绪和被再次激活时重设 `ActivationPolicyAccessory`。
 - **关窗**：`CloseToTray`（默认开）时关窗 = 界面进程退出，服务、内核、连接不受影响；关掉该设置时关窗 = 退出澜流（与单进程一致）。窗口快捷键在窗口位于前台时关掉窗口（即退出界面进程），否则拉起或显示。
 - **退出澜流**：界面里的 ⌘Q / 应用菜单退出、以及托盘「退出澜流」都走原有确认（系统代理开着时 `Shell.AskQuit`），确认后界面调 `QuitService`，服务按原逻辑恢复系统代理、停内核，并向界面发 `ui quit` 让它直接退出。托盘退出时有界面就让界面确认（`ui ask-quit`），没有界面则用原生对话框确认（`Background.ConfirmQuit`，文字与窗口内相同）。SIGTERM 不确认，直接走同一退出路径。
 - **agent 授权**：服务进程的 `Prompt` 改为 `Background.AskAgentConsent`：发系统通知，并在托盘菜单顶部加「待授权：<agent>…」，点通知或菜单项弹原生对话框（写入：始终允许 / 仅本次 / 拒绝；ctl 的高影响写同样可选始终允许；其他（含 MCP 的高影响写）：允许 / 拒绝；关闭对话框 = 拒绝）。超时与撤回逻辑不变。单进程模式仍用窗口内的弹窗。
