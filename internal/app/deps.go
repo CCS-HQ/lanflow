@@ -170,9 +170,6 @@ type deps struct {
 	httpVia    func(port int, timeout time.Duration) *http.Client
 	freePort   func() (int, error)
 	portInUse  func(port int, lan bool) bool
-	// portListening reports whether something accepts connections on
-	// 127.0.0.1:port (nil = never: a taken port is never waited for).
-	portListening func(port int) bool
 	// portOwner names the program that listens on a port, for the user
 	// ("" = unknown; nil = never known).
 	portOwner func(port int) string
@@ -303,18 +300,6 @@ func tcpPortInUse(port int, lan bool) bool {
 		l.Close()
 	}
 	return false
-}
-
-// tcpPortListening reports whether a connection to 127.0.0.1:port is
-// accepted. A listener on all addresses accepts it too; one bound only to
-// a LAN address does not, and is then waited for until portReleaseWait.
-func tcpPortListening(port int) bool {
-	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	_ = c.Close()
-	return true
 }
 
 func freeTCPPort() (int, error) {

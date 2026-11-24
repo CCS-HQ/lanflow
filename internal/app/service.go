@@ -228,7 +228,6 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 	}
 	if d.portInUse == nil {
 		d.portInUse = tcpPortInUse
-		d.portListening = tcpPortListening
 	}
 	if d.otherTUN == nil {
 		d.otherTUN = func(context.Context) (string, bool) { return "", false }
