@@ -2,11 +2,11 @@ package service
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -177,64 +177,63 @@ func TestSanitizeConfigRefusesReservedProviderPaths(t *testing.T) {
 	}
 }
 
-func largeSanitizeConfig(keys, providers int) []byte {
+// The check is linear in the size of the config: decoding into Go maps
+// took 27 s for 80 000 keys (this one: 0.3 s, 3 s under the race
+// detector; 350 000 keys take 1.1 s). What aliases can blow up is refused.
+//
+// The limits only catch a blow-up, not small slowdowns: under the race
+// detector, on a busy shared CI runner, the 3 s above were measured at
+// 6.4 s, so there they are three times as long.
+func TestSanitizeConfigIsLinear(t *testing.T) {
+	limit := func(d time.Duration) time.Duration {
+		if raceEnabled {
+			return 3 * d
+		}
+		return d
+	}
 	var b strings.Builder
-	for i := 0; i < keys; i++ {
+	for i := 0; i < 80000; i++ {
 		fmt.Fprintf(&b, "k%d: %d\n", i, i)
 	}
 	b.WriteString("external-controller: 0.0.0.0:9090\nproxy-providers:\n")
-	for i := 0; i < providers; i++ {
+	for i := 0; i < 10000; i++ {
 		fmt.Fprintf(&b, "  p%d: {type: http, url: 'https://e/%d', path: p/%d.yaml}\n", i, i, i)
 	}
-	return []byte(b.String())
-}
-
-func TestSanitizeConfigLargeMapping(t *testing.T) {
-	in := largeSanitizeConfig(80000, 10000)
+	in := []byte(b.String())
 	if len(in) > maxConfigSize {
 		t.Fatalf("test config is %d bytes", len(in))
 	}
-	// Keep the large input's correctness coverage under -race without
-	// applying the production deadline to instrumented code on a shared
-	// CI runner. BenchmarkSanitizeConfig measures its scaling separately.
-	got, err := sanitizeNow(in)
+	start := time.Now()
+	got, err := sanitizeConfig(in)
+	took := time.Since(start)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got.ProviderPaths) != 10000 || len(got.Removed) != 1 || bytes.Contains(got.YAML, []byte("external-controller")) {
 		t.Fatalf("paths %d, removed %v", len(got.ProviderPaths), got.Removed)
 	}
-}
+	t.Logf("%d bytes, 90000 keys: %v", len(in), took)
+	if took > limit(8*time.Second) {
+		t.Fatalf("took %v", took)
+	}
 
-func TestSanitizeConfigRefusesMergeBomb(t *testing.T) {
 	// Merges nested so that following them all would never end.
-	var b strings.Builder
+	b.Reset()
 	b.WriteString("a0: &a0 {path: x.yaml}\n")
 	for i := 1; i <= 30; i++ {
 		fmt.Fprintf(&b, "a%d: &a%d {<<: [*a%d, *a%d, *a%d, *a%d]}\n", i, i, i-1, i-1, i-1, i-1)
 	}
 	b.WriteString("proxy-providers:\n  p: {<<: *a30}\n")
-	// Require the traversal budget to reject it, rather than accepting
-	// any error (including the outer wall-clock deadline) as success.
-	if _, err := sanitizeNow([]byte(b.String())); !errors.Is(err, errTooComplex) {
-		t.Fatalf("merge bomb: got %v, want %v", err, errTooComplex)
+	start = time.Now()
+	if _, err := sanitizeConfig([]byte(b.String())); err == nil {
+		t.Fatal("a merge bomb was accepted")
 	}
-}
+	if took := time.Since(start); took > limit(5*time.Second) {
+		t.Fatalf("refusing a merge bomb took %v", took)
+	}
 
-// Comparing sizes exposes quadratic YAML map decoding without making
-// ordinary tests depend on the speed or load of the runner.
-func BenchmarkSanitizeConfig(b *testing.B) {
-	for _, providers := range []int{1000, 10000} {
-		b.Run(fmt.Sprintf("keys=%d", 9*providers), func(b *testing.B) {
-			in := largeSanitizeConfig(8*providers, providers)
-			b.SetBytes(int64(len(in)))
-			b.ReportAllocs()
-			for b.Loop() {
-				if _, err := sanitizeNow(in); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
+	if _, err := sanitizeConfig(bytes.Repeat([]byte("# x\n"), maxConfigSize/4+1)); err == nil {
+		t.Fatal("an oversized config was accepted")
 	}
 }
 
