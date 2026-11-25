@@ -185,7 +185,7 @@ func (s *Service) planDoc(doc syncfile.Doc) (*applyPlan, error) {
 		for i, c := range next.chains {
 			v, err := profile.NormalizeProxyChain(c)
 			if err != nil {
-				return nil, &docError{"proxyChains[" + strconv.Itoa(i) + "]", err}
+				return nil, &docError{"proxyChains[" + strconv.Itoa(i) + "]", chainErrText(err)}
 			}
 			next.chains[i] = v
 		}

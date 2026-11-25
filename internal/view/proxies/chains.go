@@ -211,7 +211,7 @@ func (p *Page) chainsDialogView(c *ui.Context, px model.ProxySnapshot) {
 	}
 	t := c.Theme()
 	k := p.e.Kit
-	env.Dialog(c, &d.open, env.DialogOptions{Title: i18n.T("链式代理"), Width: 520}, func() {
+	env.Dialog(c, &d.open, env.DialogOptions{Title: i18n.T("链式代理|对话框"), Width: 520}, func() {
 		ui.Column(c.Key(fmt.Sprint("chains", d.session))).Gap(8).Padding(0, 4, 4, 0).Children(func() {
 			ui.Text(c, i18n.Tf("让流量依次经过几个节点：入口 → … → 落地。每条链路会成为一个同名的代理组，放进「%s」组，也可以作为规则的目标。", profile.ChainGroupName)).
 				FontSize(12).TextColor(t.TextMuted)

@@ -67,6 +67,8 @@ var keyTables = map[string]string{
 	"internal/app/atrustcfg.go": "atrustReference",
 	// The checks' names, which the 检测 page shows through T.
 	"internal/app/unlock.go": "unlockChecks",
+	// The chain notes, which app/chains.go shows through Tf.
+	"internal/profile/chain_notes.go": "chainFormats",
 }
 
 // pendingUnwrapped are Chinese literals known to be shown without going
@@ -126,7 +128,7 @@ func sourceLiterals(t *testing.T) []literal {
 			t.Fatal(err)
 		}
 	}
-	for _, f := range []string{"main.go", "main_service.go", filepath.Join("internal", "locate", "analyze.go"), filepath.Join("internal", "locate", "direct.go")} {
+	for _, f := range []string{"main.go", "main_service.go", filepath.Join("internal", "locate", "analyze.go"), filepath.Join("internal", "locate", "direct.go"), filepath.Join("internal", "profile", "chain_notes.go")} {
 		if _, err := os.Stat(filepath.Join(root, f)); err == nil {
 			files = append(files, filepath.Join(root, f))
 		}

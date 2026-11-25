@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"lanflow/internal/controller"
+	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 )
 
 // chainCtrl makes the fake core show chain group name in 流媒体 (and
@@ -184,5 +186,23 @@ func TestInnerConnectionsCountOnce(t *testing.T) {
 		if r.Group == "香港 01" {
 			t.Fatal("INNER connection made a route")
 		}
+	}
+}
+
+// Chain notes reach the window in its language, nested reasons included.
+func TestChainNoteText(t *testing.T) {
+	_, err := profile.NormalizeProxyChain(model.ProxyChain{Name: "X", Hops: []string{"A"}})
+	var n profile.ChainNote
+	if !errors.As(err, &n) {
+		t.Fatalf("not a ChainNote: %v", err)
+	}
+	outer := profile.ChainNote{Code: "disabled-because", Args: []any{"X", n}}
+	if got := chainNoteText(outer); got != outer.Error() || !strings.Contains(got, "2–5") {
+		t.Fatalf("zh: %q", got)
+	}
+	i18n.SetLang(i18n.EN)
+	defer i18n.SetLang(i18n.ZH)
+	if got := chainNoteText(outer); got != "Chain “X” is off: A chain needs 2–5 hops; this one has 1" {
+		t.Fatalf("en: %q", got)
 	}
 }

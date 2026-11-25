@@ -232,7 +232,7 @@ func (s *Service) commit(p prepared) error {
 	s.state.groupIcons = icons
 	s.state.dialers = dialersOf(p.out.YAML)
 	s.mu.Unlock()
-	s.noteChainWarnings(p.out.Warnings)
+	s.noteChainWarnings(p.out.ChainNotes)
 	return nil
 }
 

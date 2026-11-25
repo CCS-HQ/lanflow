@@ -245,6 +245,32 @@ func init() {
 		"链式代理（%s）": "proxy chains (%s)",
 		"%d 条链式代理": "%d proxy chains",
 
+		// internal/profile/chain_notes.go (shown by internal/app/chains.go)
+		"链路名称不能以 %s 开头（澜流保留）":                     "A chain name cannot start with %s (reserved by Lanflow)",
+		"链路需要 %d–%d 跳，现在是 %d 跳":                   "A chain needs %d–%d hops; this one has %d",
+		"第 %d 跳没有选择节点":                            "Hop %d has no node chosen",
+		"第 %d 跳「%s」是澜流生成的出站，不能放进链路":               "Hop %d, “%s”, is an outbound Lanflow generates and cannot be part of a chain",
+		"「%s」在链路里出现了两次":                           "“%s” appears twice in the chain",
+		"链路不能把自己作为一跳":                             "A chain cannot be a hop of itself",
+		"入口组「%s」包含链路组「%s」，会形成环路":                  "The entry group “%s” contains the chain group “%s”: that would be a loop",
+		"入口组「%s」包含「%s」组，会形成环路":                    "The entry group “%s” contains the group “%s”: that would be a loop",
+		"入口组「%s」包含「%s」组，而「%s」会放进这个组，会形成环路":        "The entry group “%s” contains the group “%s”, which “%s” is added to: that would be a loop",
+		"入口「%s」是另一条链路，链路不能嵌套":                     "The entry “%s” is another chain; chains cannot be nested",
+		"入口「%s」不在当前配置的节点或代理组里（订阅提供方的节点需先放进一个代理组）": "The entry “%s” is not a node or group of the current configuration (a proxy provider's node must be put in a group first)",
+		"第 %d 跳「%s」是代理组，中间与落地只能是节点":               "Hop %d, “%s”, is a proxy group; middle hops and the exit must be nodes",
+		"第 %d 跳「%s」不在当前配置的 proxies 里（可能已随订阅更新删除；订阅提供方的节点不能做中间或落地）": "Hop %d, “%s”, is not among the configuration's proxies (perhaps removed by a subscription update; a proxy provider's nodes cannot be middle hops or the exit)",
+		"链路「%s」：第 %d 跳「%s」是 WireGuard 节点，与原节点共用私钥，同时使用会互相顶掉会话":     "Chain “%s”: hop %d, “%s”, is a WireGuard node sharing its private key with the original; using both at once makes them push each other's session out",
+		"链路「%s」：第 %d 跳「%s」自带 dialer-proxy「%s」，在链路中被改为前一跳":          "Chain “%s”: hop %d, “%s”, has its own dialer-proxy “%s”; in the chain it dials through the previous hop instead",
+		"订阅中已有不是 select 的「%s」和「%s」组，链路不会生成":                        "The subscription already has groups “%s” and “%s” that are not select groups; no chains are generated",
+		"有一条链路没有名称，已忽略":             "A chain without a name was ignored",
+		"链路名称「%s」以 %s 开头（澜流保留），已忽略": "The chain name “%s” starts with %s (reserved by Lanflow); ignored",
+		"链路名称「%s」重复，后一条已忽略":         "The chain name “%s” is used twice; the second was ignored",
+		"链路名称「%s」与内置策略或链路总组重名，已忽略":  "The chain name “%s” is a built-in policy or the chains group; ignored",
+		"链路名称「%s」与配置中的节点重名，已忽略":     "The chain name “%s” is already a node of the configuration; ignored",
+		"链路名称「%s」与配置中的代理组重名，已忽略":    "The chain name “%s” is already a group of the configuration; ignored",
+		"链路「%s」已停用：%s":              "Chain “%s” is off: %s",
+		"链路「%s」已停用，命中它的流量被拒绝":       "Chain “%s” is off; traffic matching it is rejected",
+
 		// internal/app/mirror.go
 		"镜像地址须是以 http:// 或 https:// 开头的完整地址": "The mirror must be a full URL starting with http:// or https://",
 

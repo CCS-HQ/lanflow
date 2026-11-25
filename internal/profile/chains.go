@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -113,28 +114,28 @@ func NormalizeProxyChain(ch model.ProxyChain) (model.ProxyChain, error) {
 	}
 	ch.Hops = hops
 	if ch.Name == "" {
-		return ch, fmt.Errorf("链路名称不能为空")
+		return ch, chainNote("empty-name")
 	}
 	if IsReservedName(ch.Name) {
-		return ch, fmt.Errorf("链路名称不能以 %s 开头（澜流保留）", reservedPrefix)
+		return ch, chainNote("reserved-name", reservedPrefix)
 	}
 	if n := len(ch.Hops); n < model.ProxyChainMinHops || n > model.ProxyChainMaxHops {
-		return ch, fmt.Errorf("链路需要 %d–%d 跳，现在是 %d 跳", model.ProxyChainMinHops, model.ProxyChainMaxHops, n)
+		return ch, chainNote("hop-count", model.ProxyChainMinHops, model.ProxyChainMaxHops, n)
 	}
 	seen := map[string]bool{}
 	for i, h := range ch.Hops {
 		if h == "" {
-			return ch, fmt.Errorf("第 %d 跳没有选择节点", i+1)
+			return ch, chainNote("hop-empty", i+1)
 		}
 		if IsReservedName(h) {
-			return ch, fmt.Errorf("第 %d 跳「%s」是澜流生成的出站，不能放进链路", i+1, h)
+			return ch, chainNote("hop-reserved", i+1, h)
 		}
 		if seen[h] {
-			return ch, fmt.Errorf("「%s」在链路里出现了两次", h)
+			return ch, chainNote("hop-twice", h)
 		}
 		seen[h] = true
 		if h == ch.Name {
-			return ch, fmt.Errorf("链路不能把自己作为一跳")
+			return ch, chainNote("hop-self")
 		}
 	}
 	return ch, nil
@@ -168,42 +169,43 @@ func groupMembers(g *yaml.Node) []string {
 // group the container is appended to): the chain would then dial through
 // itself. Nodes collected by include-all* or providers are never groups,
 // and the clones are kept out of include-all* (excludeChainClones).
-func (e *chainEnv) entryLoop(entry string) string {
+func (e *chainEnv) entryLoop(entry string) *ChainNote {
 	seen := map[string]bool{}
-	var visit func(name string) string
-	visit = func(name string) string {
+	var visit func(name string) *ChainNote
+	visit = func(name string) *ChainNote {
 		if seen[name] {
-			return ""
+			return nil
 		}
 		seen[name] = true
 		switch {
 		case e.chainNames[name]:
-			return fmt.Sprintf("入口组「%s」包含链路组「%s」，会形成环路", entry, name)
+			return chainNoteP("loop-chain", entry, name)
 		case name == e.container:
-			return fmt.Sprintf("入口组「%s」包含「%s」组，会形成环路", entry, name)
+			return chainNoteP("loop-container", entry, name)
 		case name == e.firstSelect && e.firstSelect != "":
-			return fmt.Sprintf("入口组「%s」包含「%s」组，而「%s」会放进这个组，会形成环路", entry, name, e.container)
+			return chainNoteP("loop-first", entry, name, e.container)
 		}
 		g, ok := e.groups[name]
 		if !ok {
-			return ""
+			return nil
 		}
 		for _, m := range groupMembers(g) {
-			if r := visit(m); r != "" {
+			if r := visit(m); r != nil {
 				return r
 			}
 		}
-		return ""
+		return nil
 	}
 	return visit(entry)
 }
 
 // validateChain checks ch against the configuration; "" = valid. warns
 // are notes on a valid chain.
-func (e *chainEnv) validateChain(ch model.ProxyChain) (reason string, warns []string) {
+func (e *chainEnv) validateChain(ch model.ProxyChain) (reason *ChainNote, warns []ChainNote) {
 	ch, err := NormalizeProxyChain(ch)
-	if err != nil {
-		return err.Error(), nil
+	var n ChainNote
+	if errors.As(err, &n) {
+		return &n, nil
 	}
 	entry := ch.Hops[0]
 	_, entryNode := e.proxies[entry]
@@ -211,31 +213,31 @@ func (e *chainEnv) validateChain(ch model.ProxyChain) (reason string, warns []st
 	switch {
 	case entryNode:
 	case entryGroup:
-		if r := e.entryLoop(entry); r != "" {
+		if r := e.entryLoop(entry); r != nil {
 			return r, nil
 		}
 	case e.chainNames[entry]:
-		return fmt.Sprintf("入口「%s」是另一条链路，链路不能嵌套", entry), nil
+		return chainNoteP("entry-chain", entry), nil
 	default:
-		return fmt.Sprintf("入口「%s」不在当前配置的节点或代理组里（订阅提供方的节点需先放进一个代理组）", entry), nil
+		return chainNoteP("entry-missing", entry), nil
 	}
 	for i, h := range ch.Hops[1:] {
 		pos := i + 2
 		n, ok := e.proxies[h]
 		if !ok {
 			if _, isGroup := e.groups[h]; isGroup || e.chainNames[h] {
-				return fmt.Sprintf("第 %d 跳「%s」是代理组，中间与落地只能是节点", pos, h), nil
+				return chainNoteP("hop-group", pos, h), nil
 			}
-			return fmt.Sprintf("第 %d 跳「%s」不在当前配置的 proxies 里（可能已随订阅更新删除；订阅提供方的节点不能做中间或落地）", pos, h), nil
+			return chainNoteP("hop-missing", pos, h), nil
 		}
 		if t := deref(mapGet(n, "type")); t != nil && strings.EqualFold(t.Value, "wireguard") {
-			warns = append(warns, fmt.Sprintf("链路「%s」：第 %d 跳「%s」是 WireGuard 节点，与原节点共用私钥，同时使用会互相顶掉会话", ch.Name, pos, h))
+			warns = append(warns, chainNote("wireguard", ch.Name, pos, h))
 		}
 		if d := deref(mapGet(n, "dialer-proxy")); d != nil && strings.TrimSpace(d.Value) != "" {
-			warns = append(warns, fmt.Sprintf("链路「%s」：第 %d 跳「%s」自带 dialer-proxy「%s」，在链路中被改为前一跳", ch.Name, pos, h, d.Value))
+			warns = append(warns, chainNote("own-dialer", ch.Name, pos, h, d.Value))
 		}
 	}
-	return "", warns
+	return nil, warns
 }
 
 // chainReferenced collects every name the configuration (and the custom
@@ -294,13 +296,13 @@ func chainReferenced(root *yaml.Node, custom []model.CustomRule) map[string]bool
 // addProxyChains generates the chains (see the comment at the top). It
 // never fails: a chain that cannot be generated is reported in the
 // returned warnings and stands in as a REJECT group where referenced.
-func (c *composer) addProxyChains(chains []model.ProxyChain, custom []model.CustomRule) []string {
+func (c *composer) addProxyChains(chains []model.ProxyChain, custom []model.CustomRule) []ChainNote {
 	if len(chains) == 0 {
 		return nil
 	}
-	var warns []string
-	warn := func(format string, args ...any) {
-		warns = append(warns, layerChains+"："+fmt.Sprintf(format, args...))
+	var warns []ChainNote
+	warn := func(code string, args ...any) {
+		warns = append(warns, chainNote(code, args...))
 	}
 
 	env := &chainEnv{proxies: map[string]*yaml.Node{}, groups: map[string]*yaml.Node{}, chainNames: map[string]bool{}}
@@ -344,7 +346,7 @@ func (c *composer) addProxyChains(chains []model.ProxyChain, custom []model.Cust
 		if g, ok := env.groups[ChainGroupAltName]; ok {
 			containerGroup = g // reuse ours from an earlier layer only if it is a select group
 			if gt := deref(mapGet(g, "type")); gt == nil || gt.Value != "select" {
-				warn("订阅中已有不是 select 的「%s」和「%s」组，链路不会生成", ChainGroupName, ChainGroupAltName)
+				warn("container-taken", ChainGroupName, ChainGroupAltName)
 				return warns
 			}
 		}
@@ -359,8 +361,9 @@ func (c *composer) addProxyChains(chains []model.ProxyChain, custom []model.Cust
 	// Names first: a chain whose name collides is left out entirely (no
 	// placeholder: the name already means something else).
 	type item struct {
-		ch     model.ProxyChain
-		reason string // "" = generate
+		ch       model.ProxyChain
+		reason   *ChainNote // nil = generate (unless disabled)
+		disabled bool
 	}
 	var items []item
 	usable := map[string]bool{}
@@ -368,24 +371,24 @@ func (c *composer) addProxyChains(chains []model.ProxyChain, custom []model.Cust
 		ch.Name = strings.TrimSpace(ch.Name)
 		switch {
 		case ch.Name == "":
-			warn("有一条链路没有名称，已忽略")
+			warn("ignored-no-name")
 			continue
 		case IsReservedName(ch.Name):
-			warn("链路名称「%s」以 %s 开头（澜流保留），已忽略", ch.Name, reservedPrefix)
+			warn("ignored-reserved", ch.Name, reservedPrefix)
 			continue
 		case env.chainNames[ch.Name]:
-			warn("链路名称「%s」重复，后一条已忽略", ch.Name)
+			warn("ignored-dup", ch.Name)
 			continue
 		case builtin[ch.Name] || ch.Name == env.container || ch.Name == ChainGroupName:
-			warn("链路名称「%s」与内置策略或链路总组重名，已忽略", ch.Name)
+			warn("ignored-builtin", ch.Name)
 			continue
 		}
 		if _, ok := env.proxies[ch.Name]; ok {
-			warn("链路名称「%s」与配置中的节点重名，已忽略", ch.Name)
+			warn("ignored-node", ch.Name)
 			continue
 		}
 		if _, ok := env.groups[ch.Name]; ok {
-			warn("链路名称「%s」与配置中的代理组重名，已忽略", ch.Name)
+			warn("ignored-group", ch.Name)
 			continue
 		}
 		env.chainNames[ch.Name] = true
@@ -394,13 +397,13 @@ func (c *composer) addProxyChains(chains []model.ProxyChain, custom []model.Cust
 	for i := range items {
 		it := &items[i]
 		if !it.ch.Enabled {
-			it.reason = "-"
+			it.disabled = true
 			continue
 		}
-		if r, ws := env.validateChain(it.ch); r != "" {
+		if r, ws := env.validateChain(it.ch); r != nil {
 			it.reason = r
 		} else {
-			warns = append(warns, prefixAll(layerChains+"：", ws)...)
+			warns = append(warns, ws...)
 			usable[it.ch.Name] = true
 		}
 	}
@@ -411,9 +414,9 @@ func (c *composer) addProxyChains(chains []model.ProxyChain, custom []model.Cust
 	var enabled []string
 	for _, it := range items {
 		ch := it.ch
-		if it.reason != "" {
-			if it.reason != "-" {
-				warn("链路「%s」已停用：%s", ch.Name, it.reason)
+		if it.reason != nil || it.disabled {
+			if it.reason != nil {
+				warn("disabled-because", ch.Name, *it.reason)
 			}
 			if refs[ch.Name] {
 				gs.Content = append(gs.Content, c.mark(mapNode(
@@ -421,7 +424,7 @@ func (c *composer) addProxyChains(chains []model.ProxyChain, custom []model.Cust
 					"type", strNode("select"),
 					"proxies", strSeq([]string{"REJECT"}),
 				)))
-				warn("链路「%s」已停用，命中它的流量被拒绝", ch.Name)
+				warn("placeholder", ch.Name)
 			}
 			continue
 		}

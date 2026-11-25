@@ -197,7 +197,7 @@ func compose(in Input) (Output, error) {
 	}
 
 	c.layer = layerChains
-	chainWarns := c.addProxyChains(in.ProxyChains, in.CustomRules)
+	chainNotes := c.addProxyChains(in.ProxyChains, in.CustomRules)
 
 	c.layer = layerCustom
 	if len(in.CustomRules) > 0 {
@@ -281,7 +281,10 @@ func compose(in Input) (Output, error) {
 	hoistCaptureRules(c)
 	c.layer = layerChains
 	ownGlobal := excludeChainClones(c)
-	warns := append(lanWarns, chainWarns...)
+	warns := lanWarns
+	for _, n := range chainNotes {
+		warns = append(warns, ChainWarningPrefix+n.Error())
+	}
 	warns = append(warns, scrubCaptureRefs(c)...)
 	warns = append(warns, captureFindProcess(c, in.Capture)...)
 	c.layer = layerLanflow
@@ -295,7 +298,7 @@ func compose(in Input) (Output, error) {
 		return Output{}, err
 	}
 
-	out := Output{Groups: groupNames(root, true), Warnings: warns}
+	out := Output{Groups: groupNames(root, true), Warnings: warns, ChainNotes: chainNotes}
 	if ownGlobal {
 		// GLOBAL written out only to leave the chain clones out of it
 		// (chains.go): not a group of the configuration's own

@@ -150,6 +150,9 @@ type Output struct {
 	// Warnings lists what composition removed on its own, e.g. a
 	// subscription's references to the decrypting outbound (capture.go).
 	Warnings []string
+	// ChainNotes are the chain warnings (also in Warnings, in Chinese)
+	// for the interface to translate.
+	ChainNotes []ChainNote
 }
 
 // Compose merges, in order: subscription → SubOverride → GlobalOverride →

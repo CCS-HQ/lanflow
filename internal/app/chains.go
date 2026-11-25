@@ -54,7 +54,7 @@ func (s *Service) SetProxyChains(in []model.ProxyChain) ([]model.ProxyChain, err
 		}
 		ch, err := profile.NormalizeProxyChain(ch)
 		if err != nil {
-			return nil, fmt.Errorf(i18n.T("链路「%s」：%v"), label, err)
+			return nil, fmt.Errorf(i18n.T("链路「%s」：%v"), label, chainErrText(err))
 		}
 		ch.ID = strings.TrimSpace(ch.ID)
 		if ch.ID != "" && !chainIDPattern.MatchString(ch.ID) {
@@ -229,12 +229,10 @@ func (s *Service) restoreChainFallbacks(fbs []chainFallback) {
 // noteChainWarnings keeps what a committed composition said of the
 // chains and tells the user when that changes (a chain that stopped
 // validating after a subscription update, for one).
-func (s *Service) noteChainWarnings(all []string) {
-	var warns []string
-	for _, w := range all {
-		if strings.HasPrefix(w, profile.ChainWarningPrefix) {
-			warns = append(warns, strings.TrimPrefix(w, profile.ChainWarningPrefix))
-		}
+func (s *Service) noteChainWarnings(notes []profile.ChainNote) {
+	warns := make([]string, 0, len(notes))
+	for _, n := range notes {
+		warns = append(warns, chainNoteText(n))
 	}
 	s.mu.Lock()
 	same := slices.Equal(s.state.chainWarns, warns)
@@ -244,4 +242,25 @@ func (s *Service) noteChainWarnings(all []string) {
 		return
 	}
 	s.notify(Notice{Kind: "toast", Title: i18n.T("链式代理有需要注意的地方"), Detail: strings.Join(warns, "\n")})
+}
+
+// chainNoteText is a chain note in the interface's language.
+func chainNoteText(n profile.ChainNote) string {
+	args := make([]any, len(n.Args))
+	for i, a := range n.Args {
+		if sub, ok := a.(profile.ChainNote); ok {
+			a = chainNoteText(sub)
+		}
+		args[i] = a
+	}
+	return i18n.Tf(n.Format(), args...)
+}
+
+// chainErrText is err in the interface's language when it is a chain note.
+func chainErrText(err error) error {
+	var n profile.ChainNote
+	if errors.As(err, &n) {
+		return errors.New(chainNoteText(n))
+	}
+	return err
 }
