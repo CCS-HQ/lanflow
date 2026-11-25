@@ -29,13 +29,14 @@ func defaultSettings() model.Settings {
 		Appearance:  "system",
 		Language:    "zh",
 
-		MixedPort:    7890,
-		Bypass:       append([]string(nil), sysproxy.DefaultBypass...),
-		TUNStack:     "mixed",
-		TUNSetDNS:    true,
-		ATrustCompat: false,
-		ProbeExits:   true,
-		Mode:         model.ModeRule,
+		MixedPort:       7890,
+		Bypass:          append([]string(nil), sysproxy.DefaultBypass...),
+		TUNStack:        "mixed",
+		TUNSetDNS:       true,
+		ATrustCompat:    false,
+		TailscaleCompat: true,
+		ProbeExits:      true,
+		Mode:            model.ModeRule,
 
 		GlobalShortcut: "CmdOrCtrl+Shift+S",
 		TraySpeed:      model.TraySpeedBoth,
@@ -168,6 +169,7 @@ func normalizeSettings(s model.Settings) model.Settings {
 		s.Language = d.Language
 	}
 	s.Advanced = normalizeAdvanced(s.Advanced, s.MixedPort)
+	s.Tailscale = cleanTailscaleConfig(s.Tailscale)
 	return s
 }
 

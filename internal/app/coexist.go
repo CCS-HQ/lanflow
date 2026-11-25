@@ -98,7 +98,7 @@ func (s *Service) scanCoexist() atrust.Info {
 	var info atrust.Info
 	if on && detect != nil && s.rootCtx.Err() == nil {
 		ctx, cancel := s.svcCtx(8 * time.Second)
-		info = detect(ctx, isOwnTUN)
+		info = detect(ctx, s.tailscaleOwn())
 		cancel()
 	}
 	return info
@@ -274,7 +274,7 @@ func (s *Service) coexistLocked() profile.Coexist {
 
 // bypassLocked is the system proxy bypass list in effect now. Call with mu held.
 func (s *Service) bypassLocked() []string {
-	return coexistBypass(s.state.settings.Bypass, s.coexistLocked())
+	return tailscaleBypass(coexistBypass(s.state.settings.Bypass, s.coexistLocked()), s.tailscaleLocked())
 }
 
 // coexistSettingsChanged reports whether going from old to in (already
@@ -316,15 +316,16 @@ func (s *Service) recheckCoexist() {
 		return
 	}
 	if s.storeCoexist(info) {
-		s.applyCoexist()
+		s.reapplyLayers(i18n.T("aTrust 兼容设置未能生效"))
 	}
 }
 
-// applyCoexist re-applies everything coexistence touches. Call with opMu held.
-func (s *Service) applyCoexist() {
+// reapplyLayers re-applies everything the coexistence layers (aTrust,
+// Tailscale) touch; failTitle names a failed reload. Call with opMu held.
+func (s *Service) reapplyLayers(failTitle string) {
 	if s.running() {
 		if err := s.reloadLocked(); err != nil {
-			s.notify(Notice{Kind: "error", Title: i18n.T("aTrust 兼容设置未能生效"), Detail: err.Error()})
+			s.notify(Notice{Kind: "error", Title: failTitle, Detail: err.Error()})
 		}
 	}
 	s.mu.Lock()

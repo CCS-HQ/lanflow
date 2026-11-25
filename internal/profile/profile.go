@@ -150,6 +150,8 @@ type Input struct {
 	Geo         model.GeoSettings     // geox-url, geodata-mode, geo-auto-update, geo-update-interval
 	Managed     Managed
 	Coexist     Coexist // a VPN (aTrust) running beside Lanflow; zero = none
+	// Tailscale is the Tailscale 兼容 layer (tailscale.go); zero = none.
+	Tailscale Tailscale
 	// Advanced are the 高级 options (model/advanced.go), written in the
 	// Lanflow layer only where set; see advanced.go.
 	Advanced model.AdvancedSettings

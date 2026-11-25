@@ -216,6 +216,11 @@ func (s *Service) diagSystem(now time.Time, withLog bool) string {
 	} else {
 		line("aTrust", "not detected")
 	}
+	if ts := st.Tailscale; ts.Running {
+		line("Tailscale", fmt.Sprintf("interface %s, suffix %q, exit node %v, applied %v, %d ranges, %d domains", ts.Interface, ts.Suffix, ts.ExitNode, ts.Applied, len(ts.CIDRs), len(ts.Domains)))
+	} else {
+		line("Tailscale", "not detected")
+	}
 	n := s.NetInfo()
 	line("interface", n.Interface)
 	line("LAN IP", n.LANIP)

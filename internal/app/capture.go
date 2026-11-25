@@ -1367,15 +1367,19 @@ func (s *Service) captureAfterReload() {
 	}
 }
 
-// hideCaptureProxies removes the decrypting outbounds from a snapshot.
+// hideCaptureProxies removes Lanflow's internal outbounds from a snapshot:
+// the decrypting ones and the Tailscale one (profile.TailscaleOutbound).
 func hideCaptureProxies(p *model.ProxySnapshot) {
+	internal := func(n string) bool {
+		return strings.HasPrefix(n, profile.CaptureOutboundPrefix) || n == profile.TailscaleOutbound
+	}
 	for k := range p.Proxies {
-		if strings.HasPrefix(k, profile.CaptureOutboundPrefix) {
+		if internal(k) {
 			delete(p.Proxies, k)
 		}
 	}
 	for i := range p.Groups {
-		p.Groups[i].All = slices.DeleteFunc(p.Groups[i].All, func(n string) bool { return strings.HasPrefix(n, profile.CaptureOutboundPrefix) })
+		p.Groups[i].All = slices.DeleteFunc(p.Groups[i].All, internal)
 	}
 }
 

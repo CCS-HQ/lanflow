@@ -61,6 +61,8 @@ type Status struct {
 
 	// ATrust is what the aTrust detection found (aTrust 兼容).
 	ATrust ATrustState
+	// Tailscale is what the Tailscale detection found (Tailscale 兼容).
+	Tailscale TailscaleState
 
 	// ImportPhase is where a running subscription import is (docs/design.md
 	// §6.1 下载 → 校验 → 完成): "" when none runs, ImportDownloading while
@@ -513,6 +515,11 @@ type Settings struct {
 	// aTrust runs (route exclusion, DIRECT rules, proxy bypass); off by default.
 	ATrustCompat bool
 	ATrust       ATrustConfig // the user's lists for aTrust 兼容 (model/atrust.go)
+	// TailscaleCompat keeps the tailnet (100.64.0.0/10, MagicDNS, subnet
+	// routes) out of Lanflow's TUN, fake-ip and nodes while Tailscale runs;
+	// on by default.
+	TailscaleCompat bool
+	Tailscale       TailscaleConfig // the user's lists for Tailscale 兼容 (model/tailscale.go)
 	// CaptureEnabled shows the 抓包 page and its entry points (sidebar,
 	// connection menu, tray) and allows HTTPS decryption; off by default.
 	// Turning it off also turns decryption off.

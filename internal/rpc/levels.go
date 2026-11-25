@@ -170,6 +170,9 @@ var methodLevels = map[string]Level{
 	"ImportATrustConfig": LevelSensitive, // reads a local file
 	"ExportATrustConfig": LevelWrite,
 
+	// ---- Tailscale ----
+	"TailscaleReport": LevelRead,
+
 	// ---- mirror ----
 	"TestMirrors": LevelRead,
 
