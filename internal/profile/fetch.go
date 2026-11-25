@@ -25,6 +25,22 @@ import (
 const maxBody = 32 << 20
 
 func fetch(ctx context.Context, client *http.Client, rawURL, userAgent string) (Fetched, error) {
+	f, err := download(ctx, client, rawURL, userAgent)
+	if err != nil {
+		return Fetched{}, err
+	}
+	if err := checkYAML(f.Data); err != nil {
+		if looksLikeShareLinks(f.Data) {
+			return Fetched{}, errors.New("订阅内容不是 Clash/Mihomo 格式的订阅：服务商返回的是节点分享链接（Base64 / ss:// 等）。可以新建「聚合订阅」把这个链接作为来源，由澜流转换；或在服务商处选择 Clash 或 Mihomo 格式的订阅链接，或尝试更换 User-Agent")
+		}
+		return Fetched{}, err
+	}
+	return f, nil
+}
+
+// download fetches rawURL and reads the subscription headers without
+// checking what the body is.
+func download(ctx context.Context, client *http.Client, rawURL, userAgent string) (Fetched, error) {
 	if client == nil {
 		client = netx.Direct(30 * time.Second)
 	}
@@ -75,13 +91,6 @@ func fetch(ctx context.Context, client *http.Client, rawURL, userAgent string) (
 		if hu, err := url.Parse(v); err == nil && (hu.Scheme == "http" || hu.Scheme == "https") && hu.Host != "" {
 			f.HomePage = hu.String()
 		}
-	}
-
-	if err := checkYAML(body); err != nil {
-		if looksLikeShareLinks(body) {
-			return Fetched{}, errors.New("订阅内容不是 Clash/Mihomo 格式的订阅：服务商返回的是节点分享链接（Base64 / ss:// 等）。澜流不做格式转换，请在服务商处选择 Clash 或 Mihomo 格式的订阅链接，或尝试更换 User-Agent")
-		}
-		return Fetched{}, err
 	}
 	return f, nil
 }

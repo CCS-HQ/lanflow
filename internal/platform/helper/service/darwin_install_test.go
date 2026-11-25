@@ -278,6 +278,11 @@ func TestDarwinInstallWaitsForOldHelper(t *testing.T) {
 			e := newInstallEnv(t)
 			e.previous(t)
 			e.prints = []string{running}
+			if tc.exitsAfter >= 0 {
+				// It ends after a few polls; a slow CI runner must not
+				// make the 50 ms test window look like a hang.
+				e.in.exitWait = 10 * time.Second
+			}
 			alive, polls, killed := true, 0, false
 			var order []string
 			exe := tc.exe

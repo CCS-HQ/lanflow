@@ -16,6 +16,7 @@ import (
 	"lanflow/internal/app/fake"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 	"lanflow/internal/view/env"
 	"lanflow/internal/view/env/envtest"
 )
@@ -43,6 +44,11 @@ var snapshots = []snapshot{
 	}},
 	{name: "proxies", page: env.Proxies},
 	{name: "subs", page: env.Subs},
+	// The aggregate subscription editor (docs/aggregate.md), on each tab.
+	{name: "subs-aggregate", page: env.Subs, prep: aggregatePrep("")},
+	{name: "subs-aggregate-nodes", page: env.Subs, prep: aggregatePrep("节点处理")},
+	{name: "subs-aggregate-groups", page: env.Subs, prep: aggregatePrep("分组与规则")},
+	{name: "subs-aggregate-preview", page: env.Subs, prep: aggregatePrep("预览")},
 	{name: "conns", page: env.Conns},
 	{name: "capture", page: env.Capture},
 	{name: "capture-detail", page: env.Capture, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
@@ -340,6 +346,29 @@ func setMode(m model.Mode) func(*testing.T, *fake.Fake, *Shell, *ui.Tester) {
 	return func(t *testing.T, api *fake.Fake, _ *Shell, _ *ui.Tester) {
 		if err := api.SetMode(m); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// aggregatePrep saves an aggregate subscription in the fake and opens it
+// in the editor on tab ("" = the first); 预览 also builds the preview.
+func aggregatePrep(tab string) func(*testing.T, *fake.Fake, *Shell, *ui.Tester) {
+	return func(t *testing.T, api *fake.Fake, s *Shell, tt *ui.Tester) {
+		spec := profile.DefaultAggregateSpec()
+		spec.Sources = []model.AggregateSource{
+			{Kind: model.AggSourceURL, URL: "https://air.example.com/api/v1/client/subscribe?token=x", Prefix: "A · "},
+			{Kind: model.AggSourceLinks, Links: "trojan://pw@tw.example.com:443?sni=tw.example.com#台湾 09\nhysteria2://auth@hy.example.com:443#自建 HY2"},
+			{Kind: model.AggSourceSub, SubID: "s2", Prefix: "B · "},
+		}
+		spec.Renames = []model.RenameRule{{Pattern: `\s+0(\d)$`, Replace: " $1"}}
+		sub, err := api.SaveAggregate(model.Subscription{Name: "全部节点", AutoUpdateHours: 12}, spec, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.navigate(env.Subs, "aggregate:"+sub.ID)
+		tt.Frame()
+		if tab != "" {
+			click(t, tt, i18n.T(tab))
 		}
 	}
 }
