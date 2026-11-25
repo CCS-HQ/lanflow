@@ -220,3 +220,27 @@ func TestTimeSortInterleavesConnections(t *testing.T) {
 		t.Fatal("fmtDur")
 	}
 }
+
+// With 抓包 off in the settings the page only offers to turn it on.
+func TestDisabledOffersEnable(t *testing.T) {
+	api := fake.NewInstant()
+	set := api.Settings()
+	set.CaptureEnabled = false
+	if err := api.SaveSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	arg := ""
+	e, _ := testEnv(api, &arg)
+	p := New(e)
+	tt := ui.NewTester(p.View, 1300, 800)
+	if !tt.HasText("抓包未启用") || tt.HasText("api.github.com") {
+		t.Fatalf("disabled page: %q", tt.Texts())
+	}
+	if err := tt.Click("启用抓包"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !api.Settings().CaptureEnabled || !tt.HasText("api.github.com") {
+		t.Fatalf("not enabled: %q", tt.Texts())
+	}
+}

@@ -33,7 +33,7 @@ func defaultSettings() model.Settings {
 		Bypass:       append([]string(nil), sysproxy.DefaultBypass...),
 		TUNStack:     "mixed",
 		TUNSetDNS:    true,
-		ATrustCompat: true,
+		ATrustCompat: false,
 		ProbeExits:   true,
 		Mode:         model.ModeRule,
 
