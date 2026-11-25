@@ -206,14 +206,9 @@ func (p *Page) View(c *ui.Context) {
 				p.testAll()
 			}
 		}
-		add := ui.Button(c, "").Label(i18n.T("添加节点"))
-		add.Children(func() {
-			k.Icon(c, "plus", 13)
-			ui.Text(c, i18n.T("添加节点")).SingleLine()
-		})
-		if add.Clicked() {
-			p.openAddManualNode()
-		}
+		ui.MenuButton(c, i18n.T("添加节点"), func(m *ui.Menu) {
+			p.addNodeMenu(c, m)
+		}).Label(i18n.T("添加节点"))
 	})
 	if c.Shortcut(ui.Cmd, ui.KeyF) {
 		p.search.Focus(c)
@@ -234,9 +229,9 @@ func (p *Page) View(c *ui.Context) {
 			if ui.PrimaryButton(c, i18n.T("导入订阅")).Clicked() {
 				p.e.Navigate(env.Subs, "import-url")
 			}
-			if ui.Button(c, i18n.T("手动添加节点")).Clicked() {
-				p.openAddManualNode()
-			}
+			ui.MenuButton(c, i18n.T("手动添加节点"), func(m *ui.Menu) {
+				p.addNodeMenu(c, m)
+			}).Label(i18n.T("手动添加节点"))
 		})
 		p.manualDialogView(c)
 		return
@@ -502,9 +497,9 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 			}
 			ui.Button(c, "").Label(i18n.Tf("更多 %s", g.Name)).Tooltip(i18n.T("更多")).Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
 				if g.Name == profile.ManualGroupName {
-					if m.Item(i18n.T("添加节点…")).Chosen() {
-						p.openAddManualNode()
-					}
+					m.Submenu(i18n.T("添加节点"), func(sub *ui.Menu) {
+						p.addNodeMenu(c, sub)
+					})
 					m.Separator()
 				}
 				if m.Item(i18n.T("设为主代理组")).Checked(g.Name == px.MainGroup).Disabled(!selectable).Chosen() {
