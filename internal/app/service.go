@@ -74,6 +74,10 @@ type Service struct {
 	probeMu    sync.Mutex // debounces the automatic main-exit probe
 	selMu      sync.Mutex // guards selections (selections.go)
 	selections map[string]map[string]string
+	// selPrev is each group's selection before the current one, per
+	// subscription, for this run only: a chain deleted while selected
+	// gives the group back its previous member (chains.go).
+	selPrev    map[string]map[string]string
 	probeTimer *time.Timer
 
 	recheckMu    sync.Mutex // debounces the wake / network-change recheck (watch.go)
@@ -121,11 +125,18 @@ type state struct {
 
 	logs ring[model.LogEntry] // the newest logRing core log lines
 
+	// INNER connections (dialer-proxy hops): their speed now and the
+	// bytes of those closed, taken out of the core's counts (streams.go).
+	innerUp, innerDown             int64
+	innerClosedUp, innerClosedDown int64
+
 	rules        []model.Rule
 	rulesAt      time.Time // when rules were fetched (refreshed on demand, rules.go)
 	rulesBusy    bool      // a refreshRules runs
 	custom       []model.CustomRule
 	manualNodes  []model.ManualNode
+	chains       []model.ProxyChain
+	chainWarns   []string // what the last committed composition said of the chains (chains.go)
 	provs        []model.RuleProvider
 	provUpdating map[string]bool
 
@@ -155,6 +166,7 @@ type state struct {
 	runtimeDNS   runtimeDNS // the dns keys of runtimeYAML, parsed once per commit (network.go)
 	runtimeLines []model.RuntimeLine
 	groupIcons   map[string]string // proxy-group name → icon reference of the runtime config (icons.go)
+	dialers      dialerMap         // the dialer-proxy settings of the runtime config (exits.go)
 	icons        *iconCache        // decoded / downloaded icons (icons.go), allocated lazily
 	procIcons    *procIconCache    // application icons by process path (procicon.go), allocated lazily
 
@@ -539,6 +551,7 @@ type storeView struct {
 	ovs         []model.Override
 	custom      []model.CustomRule
 	manualNodes []model.ManualNode
+	chains      []model.ProxyChain
 }
 
 // readStore reads the store's lists; call without mu.
@@ -548,6 +561,7 @@ func (s *Service) readStore() storeView {
 		ovs:         s.d.store.Overrides(),
 		custom:      s.d.store.CustomRules(),
 		manualNodes: s.d.store.ManualNodes(),
+		chains:      s.d.store.ProxyChains(),
 	}
 	v.cur, v.hasCur = s.d.store.Current()
 	return v
@@ -571,6 +585,7 @@ func (s *Service) applyStoreLocked(v storeView) {
 	s.state.overrides = overridesSnapshot(v.ovs, subs)
 	s.state.custom = v.custom
 	s.state.manualNodes = v.manualNodes
+	s.state.chains = v.chains
 }
 
 // refreshStore reloads the store caches and emits. The store and the
@@ -816,6 +831,9 @@ func (s *Service) LogsSince(since uint64, limit int) model.LogPage {
 // setConnsLocked replaces the active connections and records what changed
 // for ConnectionsSince.
 func (s *Service) setConnsLocked(c []model.Connection) {
+	if c == nil { // the core stopped: its counts start over
+		s.state.innerUp, s.state.innerDown, s.state.innerClosedUp, s.state.innerClosedDown = 0, 0, 0, 0
+	}
 	s.state.conns = c
 	if s.state.connVer == nil {
 		s.state.connVer = newConnVersions()

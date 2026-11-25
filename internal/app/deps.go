@@ -138,6 +138,8 @@ type profileStore interface {
 	SetCustomRules(r []model.CustomRule) ([]model.CustomRule, error)
 	ManualNodes() []model.ManualNode
 	SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, error)
+	ProxyChains() []model.ProxyChain
+	SetProxyChains(chains []model.ProxyChain) ([]model.ProxyChain, error)
 }
 
 // composer wraps the package-level functions of package profile.

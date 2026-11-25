@@ -9,6 +9,7 @@ import (
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 	"lanflow/internal/view/env"
 )
 
@@ -68,6 +69,7 @@ func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct
 		return
 	}
 	px := p.e.API.Proxies()
+	chains := p.e.API.ProxyChains()
 	for i, r := range rs {
 		if i == 0 {
 			ui.Text(c, i18n.T("当前出口")).FontSize(11).TextColor(t.TextMuted).Padding(0, 6, 2, 6)
@@ -84,7 +86,7 @@ func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct
 		item.Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Size(10, 10).Radius(2).Background(col).Shrink(0)
-				name := rt.Node
+				name := profile.DisplayName(rt.Node, chains) // a chain's exit node by the node it clones
 				if rt.place != nil {
 					name = env.FlagPrefixFor(p.e.Mac, rt.place.Country) + name
 				}

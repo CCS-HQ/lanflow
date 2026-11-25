@@ -16,6 +16,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 	"lanflow/internal/view/colwidth"
 	"lanflow/internal/view/env"
 	"lanflow/internal/view/procicon"
@@ -219,14 +220,14 @@ func (p *Page) lists(st model.Status) (active, closed []model.Connection, nActiv
 	}
 	if needActive {
 		if !p.frozen.hasActive {
-			p.frozen.active, p.frozen.hasActive = e.API.Connections(), true
+			p.frozen.active, p.frozen.hasActive = displayChains(e.API.Connections(), e.API.ProxyChains()), true
 			p.gen++
 		}
 		active = p.frozen.active
 	}
 	if needClosed {
 		if !p.frozen.hasClosed {
-			p.frozen.closed, p.frozen.hasClosed = e.API.ClosedConnections(), true
+			p.frozen.closed, p.frozen.hasClosed = displayChains(e.API.ClosedConnections(), e.API.ProxyChains()), true
 			p.gen++
 		}
 		closed = p.frozen.closed
@@ -345,7 +346,10 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, co
 			env.Highlight(c, cn.Host, q, t.Text).SingleLine().Tooltip(cn.Host)
 		case "process":
 			name := cn.Process
-			if name == "" {
+			switch {
+			case cn.IsInner():
+				name = i18n.T("链路前置")
+			case name == "":
 				name = "—"
 			}
 			ui.Row(c).Gap(5).AlignItems(ui.Center).FillWidth().Children(func() {
@@ -685,6 +689,33 @@ func ruleName(cn model.Connection) string {
 	return strings.ToUpper(b.String())
 }
 
+// displayChains names the nodes a chain generates (profile.ChainClonePrefix)
+// by the nodes they clone, in copies; conns itself is left as it is (the
+// service's client may hold it).
+func displayChains(conns []model.Connection, chains []model.ProxyChain) []model.Connection {
+	if len(chains) == 0 {
+		return conns
+	}
+	var out []model.Connection
+	for i, cn := range conns {
+		if !slices.ContainsFunc(cn.Chains, profile.IsChainClone) {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(conns)
+		}
+		names := make([]string, len(cn.Chains))
+		for j, n := range cn.Chains {
+			names[j] = profile.DisplayName(n, chains)
+		}
+		out[i].Chains = names
+	}
+	if out == nil {
+		return conns
+	}
+	return out
+}
+
 func chain(cn model.Connection) string {
 	if len(cn.Chains) == 0 {
 		return "—"
@@ -726,6 +757,9 @@ func (p *Page) Wants(t app.Topic) bool {
 
 // processTip is the 进程 cell's tooltip: the name with the full path.
 func processTip(cn model.Connection) string {
+	if cn.IsInner() {
+		return i18n.T("链式代理的前置跳：澜流与内核为下一跳建立的连接，流量已计入它所服务的连接")
+	}
 	if cn.ProcessPath == "" {
 		return cn.Process
 	}

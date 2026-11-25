@@ -1,0 +1,208 @@
+package app
+
+import (
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+
+	"lanflow/internal/controller"
+	"lanflow/internal/i18n"
+	"lanflow/internal/model"
+	"lanflow/internal/profile"
+)
+
+// chainCtrl makes the fake core show chain group name in 流媒体 (and
+// nothing else of the chains), as the composed config would.
+func chainCtrl(h *harness, name string) {
+	h.ctrl.mu.Lock()
+	defer h.ctrl.mu.Unlock()
+	g := h.ctrl.proxies["流媒体"]
+	all := []string{"节点选择", "香港 01"}
+	if name != "" {
+		all = append(all, name)
+		h.ctrl.proxies[name] = controller.Proxy{Name: name, Type: "Selector", Now: "LANFLOW-CHAIN-x-2", All: []string{"LANFLOW-CHAIN-x-2"}}
+	}
+	g.All = all
+	if !slices.Contains(all, g.Now) {
+		g.Now = all[0] // the core falls back to the first member
+	}
+	h.ctrl.proxies["流媒体"] = g
+}
+
+func TestSetProxyChainsRenameAndDelete(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	h.ctrl.reloadFn = func(string) error {
+		cs := h.store.ProxyChains()
+		name := ""
+		if len(cs) > 0 && cs[0].Enabled {
+			name = cs[0].Name
+		}
+		chainCtrl(h, name)
+		return nil
+	}
+
+	saved, err := h.s.SetProxyChains([]model.ProxyChain{{Name: " 中转 ", Hops: []string{"香港 01", "东京 03"}, Enabled: true}})
+	if err != nil || len(saved) != 1 || saved[0].ID == "" || saved[0].Name != "中转" {
+		t.Fatalf("SetProxyChains: %v %+v", err, saved)
+	}
+	if got := h.s.ProxyChains(); len(got) != 1 || got[0].ID != saved[0].ID {
+		t.Fatalf("ProxyChains: %+v", got)
+	}
+	if in := h.prof.inputs[len(h.prof.inputs)-1]; len(in.ProxyChains) != 1 {
+		t.Fatal("chains not composed")
+	}
+	if _, err := h.store.SetCustomRules([]model.CustomRule{{ID: "r1", Type: "DOMAIN-SUFFIX", Payload: "a.com", Target: "中转"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.s.refreshStore(TopicRules)
+	if err := h.s.SelectProxy("流媒体", "香港 01"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.SelectProxy("流媒体", "中转"); err != nil {
+		t.Fatal(err)
+	}
+
+	// rename: the rule and the selection follow
+	ch := saved[0]
+	ch.Name = "新名"
+	if _, err := h.s.SetProxyChains([]model.ProxyChain{ch}); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.store.CustomRules(); r[0].Target != "新名" {
+		t.Fatalf("rule target: %+v", r)
+	}
+	if now := h.ctrl.proxies["流媒体"].Now; now != "新名" {
+		t.Fatalf("流媒体 selects %q after the rename", now)
+	}
+
+	// deleting a chain a rule targets is refused
+	if _, err := h.s.SetProxyChains(nil); err == nil || !strings.Contains(err.Error(), "a.com") {
+		t.Fatalf("delete of a rule target: %v", err)
+	}
+	if len(h.s.ProxyChains()) != 1 {
+		t.Fatal("chain deleted anyway")
+	}
+
+	// without the rule: the group goes back to what it had before
+	if _, err := h.store.SetCustomRules(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.SetProxyChains([]model.ProxyChain{}); err != nil {
+		t.Fatal(err)
+	}
+	if now := h.ctrl.proxies["流媒体"].Now; now != "香港 01" {
+		t.Fatalf("流媒体 selects %q after the delete, want the previous 香港 01", now)
+	}
+	if ns := h.s.TakeNotices(); !slices.ContainsFunc(ns, func(n Notice) bool { return strings.Contains(n.Detail, "香港 01") }) {
+		t.Fatalf("no notice: %+v", ns)
+	}
+}
+
+func TestSetProxyChainsValidation(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range [][]model.ProxyChain{
+		{{Name: "X", Hops: []string{"香港 01"}}},
+		{{Name: "X", Hops: []string{"香港 01", "香港 01"}}},
+		{{Name: "LANFLOW-X", Hops: []string{"香港 01", "东京 03"}}},
+		{{Name: "X", Hops: []string{"香港 01", "LANFLOW-MITM-1"}}},
+		{{Name: "X", Hops: []string{"香港 01", "东京 03"}}, {Name: "X", Hops: []string{"东京 03", "香港 01"}}},
+		{{Name: "节点选择", Hops: []string{"香港 01", "东京 03"}}},
+		{{Name: "链式代理", Hops: []string{"香港 01", "东京 03"}}},
+		{{ID: "../x", Name: "X", Hops: []string{"香港 01", "东京 03"}}},
+	} {
+		if _, err := h.s.SetProxyChains(bad); err == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+	if len(h.s.ProxyChains()) != 0 {
+		t.Fatal("stored")
+	}
+	// a reload the core refuses puts everything back
+	h.ctrl.reloadFn = func(string) error { return errors.New("boom") }
+	if _, err := h.s.SetProxyChains([]model.ProxyChain{{Name: "X", Hops: []string{"香港 01", "东京 03"}, Enabled: true}}); err == nil {
+		t.Fatal("failed reload reported success")
+	}
+	if len(h.store.ProxyChains()) != 0 {
+		t.Fatal("chain kept after a failed reload")
+	}
+}
+
+func TestChainHopsFromDialerProxy(t *testing.T) {
+	y := []byte(`proxies:
+  - {name: A, type: socks5, server: 1.1.1.1, port: 1}
+  - {name: LANFLOW-CHAIN-x-2, type: socks5, server: 1.1.1.2, port: 1, dialer-proxy: 香港}
+  - {name: LANFLOW-CHAIN-x-3, type: socks5, server: 1.1.1.3, port: 1, dialer-proxy: LANFLOW-CHAIN-x-2}
+  - {name: Loop, type: socks5, server: 1.1.1.4, port: 1, dialer-proxy: Loop}
+proxy-providers:
+  sub: {type: http, url: https://e.com, path: ./p.yaml, override: {dialer-proxy: A}}
+`)
+	d := dialersOf(y)
+	snap := model.ProxySnapshot{
+		Groups: []model.ProxyGroup{
+			{Name: "节点选择", Now: "中转"},
+			{Name: "中转", Now: "LANFLOW-CHAIN-x-3", All: []string{"LANFLOW-CHAIN-x-3"}},
+			{Name: "香港", Now: "HK 1"},
+		},
+		Proxies: map[string]model.Proxy{"HK 1": {Name: "HK 1", Provider: "sub"}, "A": {Name: "A"}},
+	}
+	for _, tc := range []struct {
+		chain []string
+		want  int
+	}{
+		{[]string{"节点选择", "中转", "LANFLOW-CHAIN-x-3"}, 4}, // x-3 → x-2 → 香港 (HK 1) → A (provider override)
+		{[]string{"节点选择", "A"}, 1},
+		{[]string{"Loop"}, 1},
+		{nil, 0},
+	} {
+		if got := chainHops(tc.chain, snap, d); got != tc.want {
+			t.Errorf("chainHops(%v) = %d, want %d", tc.chain, got, tc.want)
+		}
+	}
+}
+
+// The core counts a chain's bytes on the outer connection and again on
+// its INNER front hop; Lanflow counts them once.
+func TestInnerConnectionsCountOnce(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	h.s.onConnections(controller.Connections{UploadTotal: 3000, DownloadTotal: 6000, Connections: []controller.Connection{
+		{ID: "o", Upload: 1000, Download: 2000, Chains: []string{"LANFLOW-CHAIN-x-2", "中转"}, Metadata: controller.Metadata{Type: "Tun", Network: "tcp"}},
+		{ID: "i", Upload: 1000, Download: 2000, Chains: []string{"香港 01"}, Metadata: controller.Metadata{Type: model.InnerType, Network: "tcp"}},
+	}})
+	st := h.s.Status()
+	if st.TotalUp != 2000 || st.TotalDown != 4000 {
+		t.Fatalf("totals %d/%d, want the INNER bytes taken out", st.TotalUp, st.TotalDown)
+	}
+	for _, r := range h.s.ExitRoutes() {
+		if r.Group == "香港 01" {
+			t.Fatal("INNER connection made a route")
+		}
+	}
+}
+
+// Chain notes reach the window in its language, nested reasons included.
+func TestChainNoteText(t *testing.T) {
+	_, err := profile.NormalizeProxyChain(model.ProxyChain{Name: "X", Hops: []string{"A"}})
+	var n profile.ChainNote
+	if !errors.As(err, &n) {
+		t.Fatalf("not a ChainNote: %v", err)
+	}
+	outer := profile.ChainNote{Code: "disabled-because", Args: []any{"X", n}}
+	if got := chainNoteText(outer); got != outer.Error() || !strings.Contains(got, "2–5") {
+		t.Fatalf("zh: %q", got)
+	}
+	i18n.SetLang(i18n.EN)
+	defer i18n.SetLang(i18n.ZH)
+	if got := chainNoteText(outer); got != "Chain “X” is off: A chain needs 2–5 hops; this one has 1" {
+		t.Fatalf("en: %q", got)
+	}
+}

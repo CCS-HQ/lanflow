@@ -92,7 +92,10 @@ const (
 	GroupURLTest     GroupType = "url-test"
 	GroupFallback    GroupType = "fallback"
 	GroupLoadBalance GroupType = "load-balance"
-	GroupRelay       GroupType = "relay"
+	// GroupRelay is kept for older cores only: Mihomo removed the relay
+	// group (chains are dialer-proxy now, docs/chain-proxy.md), and
+	// nothing Lanflow creates uses it.
+	GroupRelay GroupType = "relay"
 )
 
 // ProxyGroup is a policy group in config order.
@@ -171,6 +174,14 @@ type Connection struct {
 	// 抓包 page lists the decrypted requests instead.
 	CaptureLeg bool `json:",omitempty"`
 }
+
+// InnerType is the inbound type of the connection the core opens for a
+// dialer-proxy hop (Mihomo's INNER metadata type): the front hop of a
+// chain, carrying another connection's traffic.
+const InnerType = "Inner"
+
+// IsInner reports whether c is the front hop of a chain (InnerType).
+func (c Connection) IsInner() bool { return c.Type == InnerType }
 
 // LogEntry is one core log line.
 type LogEntry struct {
@@ -641,6 +652,7 @@ type SettingsExport struct {
 	Settings      *Settings              `json:"settings,omitempty"`
 	Overrides     *Overrides             `json:"overrides,omitempty"`
 	CustomRules   []CustomRule           `json:"customRules,omitempty"`
+	ProxyChains   []ProxyChain           `json:"proxyChains,omitempty"`
 	Subscriptions []ExportedSubscription `json:"subscriptions,omitempty"`
 }
 

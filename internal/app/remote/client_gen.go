@@ -286,6 +286,16 @@ func (cl *Client) DeleteManualNode(id string) (err error) {
 	return
 }
 
+func (cl *Client) ProxyChains() (res0 []model.ProxyChain) {
+	_ = cl.call("ProxyChains", nil, &res0)
+	return
+}
+
+func (cl *Client) SetProxyChains(chains []model.ProxyChain) (res0 []model.ProxyChain, err error) {
+	err = cl.call("SetProxyChains", []any{chains}, &res0)
+	return
+}
+
 func (cl *Client) CloseConnection(id string) (err error) {
 	err = cl.call("CloseConnection", []any{id})
 	return

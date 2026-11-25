@@ -61,6 +61,8 @@ var apiMethods = []Method{
 	{Name: "ManualNodes", Results: []string{"[]model.ManualNode"}, Level: LevelSensitive},
 	{Name: "SaveManualNode", Params: []Param{{Name: "n", Type: "model.ManualNode"}}, Results: []string{"model.ManualNode"}, Error: true, Level: LevelWrite},
 	{Name: "DeleteManualNode", Params: []Param{{Name: "id", Type: "string"}}, Error: true, Level: LevelWrite},
+	{Name: "ProxyChains", Results: []string{"[]model.ProxyChain"}, Level: LevelRead},
+	{Name: "SetProxyChains", Params: []Param{{Name: "chains", Type: "[]model.ProxyChain"}}, Results: []string{"[]model.ProxyChain"}, Error: true, Level: LevelWrite, Doc: "SetProxyChains replaces the chain list (empty ID = new) and applies it. A renamed chain takes the custom rules and group selections that pointed at its old name along; groups that had a deleted or disabled chain selected go back to their previous member."},
 	{Name: "CloseConnection", Params: []Param{{Name: "id", Type: "string"}}, Error: true, Level: LevelWrite},
 	{Name: "CloseAllConnections", Error: true, Level: LevelWrite},
 	{Name: "ClearLogs", Level: LevelWrite},

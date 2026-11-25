@@ -63,6 +63,8 @@ const usage = `用法: lanflow ctl <命令> [参数] [--format json|table]
   sub update [ID或名称|--all]           更新订阅（默认当前订阅）
   rule add <类型> <内容> <目标> [--dry-run]  添加自定义规则，如 DOMAIN-SUFFIX example.com 节点选择
   rule test <域名或IP>                  查看会命中哪条规则、走哪个出站
+  chains list                         链式代理列表
+  chains set <文件|->                   用 JSON 数组整体替换链式代理（[{"id","name","hops","enabled"}]）
   config get [字段路径]                 读取设置（已脱敏），如 config get DNS.TakeOver
   config set <字段路径> <值> [--dry-run] 修改一项设置，值按 JSON 解析，否则视为字符串
   config apply <文件|-> [--dry-run]      按 JSON 补丁修改设置；--dry-run 只输出差异
@@ -300,6 +302,8 @@ func (r *runner) run() (any, error) {
 		return r.subCmd(sub)
 	case "rule":
 		return r.ruleCmd(sub)
+	case "chains":
+		return r.chainsCmd(sub)
 	case "config":
 		return r.configCmd(sub)
 	case "diag":
@@ -670,6 +674,38 @@ func (r *runner) configCmd(sub string) (any, error) {
 	return nil, usageError("未知命令 config " + sub)
 }
 
+// chainsCmd is `chains list|set`.
+func (r *runner) chainsCmd(sub string) (any, error) {
+	switch sub {
+	case "list", "":
+		var cs []model.ProxyChain
+		if err := Read(r.c, "ProxyChains", &cs); err != nil {
+			return nil, err
+		}
+		return cs, nil
+	case "set":
+		if err := r.need(3, "chains set <文件|->"); err != nil {
+			return nil, err
+		}
+		var b []byte
+		var err error
+		if r.arg(2) == "-" {
+			b, err = io.ReadAll(r.env.Stdin)
+		} else {
+			b, err = os.ReadFile(r.arg(2))
+		}
+		if err != nil {
+			return nil, err
+		}
+		var cs []model.ProxyChain
+		if err := json.Unmarshal(b, &cs); err != nil {
+			return nil, fmt.Errorf("链式代理文件应为 JSON 数组: %v", err)
+		}
+		return r.c.SetProxyChains(cs)
+	}
+	return nil, usageError("未知命令 chains " + sub)
+}
+
 // syncCmd is `config sync status|apply`.
 func (r *runner) syncCmd(sub string) (any, error) {
 	switch sub {
@@ -813,6 +849,16 @@ func (r *runner) print(v any) error {
 				cur = "*"
 			}
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", s.ID, s.Name, cur, s.UpdatedAt.Local().Format("2006-01-02 15:04"), s.LastError)
+		}
+		return nil
+	case []model.ProxyChain:
+		fmt.Fprintln(tw, "ID\t名称\t启用\t跳")
+		for _, ch := range x {
+			on := ""
+			if ch.Enabled {
+				on = "*"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", ch.ID, ch.Name, on, strings.Join(ch.Hops, " → "))
 		}
 		return nil
 	case []rpc.AuditEntry:

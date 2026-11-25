@@ -120,6 +120,47 @@
         "null"
       ]
     },
+    "proxyChains": {
+      "description": "Proxy chains (docs/chain-proxy.md): hops by node or group name, entry first. A file without this key leaves the chains of each machine as they are",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "hops": {
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "settings": {
       "additionalProperties": false,
       "description": "Settings, without the machine-local items (docs/config-sync.md). A missing key means the default value",

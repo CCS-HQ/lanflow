@@ -58,6 +58,15 @@ func (s *Service) rememberSelection(group, name string) {
 	if all[key][group] == name {
 		return
 	}
+	if prev := all[key][group]; prev != "" {
+		if s.selPrev == nil {
+			s.selPrev = map[string]map[string]string{}
+		}
+		if s.selPrev[key] == nil {
+			s.selPrev[key] = map[string]string{}
+		}
+		s.selPrev[key][group] = prev
+	}
 	all[key][group] = name
 	// Drop the record of subscriptions that no longer exist.
 	subs := s.d.store.List()
@@ -118,4 +127,59 @@ func (s *Service) restoreSelections() {
 		s.alog.Infof("restored %d group selection(s)", changed)
 		s.refreshProxies()
 	}
+}
+
+// renameSelections makes the record follow renamed members (a renamed
+// chain, old name → new name), as members and as groups, so the next
+// restoreSelections selects them again under their new names.
+func (s *Service) renameSelections(renames map[string]string) {
+	if len(renames) == 0 {
+		return
+	}
+	key := s.selectionKey()
+	s.selMu.Lock()
+	defer s.selMu.Unlock()
+	all := s.loadSelectionsLocked()
+	rec := all[key]
+	if rec == nil {
+		return
+	}
+	changed := false
+	for g, n := range rec {
+		if to, ok := renames[n]; ok {
+			rec[g] = to
+			changed = true
+		}
+	}
+	for from, to := range renames {
+		if n, ok := rec[from]; ok {
+			delete(rec, from)
+			rec[to] = n
+			changed = true
+		}
+	}
+	for g, n := range s.selPrev[key] {
+		if to, ok := renames[n]; ok {
+			s.selPrev[key][g] = to
+		}
+	}
+	if !changed {
+		return
+	}
+	data, err := json.MarshalIndent(all, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := writeFileAtomic(s.selectionsPath(), data, 0o600); err != nil {
+		s.alog.Warnf("save selections: %v", err)
+	}
+}
+
+// previousSelection is what group had selected before its current
+// member, as far as this run knows ("" = unknown).
+func (s *Service) previousSelection(group string) string {
+	key := s.selectionKey()
+	s.selMu.Lock()
+	defer s.selMu.Unlock()
+	return s.selPrev[key][group]
 }

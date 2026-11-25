@@ -3,6 +3,7 @@ package syncfile
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -352,4 +353,36 @@ func contains(xs []string, x string) bool {
 		}
 	}
 	return false
+}
+
+// proxyChains: absent (an older writer) is nil and leaves the machine's
+// chains alone, [] clears them; entries are checked with their line.
+func TestProxyChains(t *testing.T) {
+	t.Parallel()
+	doc, err := Decode([]byte("format: 1\n"), model.Settings{})
+	if err != nil || doc.ProxyChains != nil {
+		t.Fatalf("absent: %v %#v", err, doc.ProxyChains)
+	}
+	doc, err = Decode([]byte("format: 1\nproxyChains: []\n"), model.Settings{})
+	if err != nil || doc.ProxyChains == nil || len(doc.ProxyChains) != 0 {
+		t.Fatalf("empty: %v %#v", err, doc.ProxyChains)
+	}
+	in := Doc{ProxyChains: []Chain{{ID: "c1", Name: "中转", Hops: []string{"香港", "东京"}, Enabled: true}}}
+	got, err := Decode(Encode(in), model.Settings{})
+	if err != nil || len(got.ProxyChains) != 1 || got.ProxyChains[0].Hops[1] != "东京" || !got.ProxyChains[0].Enabled {
+		t.Fatalf("round trip: %v %#v", err, got.ProxyChains)
+	}
+	for _, bad := range []string{
+		"format: 1\nproxyChains:\n  - {id: 'a b', name: X, hops: [A, B], enabled: true}\n",
+		"format: 1\nproxyChains:\n  - {id: a, name: X, hops: [A], enabled: true}\n",
+		"format: 1\nproxyChains:\n  - {id: a, name: X, hops: [A, B], enabled: true}\n  - {id: a, name: Y, hops: [A, B], enabled: true}\n",
+		"format: 1\nproxyChains:\n  - {id: a, name: X, hops: [A, B], enabled: true}\n  - {id: b, name: X, hops: [A, B], enabled: true}\n",
+		"format: 1\nproxyChains:\n  - {id: a, name: '', hops: [A, B], enabled: true}\n",
+	} {
+		_, err := Decode([]byte(bad), model.Settings{})
+		var e *Error
+		if !errors.As(err, &e) || e.Line == 0 {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
 }

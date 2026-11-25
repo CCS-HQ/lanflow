@@ -7,17 +7,20 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 	"lanflow/internal/syncfile"
 )
 
 // Loading lanflow.yaml into the service (configuration sync and
 // API.ApplyConfigFile). The document is declarative: for the parts it
 // covers — settings without the machine-local items, the override list,
+// the proxy chains (kept when the file has no proxyChains key),
 // the custom rules and the URL subscriptions — this machine ends up with
 // exactly what the file says. Subscriptions imported from local files
 // stay, and so does the current subscription (never deleted from under
@@ -89,7 +92,7 @@ type applyPlan struct {
 	keptCur   string               // the current subscription, which the file drops but stays
 	missing   []string             // names of subscriptions without a link on this machine
 	fresh     []string             // IDs of new subscriptions to download
-	changed   []string             // "settings", "overrides", "customRules", "subscriptions"
+	changed   []string             // "settings", "overrides", "customRules", "proxyChains", "subscriptions"
 	before    []byte               // lanflow.yaml of this machine now
 	after     []byte               // lanflow.yaml of this machine after loading
 }
@@ -175,6 +178,19 @@ func (s *Service) planDoc(doc syncfile.Doc) (*applyPlan, error) {
 		}
 	}
 
+	// ---- proxy chains: a file without the key keeps this machine's ----
+	next.chains = cur.chains
+	if doc.ProxyChains != nil {
+		next.chains = chainsFromDoc(doc.ProxyChains)
+		for i, c := range next.chains {
+			v, err := profile.NormalizeProxyChain(c)
+			if err != nil {
+				return nil, &docError{"proxyChains[" + strconv.Itoa(i) + "]", chainErrText(err)}
+			}
+			next.chains[i] = v
+		}
+	}
+
 	// ---- custom rules ----
 	for i, r := range doc.CustomRules {
 		cr, err := validateCustomRule(model.CustomRule{Type: r.Type, Payload: r.Payload, Target: r.Target})
@@ -197,15 +213,17 @@ func (s *Service) planDoc(doc syncfile.Doc) (*applyPlan, error) {
 		d := buildDoc(st, linksKeychain)
 		switch part {
 		case "settings":
-			d.Overrides, d.CustomRules, d.Subscriptions = nil, nil, nil
+			d.Overrides, d.CustomRules, d.Subscriptions, d.ProxyChains = nil, nil, nil, nil
 		case "overrides":
 			d = syncfile.Doc{Overrides: d.Overrides}
 		case "customRules":
 			d = syncfile.Doc{CustomRules: d.CustomRules}
+		case "proxyChains":
+			d = syncfile.Doc{ProxyChains: d.ProxyChains}
 		}
 		return syncfile.Encode(d)
 	}
-	for _, part := range []string{"settings", "overrides", "customRules"} {
+	for _, part := range []string{"settings", "overrides", "customRules", "proxyChains"} {
 		if !bytes.Equal(section(cur, part), section(next, part)) {
 			p.changed = append(p.changed, part)
 		}
@@ -279,7 +297,7 @@ func (s *Service) applyDoc(doc syncfile.Doc, dryRun bool) (model.ConfigApplyResu
 // summary says what loading the plan does, in one sentence.
 func (p *applyPlan) summary() string {
 	names := map[string]string{
-		"settings": i18n.T("设置"), "overrides": i18n.T("覆写"), "customRules": i18n.T("自定义规则"), "subscriptions": i18n.T("订阅"),
+		"settings": i18n.T("设置"), "overrides": i18n.T("覆写"), "customRules": i18n.T("自定义规则"), "proxyChains": i18n.T("链式代理"), "subscriptions": i18n.T("订阅"),
 	}
 	var parts []string
 	for _, c := range p.changed {
@@ -322,7 +340,7 @@ func (s *Service) checkPlan(p *applyPlan) error {
 	}
 	set := p.next.set
 	ovs := p.next.ovs
-	pr, err := s.prepare(composeArgs{settings: &set, custom: p.next.rules, useRules: true, ovs: &ovs, subOverrides: &sel})
+	pr, err := s.prepare(composeArgs{settings: &set, custom: p.next.rules, useRules: true, chains: p.next.chains, useChains: true, ovs: &ovs, subOverrides: &sel})
 	if err != nil {
 		return err
 	}
@@ -342,12 +360,17 @@ func (s *Service) storePlan(p *applyPlan) error {
 	if err := s.storeOverrides(p.next.ovs); err != nil {
 		return err
 	}
+	if !chainsEqual(p.cur.chains, p.next.chains) {
+		if _, err := st.SetProxyChains(p.next.chains); err != nil {
+			return err
+		}
+	}
 	if !rulesEqual(p.cur.rules, p.next.rules) {
 		if _, err := st.SetCustomRules(p.next.rules); err != nil {
 			return err
 		}
 	}
-	s.refreshStore(TopicSubs, TopicSettings, TopicRules)
+	s.refreshStore(TopicSubs, TopicSettings, TopicRules, TopicProxies)
 	return nil
 }
 
@@ -420,6 +443,10 @@ func (s *Service) restorePlan(p *applyPlan) error {
 		_, err := st.SetCustomRules(p.cur.rules)
 		note(err)
 	}
+	if !chainsEqual(p.cur.chains, st.ProxyChains()) {
+		_, err := st.SetProxyChains(p.cur.chains)
+		note(err)
+	}
 	was := map[string]bool{}
 	for _, old := range p.cur.subs {
 		was[old.ID] = true
@@ -437,6 +464,12 @@ func (s *Service) restorePlan(p *applyPlan) error {
 	}
 	s.refreshStore(TopicSubs, TopicSettings, TopicRules)
 	return first
+}
+
+func chainsEqual(a, b []model.ProxyChain) bool {
+	return slices.EqualFunc(a, b, func(x, y model.ProxyChain) bool {
+		return x.ID == y.ID && x.Name == y.Name && x.Enabled == y.Enabled && slices.Equal(x.Hops, y.Hops)
+	})
 }
 
 func rulesEqual(a, b []model.CustomRule) bool {

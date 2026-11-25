@@ -14,7 +14,8 @@ import (
 //  1. PathSuspicious: the measured exit contradicts itself (IP country vs
 //     Cloudflare colo country), contradicts the node's name, or the probe
 //     round trip is below the physical minimum between entry and exit.
-//  2. PathChain: chainHops > 1 (client-side relay / dialer-proxy).
+//  2. PathChain: chainHops > 1 (client-side dialer-proxy, counted from the
+//     runtime config by app.chainHops).
 //  3. PathRelay: entry and exit are known and in different places.
 //  4. PathDirect: entry and exit are the same IP or the same place.
 //

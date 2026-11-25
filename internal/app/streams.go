@@ -206,9 +206,10 @@ func (s *Service) refreshLoop(ctx context.Context) {
 
 func (s *Service) onTraffic(t controller.Traffic) {
 	s.mu.Lock()
-	s.state.up = appendRing(s.state.up, t.Up, trafficHistory)
-	s.state.down = appendRing(s.state.down, t.Down, trafficHistory)
-	s.state.st.Up, s.state.st.Down = t.Up, t.Down
+	up, down := max(0, t.Up-s.state.innerUp), max(0, t.Down-s.state.innerDown) // chains count once (onConnections)
+	s.state.up = appendRing(s.state.up, up, trafficHistory)
+	s.state.down = appendRing(s.state.down, down, trafficHistory)
+	s.state.st.Up, s.state.st.Down = up, down
 	s.mu.Unlock()
 	s.em.emit(TopicTraffic, TopicStatus)
 }
@@ -266,8 +267,26 @@ func (s *Service) onConnections(c controller.Connections) {
 	for i := len(closed) - 1; i >= 0; i-- { // closed is newest first
 		s.state.closed.Push(closed[i])
 	}
+	// A dialer-proxy hop is a connection of its own (INNER, docs/chain-
+	// proxy.md §1) whose bytes the core counts once more in its totals
+	// and in /traffic: they are taken out, so a chain counts once.
+	var inUp, inDown, inTotUp, inTotDown int64
+	for _, cn := range active {
+		if cn.IsInner() {
+			inUp, inDown = inUp+cn.UpSpeed, inDown+cn.DownSpeed
+			inTotUp, inTotDown = inTotUp+cn.Upload, inTotDown+cn.Download
+		}
+	}
+	for _, cn := range closed {
+		if cn.IsInner() {
+			s.state.innerClosedUp += cn.Upload
+			s.state.innerClosedDown += cn.Download
+		}
+	}
+	s.state.innerUp, s.state.innerDown = inUp, inDown
 	s.state.st.Connections = len(active)
-	s.state.st.TotalUp, s.state.st.TotalDown = c.UploadTotal, c.DownloadTotal
+	s.state.st.TotalUp = max(0, c.UploadTotal-inTotUp-s.state.innerClosedUp)
+	s.state.st.TotalDown = max(0, c.DownloadTotal-inTotDown-s.state.innerClosedDown)
 	if c.Memory > 0 {
 		s.state.st.Memory = c.Memory
 	}

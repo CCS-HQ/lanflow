@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -396,5 +398,30 @@ func TestNotATerminal(t *testing.T) {
 	}
 	if f := devNull(t); f != nil && isTerminal(f) {
 		t.Fatal("the null device counts as a terminal")
+	}
+}
+
+func TestChainsListSetUndo(t *testing.T) {
+	s := rpctest.Start(t, nil)
+	f := filepath.Join(t.TempDir(), "chains.json")
+	if err := os.WriteFile(f, []byte(`[{"name":"中转","hops":["香港 01","东京 03"],"enabled":true}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errs, code := run(t, s, "chains", "set", f)
+	if code != 0 || !strings.Contains(out, "中转") || len(s.Fake.ProxyChains()) != 1 {
+		t.Fatalf("chains set: %d %s %s", code, out, errs)
+	}
+	if out, _, code = run(t, s, "chains", "list", "--format", "table"); code != 0 || !strings.Contains(out, "香港 01 → 东京 03") {
+		t.Fatalf("chains list: %d %s", code, out)
+	}
+	if _, errs, code = run(t, s, "undo"); code != 0 || len(s.Fake.ProxyChains()) != 0 {
+		t.Fatalf("undo: %d %s %v", code, errs, s.Fake.ProxyChains())
+	}
+	os.WriteFile(f, []byte(`[{"name":"坏","hops":["香港 01"],"enabled":true}]`), 0o600)
+	if _, errs, code = run(t, s, "chains", "set", f); code != ExitError || !strings.Contains(errs, "跳") {
+		t.Fatalf("one hop accepted: %d %s", code, errs)
+	}
+	if _, _, code = run(t, s, "chains", "frobnicate"); code != ExitUsage {
+		t.Fatalf("unknown chains command: %d", code)
 	}
 }

@@ -14,7 +14,7 @@ import (
 
 // Undo (`lanflow ctl undo`): before an agent's configuration write the
 // server snapshots what the write touches (settings, custom rules,
-// overrides, a group's selection, the current subscription) and keeps a
+// overrides, proxy chains, a group's selection, the current subscription) and keeps a
 // restore function; Undo runs the newest one. The stack lives in memory
 // for the life of the app.
 
@@ -189,17 +189,32 @@ func (s *Server) prepareUndo(method string, args []reflect.Value) undoPrep {
 		// differs between the two reads counts as loaded from it; what
 		// was changed again by the time of the undo is left (restoreSettings).
 		oldSet, oldRules, oldOvs := model.CloneSettings(api.Settings()), api.CustomRules(), api.OverrideList()
+		oldChains := api.ProxyChains()
 		return func([]any) (func() (string, error), string) {
 			wrote := model.CloneSettings(api.Settings())
 			return func() (string, error) {
 				if err := restoreOverrides(api, oldOvs); err != nil {
 					return "", err
 				}
+				if _, err := api.SetProxyChains(oldChains); err != nil {
+					return "", err
+				}
 				if err := restoreRules(api, oldRules); err != nil {
 					return "", err
 				}
 				return restoreSettings(api, wrote, oldSet, nil)
-			}, "恢复加载配置文件之前的设置、覆写和自定义规则（订阅不恢复）"
+			}, "恢复加载配置文件之前的设置、覆写、链式代理和自定义规则（订阅不恢复）"
+		}
+	case method == "SetProxyChains":
+		// a rename rewrites custom rules too: both come back
+		oldChains, oldRules := api.ProxyChains(), api.CustomRules()
+		return func([]any) (func() (string, error), string) {
+			return plain(func() error {
+				if _, err := api.SetProxyChains(oldChains); err != nil {
+					return err
+				}
+				return restoreRules(api, oldRules)
+			}), "恢复之前的链式代理"
 		}
 	case method == "SetRuleDisabled":
 		idx := int(args[0].Int())

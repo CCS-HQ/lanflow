@@ -15,6 +15,7 @@ import (
 	"lanflow/internal/i18n"
 	"lanflow/internal/locate"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 )
 
 // 检测 page (docs/design.md §5.7 延伸): what an exit looks like from the
@@ -104,7 +105,7 @@ func (s *Service) ProbeRegions() []model.ProbeRegion {
 	cache := s.state.probe.regionCache
 	var names []string
 	for _, p := range snap.Proxies {
-		if _, isGroup := groupTypes[p.Type]; isGroup || p.Name == "DIRECT" || p.Name == "REJECT" || p.Name == probeGroup || p.Name == "GLOBAL" {
+		if _, isGroup := groupTypes[p.Type]; isGroup || p.Name == "DIRECT" || p.Name == "REJECT" || p.Name == probeGroup || p.Name == "GLOBAL" || profile.IsChainClone(p.Name) {
 			continue
 		}
 		names = append(names, p.Name)
