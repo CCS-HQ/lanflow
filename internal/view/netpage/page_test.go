@@ -227,17 +227,29 @@ func TestProxyStatusReportsEffectiveDNS(t *testing.T) {
 	}
 }
 
-// Every 代理状态 line but 控制接口 links to where it is configured: the
-// system proxy switch on 概览, the rest to their Settings tab.
+// atrustRunning reports aTrust as running, so 代理状态 shows its line.
+type atrustRunning struct{ *fake.Fake }
+
+func (a atrustRunning) Status() model.Status {
+	st := a.Fake.Status()
+	st.ATrust.Running = true
+	return st
+}
+
+// Every 代理状态 line but 控制接口 links to the Settings tab where it is
+// configured: the system proxy and the port to 代理, TUN and aTrust 兼容
+// to TUN.
 func TestProxyStatusLinks(t *testing.T) {
 	f := fake.NewInstant()
 	e, r := testEnv(f)
+	e.API = atrustRunning{f}
 	p := New(e)
 	tt := ui.NewTester(p.View, 1000, 1400)
 	for _, c := range []struct{ label, nav string }{
-		{"更改系统代理", "overview:"},
+		{"更改系统代理", "settings:proxy"},
 		{"更改监听端口", "settings:proxy"},
-		{"更改TUN 模式", "settings:proxy"},
+		{"更改TUN 模式", "settings:tun"},
+		{"更改aTrust 兼容", "settings:tun"},
 		{"更改嗅探", "settings:sniffer"},
 		{"更改DNS", "settings:dns"},
 	} {

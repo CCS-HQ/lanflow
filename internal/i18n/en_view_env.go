@@ -40,6 +40,7 @@ func init() {
 
 		// internal/view/env/golink.go
 		"设置 › 代理":  "Settings › Proxy",
+		"设置 › TUN": "Settings › TUN",
 		"设置 › DNS": "Settings › DNS",
 		"设置 › 嗅探":  "Settings › Sniffing",
 		"设置 › 高级":  "Settings › Advanced",

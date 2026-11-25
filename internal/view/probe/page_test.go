@@ -288,7 +288,7 @@ func TestLeakCheckTab(t *testing.T) {
 }
 
 // An item that is not fine links to the Settings tab that fixes it: the
-// partial DNS item (system proxy without TUN) to 设置 › 代理; the WebRTC
+// partial DNS item (system proxy without TUN) to 设置 › TUN; the WebRTC
 // item (a browser matter) and the items that pass get none.
 func TestLeakFixLinks(t *testing.T) {
 	f := fake.NewInstant()
@@ -299,17 +299,17 @@ func TestLeakFixLinks(t *testing.T) {
 	}
 	links := 0
 	for _, s := range tt.Texts() {
-		if strings.HasSuffix(s, "前往设置 › 代理") {
+		if strings.HasSuffix(s, "前往设置 › TUN") {
 			links++
 		}
 	}
 	if links != 1 || tt.HasText("前往设置 › DNS") || tt.HasText("前往设置 › 高级") {
 		t.Fatalf("want one link (DNS), got %d: %q", links, tt.Texts())
 	}
-	if err := tt.Click("DNS：前往设置 › 代理"); err != nil {
+	if err := tt.Click("DNS：前往设置 › TUN"); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.nav) != 1 || r.nav[0] != "settings:proxy" {
+	if len(r.nav) != 1 || r.nav[0] != "settings:tun" {
 		t.Fatalf("nav %q", r.nav)
 	}
 	// With TUN on every item passes: no links.
@@ -334,9 +334,9 @@ func TestLeakFix(t *testing.T) {
 		tun  bool
 		want string
 	}{
-		{warn("DNS"), false, "proxy"},
-		{model.LeakItem{Name: model.LeakItemDNSCmp, Status: model.LeakFail}, true, "proxy"},
-		{warn("IPv6"), false, "proxy"},
+		{warn("DNS"), false, "tun"},
+		{model.LeakItem{Name: model.LeakItemDNSCmp, Status: model.LeakFail}, true, "tun"},
+		{warn("IPv6"), false, "tun"},
 		{model.LeakItem{Name: "IPv6", Status: model.LeakFail}, true, "advanced"},
 		{warn(model.LeakItemWebRTC), false, ""},
 		{warn(model.LeakItemIPType), false, ""},

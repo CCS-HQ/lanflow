@@ -76,8 +76,8 @@ func (p *Page) leakTab(c *ui.Context, t *ui.Theme, st model.Status) {
 
 // leakFix is the Settings tab (settings tabKeys) where what a leak item
 // found can be fixed, "" when it is fine or nothing in Lanflow fixes it.
-// The DNS items' advice is TUN or 自动设置系统 DNS (both in 设置 › 代理);
-// IPv6 needs TUN turned on (代理), or with TUN already on, its IPv6 and
+// The DNS items' advice is TUN or 自动设置系统 DNS (both in 设置 › TUN);
+// IPv6 needs TUN turned on (TUN), or with TUN already on, its IPv6 and
 // route settings (高级). WebRTC is a browser matter beyond TUN and IP 类型
 // a property of the node: no link.
 func leakFix(it model.LeakItem, tun bool) string {
@@ -86,12 +86,12 @@ func leakFix(it model.LeakItem, tun bool) string {
 	}
 	switch it.Name {
 	case "DNS", model.LeakItemDNSCmp:
-		return "proxy"
+		return "tun"
 	case "IPv6":
 		if tun {
 			return "advanced"
 		}
-		return "proxy"
+		return "tun"
 	}
 	return ""
 }
