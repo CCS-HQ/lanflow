@@ -24,13 +24,13 @@ func TestWaitTCPPortFree(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := waitTCPPortFree(ctx, port, false); !errors.Is(err, errPortListening) {
+	if err := waitTCPPortFree(ctx, port, false, time.Second); !errors.Is(err, errPortListening) {
 		t.Fatalf("live listener: %v", err)
 	}
 	if err := ln.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitTCPPortFree(ctx, port, false); err != nil {
+	if err := waitTCPPortFree(ctx, port, false, time.Second); err != nil {
 		t.Fatalf("released listener: %v", err)
 	}
 }
@@ -99,9 +99,12 @@ func TestTUNToSystemProxyKeepsPort(t *testing.T) {
 			h.mgr.onStop = func() { h.taken[port] = true }
 			h.mgr.mu.Unlock()
 			waited := false
-			h.s.d.waitPortFree = func(ctx context.Context, p int, lan bool) error {
+			h.s.d.waitPortFree = func(ctx context.Context, p int, lan bool, timeout time.Duration) error {
 				if p != port || h.mgr.Running() || mgrStarts(h) != starts {
 					t.Fatal("port handoff did not happen between stop and start")
+				}
+				if timeout < 30*time.Second {
+					t.Fatalf("waits %v after a root core stopped, want the TIME_WAIT period", timeout)
 				}
 				waited = true
 				h.taken[port] = false
@@ -143,7 +146,7 @@ func TestTUNHandoffFailureRestoresSettings(t *testing.T) {
 			h := tunHandoffHarness(t)
 			port := h.s.Settings().MixedPort
 			h.taken[port] = true
-			h.s.d.waitPortFree = func(context.Context, int, bool) error { return cause }
+			h.s.d.waitPortFree = func(context.Context, int, bool, time.Duration) error { return cause }
 			before := mgrStarts(h)
 			err := h.s.SetTUN(false)
 			if err == nil || !h.s.Settings().TUN || mgrStarts(h) != before {
@@ -183,5 +186,72 @@ func TestTUNStopFailureDoesNotStartAnotherCore(t *testing.T) {
 	}
 	if st := h.s.Status(); st.Core != model.CoreRunning || st.TUN || !st.SystemProxy || h.s.Settings().TUN || mgrStarts(h) != before+1 {
 		t.Fatalf("retry did not switch the core: %+v", st)
+	}
+}
+
+func TestPortWaitTimeout(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		name    string
+		stopped time.Time
+		want    time.Duration
+	}{
+		{"no root core stopped", time.Time{}, portWaitShort},
+		{"root core just stopped", now, rootTimeWait},
+		{"root core stopped 10 s ago", now.Add(-10 * time.Second), rootTimeWait - 10*time.Second},
+		{"root core stopped long ago", now.Add(-time.Hour), portWaitShort},
+	} {
+		if got := portWaitTimeout(now, c.stopped); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// A busy port with no root core gone lately gets only the short wait.
+func TestPlainStartWaitsShort(t *testing.T) {
+	h := newHarness(t, nil)
+	port := h.s.Settings().MixedPort
+	h.taken[port] = true
+	var got time.Duration
+	h.s.d.waitPortFree = func(_ context.Context, _ int, _ bool, timeout time.Duration) error {
+		got = timeout
+		return context.DeadlineExceeded
+	}
+	if err := h.s.StartCore(); err == nil {
+		t.Fatal("started on a busy port")
+	}
+	if got != portWaitShort {
+		t.Fatalf("waited %v, want %v", got, portWaitShort)
+	}
+}
+
+// Restarting with TUN on: the next core runs as root and binds over the
+// old one's TIME_WAIT sockets, so there is nothing to wait for; a real
+// listener still stops it.
+func TestRootRestartDoesNotWait(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS port handoff")
+	}
+	h := tunHandoffHarness(t)
+	port := h.s.Settings().MixedPort
+	h.mgr.mu.Lock()
+	h.mgr.onStop = func() { h.taken[port] = true }
+	h.mgr.mu.Unlock()
+	h.s.d.waitPortFree = func(context.Context, int, bool, time.Duration) error {
+		t.Fatal("waited for the port before starting a root core")
+		return nil
+	}
+	listening := false
+	h.s.d.portListening = func(int) bool { return listening }
+	before := mgrStarts(h)
+	if err := h.s.RestartCore(); err != nil {
+		t.Fatal(err)
+	}
+	if st := h.s.Status(); st.Core != model.CoreRunning || !st.TUN || mgrStarts(h) != before+1 {
+		t.Fatalf("restart: %+v", st)
+	}
+	listening = true
+	if err := h.s.RestartCore(); err == nil || !strings.Contains(err.Error(), "已被其他程序") {
+		t.Fatalf("restart over a listener: %v", err)
 	}
 }
