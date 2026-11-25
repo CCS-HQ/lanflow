@@ -18,6 +18,7 @@ import (
 	"lanflow/internal/platform/procicon"
 	"lanflow/internal/platform/sysdns"
 	"lanflow/internal/platform/sysproxy"
+	"lanflow/internal/platform/tailscale"
 	"lanflow/internal/profile"
 )
 
@@ -140,6 +141,8 @@ type profileStore interface {
 	SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, error)
 	ProxyChains() []model.ProxyChain
 	SetProxyChains(chains []model.ProxyChain) ([]model.ProxyChain, error)
+	AggregateSpec(id string) (model.AggregateSpec, bool)
+	SetAggregateSpec(id string, spec model.AggregateSpec) error
 }
 
 // composer wraps the package-level functions of package profile.
@@ -147,6 +150,7 @@ type composer interface {
 	Compose(in profile.Input) (profile.Output, error)
 	Diff(a, b []byte) []model.DiffLine
 	Fetch(ctx context.Context, client *http.Client, url, userAgent string) (profile.Fetched, error)
+	FetchRaw(ctx context.Context, client *http.Client, url, userAgent string) (profile.Fetched, error)
 	CheckYAML(data []byte) error
 }
 
@@ -192,6 +196,8 @@ type deps struct {
 	v6Route func(ctx context.Context) netinfo.V6Route
 	// vpnDetect looks for Sangfor aTrust (coexist.go); nil = never found.
 	vpnDetect func(ctx context.Context, own func(iface string) bool) atrust.Info
+	// tsDetect looks for Tailscale (tailscale.go); nil = never found.
+	tsDetect func(ctx context.Context, own func(iface string) bool) tailscale.Info
 	// diagCommands describes the system network for 导出诊断信息 (diag.go);
 	// nil = systemDiagnostics.
 	diagCommands func(ctx context.Context) map[string]string
@@ -292,6 +298,9 @@ func (realProfile) Diff(a, b []byte) []model.DiffLine                { return pr
 func (realProfile) Fetch(ctx context.Context, client *http.Client, url, userAgent string) (profile.Fetched, error) {
 	return profile.Fetch(ctx, client, url, userAgent)
 }
+func (realProfile) FetchRaw(ctx context.Context, client *http.Client, url, userAgent string) (profile.Fetched, error) {
+	return profile.FetchRaw(ctx, client, url, userAgent)
+}
 func (realProfile) CheckYAML(data []byte) error { return profile.CheckYAML(data) }
 
 // freeTCPPort asks the kernel for an unused loopback port.
@@ -348,6 +357,7 @@ func realDeps(ctrl *controller.Client, mgr *core.Manager, store *profile.Store, 
 		portOwner:     portOwner,
 		v6Route:       netinfo.IPv6Route,
 		vpnDetect:     atrust.Detect,
+		tsDetect:      tailscale.Detect,
 		now:           time.Now,
 		fileIcon:      procicon.Load,
 	}

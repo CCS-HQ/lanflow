@@ -57,3 +57,39 @@ func TestRemoveMergesTheTwoCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoveByHash(t *testing.T) {
+	oldRun, oldFind := run, findCerts
+	defer func() {
+		run = oldRun
+		findCerts = oldFind
+	}()
+	der := []byte("matching-der-cert")
+	wantHash := SHA1(der)
+	expectHash := wantHash
+	findCerts = func() [][]byte { return [][]byte{[]byte("other"), der} }
+
+	var calls []string
+	run = func(name string, args ...string) error {
+		calls = append(calls, args[0])
+		if args[0] == "delete-certificate" && !slices.Contains(args, expectHash) {
+			t.Fatalf("delete-certificate missing hash %s: %v", expectHash, args)
+		}
+		return nil
+	}
+	if err := removeByHash(strings.ToLower(wantHash)); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(calls, ","); got != "remove-trusted-cert,delete-certificate" {
+		t.Fatalf("expected untrust+delete when DER matched, got %s", got)
+	}
+
+	calls = nil
+	expectHash = "DEADBEEF"
+	if err := removeByHash("DEADBEEF"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(calls, ","); got != "delete-certificate" {
+		t.Fatalf("expected delete-certificate fallback when DER missing, got %s", got)
+	}
+}

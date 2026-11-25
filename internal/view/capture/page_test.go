@@ -244,3 +244,49 @@ func TestDisabledOffersEnable(t *testing.T) {
 		t.Fatalf("not enabled: %q", tt.Texts())
 	}
 }
+
+func TestBodySearchUIAndLeftoverBanner(t *testing.T) {
+	api := fake.NewInstant()
+	if err := api.SetCapture(true); err != nil {
+		t.Fatal(err)
+	}
+	api.SetCaptureLeftoverRoots([]string{"AA11BB22"})
+	arg := ""
+	e, _ := testEnv(api, &arg)
+	p := New(e)
+	p.async = func(fn func()) { fn() }
+	tt := ui.NewTester(p.View, 1300, 800)
+
+	// Leftover root banner and cleanup confirm.
+	if !tt.HasText("检测到 1 个旧版澜流根证书仍留在系统信任库中（之前安装的残留）。") || !tt.HasText("清理旧证书") {
+		t.Fatalf("leftover banner missing: %q", tt.Texts())
+	}
+	if err := tt.Click("清理旧证书"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if len(api.CaptureLeftoverRoots()) != 0 || tt.HasText("清理旧证书") {
+		t.Fatalf("leftover roots not cleared: %v", api.CaptureLeftoverRoots())
+	}
+
+	// Body search matches response bodies ("octocat" is only in JSON bodies of flows 1 and 2, not URL/host).
+	p.query = "octocat"
+	tt.Frame()
+	if tt.HasText("api.github.com") {
+		t.Fatalf("summary filter should not match body-only keyword before 搜正文: %q", tt.Texts())
+	}
+	if err := tt.Click("搜正文"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("正文搜索“octocat”：命中 2 条记录（同时保留地址匹配项）。") || !tt.HasText("api.github.com") {
+		t.Fatalf("body search results not shown: %q", tt.Texts())
+	}
+	if err := tt.Click("清除正文搜索"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if tt.HasText("api.github.com") {
+		t.Fatalf("clearing body search should hide body-only matches again: %q", tt.Texts())
+	}
+}

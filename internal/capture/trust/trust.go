@@ -31,6 +31,10 @@ func Install(der []byte) error { return install(der) }
 // there is not an error.
 func Remove(der []byte) error { return remove(der) }
 
+// RemoveByHash deletes a Lanflow root identified by its SHA-1 hex digest
+// from the user's trust store; a missing certificate is not an error.
+func RemoveByHash(sha1Hex string) error { return removeByHash(sha1Hex) }
+
 // Leftovers lists the SHA-1 (hex, upper case) of Lanflow roots in the
 // user's store other than keep (DER; nil = all).
 func Leftovers(keep []byte) []string {

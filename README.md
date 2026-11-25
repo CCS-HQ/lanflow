@@ -32,7 +32,7 @@ gh attestation verify lanflow-<版本>-arm64.dmg --repo Owlbay/lanflow
 
 - **侧栏控制中心**（常驻）：规则 / 全局 / 直连模式切换，系统代理（全局或 PAC）与 TUN 快捷开关，当前订阅与流量用量（一键更新），连接数与实时速度，内核版本、内存与一键重启；内核的启停在托盘菜单里。TUN 通过权限组件 `lanflow-helper` 运行，应用本身不提权，IPv4 与 IPv6 一并接管
 - **概览**：可拖动旋转、缩放的 3D 地球出口图（请求流向、实时速度、自动聚焦）、终端代理命令；内核异常、找不到内核或配置同步出错时在这里提示
-- **代理与订阅**：代理组、节点切换、测速（可设测速地址与超时）、组图标、定位当前节点；订阅链接 / 文件 / 拖入导入、自动更新、按 Wi-Fi 自动切换订阅；多个有序 YAML 覆写（本地或链接）
+- **代理与订阅**：代理组、节点切换、测速（可设测速地址与超时）、组图标、定位当前节点；订阅链接 / 文件 / 拖入导入、自动更新、按 Wi-Fi 自动切换订阅；聚合订阅：把多个订阅链接、节点分享链接和已有订阅合并成一个，在界面里筛选重命名节点、勾选地区分组与分流规则，由澜流在本机生成配置（[docs/aggregate.md](docs/aggregate.md)）；多个有序 YAML 覆写（本地或链接）
 - **连接**：列表与网络拓扑两种视图（来源 → 进程 → 规则 → 代理组 → 节点 → 目标），应用图标，从连接添加规则
 - **日志**：内核日志与澜流运行日志，级别筛选、搜索；一键导出脱敏的诊断信息
 - **规则**：自定义规则、命中统计、临时停用、规则测试、规则集
@@ -146,6 +146,7 @@ agent 可以直接编辑 `lanflow.yaml`，或用 `lanflow ctl config sync apply 
 - macOS 开启 TUN 时默认把系统 DNS 指向 223.5.5.5、119.29.29.29（否则发往路由器等局域网 DNS 的查询不经过 TUN），关闭 TUN、停止内核或退出时恢复原设置；期间被用户改过的网络服务不会被覆盖，异常退出后下次启动时恢复。可在「设置 › TUN」中关闭。
 - **aTrust 兼容**（「设置 › TUN」，默认关闭）：检测到深信服 aTrust 运行时（进程名含 aTrust / Sangfor），读取它的隧道路由、内网 DNS 域名和解析器以及它自身连接的网关（macOS 用 `netstat -rn`、`scutil --dns`、`netstat -anv`；Windows 用系统路由表、NRPT 规则和 TCP 连接表），然后：内网网段和网关写入 `tun.route-exclude-address`，不进入澜流的 TUN（内核重启也不会打断 aTrust 隧道）；含有 DNS 服务器（系统 DNS、aTrust 的解析器或配置的公司 DNS）的网段**不会**被排除，只直连并仍经过 TUN，否则 DNS 劫持失效，需要走代理的网站全部无法访问；aTrust 进程、内网网段、内网域名作为最前面的 DIRECT 规则；内网域名加入 `fake-ip-filter` 和嗅探的 `skip-domain`，并通过 `nameserver-policy` 交给公司 DNS 解析；aTrust 在线时加密 DNS 常被掐断，因此追加 223.5.5.5 / 119.29.29.29 纯 UDP 上游兜底；fake-ip 网段或 TUN 地址与内网重叠时自动换用其他网段；澜流的 TUN 固定命名为 `utun1700`，与 aTrust 的 utun 区分；系统代理的例外列表加入内网。「自动设置系统 DNS」保持开启。每 10 秒重新检测，aTrust 连上、断开或退出后自动重新生成配置。这些规则在「运行时配置」里标为「aTrust 兼容」。
   - **配置**（「设置 › TUN › aTrust 兼容 › 配置…」）：检测不到的部分按行填写——内网域名（走公司 DNS）、直连域名（钉钉、企业微信等公网 SaaS，直连但绝不走公司 DNS）、公司 DNS、不进入 TUN 的网段（aTrust 映射段、只能经 aTrust 到达的内网段）、仅直连的网段（含公司 DNS 的 10.0.0.0/8 之类），以及「未运行 aTrust 时也应用」（办公网不开 aTrust 时内网域名仍需公司 DNS）。表单实时校验，含公司 DNS 的网段放进排除列表会被拦下。澜流不内置任何公司的地址：「复制参考配置」/「导出参考配置…」给出一份带中文说明、用示例值（corp.example.com、10.x、203.0.113.x）写成的 YAML 模板；「导入…」读取澜流的 YAML/JSON，或 JavaScript 覆写脚本（如 `atrust-coexist.js`）（`atrustDns`→公司 DNS、`corpDomains`→内网域名、`publicSaasDomains`→直连域名、`atrustCIDRs`→不进入 TUN 的网段、`IP-CIDR,…,DIRECT` 规则→仅直连的网段），校验去重后填入表单，确认后再保存；「导出…」写出 YAML。其他分隧道 VPN（如 Tailscale）的网段在 aTrust 运行时也会一并直连；接管全部流量的其他代理 TUN 不算在内。
+- **内置 Tailscale**（「设置 › TUN」，默认关闭，只在本机）：澜流的内核自己作为设备加入 tailnet（Mihomo 的 tailscale 出站），不用再运行 Tailscale App。没有 auth key 时点「登录…」在浏览器完成登录，auth key 存系统钥匙串；支持 Headscale 控制服务器、接受子网路由和出口节点；设置页显示登录状态、tailnet 地址和账号。局限：只有经过澜流的流量（TUN、系统代理、设置了代理的应用）能访问 tailnet；本机不会以自己的身份成为 tailnet 节点，别的设备无法经 tailnet 访问本机的服务（SSH、文件共享），Taildrop 和 Tailscale SSH 不可用；退出澜流即断开 tailnet。检测到 Tailscale App 运行时内置节点自动暂停，二者只用一个。详见 [docs/tailscale.md](docs/tailscale.md)。
 
 ## 已知限制
 

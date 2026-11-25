@@ -24,7 +24,10 @@ import (
 //     cleaned (sanitizeConfig) and written there as stagedConfigName;
 //   - the databases and provider files the core would otherwise have to
 //     download again are copied from the user's work directory when they
-//     are missing there or the user's copy is newer (seedFile).
+//     are missing there or the user's copy is newer (seedFile);
+//   - so is the state of the built-in Tailscale node (tsStateDir), so that
+//     the root-run and the user-run core are the same tailnet device and
+//     a login made without TUN holds with it.
 //
 // Both are bounded (files, bytes, time), and before a start files nothing
 // refers to any more are removed (pruneWorkDir).
@@ -157,6 +160,17 @@ func (s *Supervisor) stage(spec protocol.Spec, withData bool) (string, error) {
 		}
 	}
 	names = append(names, cfg.ProviderPaths...)
+	// the user's Tailscale state directories, at a start only: on a
+	// reload the running core owns its copy
+	tsDirs := map[string]bool{}
+	if withData {
+		for _, name := range listUserDir(spec.WorkDir) {
+			if tsStateDir(name) {
+				tsDirs[pathKey(name)] = true
+				names = append(names, filepath.Join(name, tsStateFile))
+			}
+		}
+	}
 	hashed := map[string]bool{} // provider files without a path the user has
 	for _, dir := range providerDirs {
 		for _, name := range listUserDir(filepath.Join(spec.WorkDir, dir)) {
@@ -188,7 +202,7 @@ func (s *Supervisor) stage(spec protocol.Spec, withData bool) (string, error) {
 		for rel := range hashed {
 			keep[pathKey(rel)] = true
 		}
-		if n := pruneWorkDir(root, keep, time.Now().Add(-pruneAge)); n > 0 {
+		if n := pruneWorkDir(root, keep, tsDirs, time.Now().Add(-pruneAge)); n > 0 {
 			s.Logf("work dir: removed %d old files nothing refers to", n)
 		}
 	}
@@ -198,9 +212,40 @@ func (s *Supervisor) stage(spec protocol.Spec, withData bool) (string, error) {
 	return filepath.Join(s.WorkDir, stagedConfigName), nil
 }
 
+// tsStateFile is the file tsnet keeps a node's keys and login in.
+const tsStateFile = "tailscaled.state"
+
+// tsStateDir reports whether name, an entry at the top of a work
+// directory, is a state directory of Lanflow's built-in Tailscale node:
+// "tailscale" or "tailscale-<n>" (a new one after each logout).
+func tsStateDir(name string) bool {
+	rest, ok := strings.CutPrefix(strings.ToLower(name), "tailscale")
+	if !ok {
+		return false
+	}
+	if rest == "" {
+		return true
+	}
+	digits, ok := strings.CutPrefix(rest, "-")
+	if !ok || digits == "" || len(digits) > 9 {
+		return false
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // pruneWorkDir removes from the work directory the files nothing refers
 // to any more and returns how many. It runs before a start, while no core
 // uses the directory.
+//
+// A Tailscale state directory the user's work directory also has
+// (tsDirs, by pathKey) is kept whole: the node's keys change rarely, and
+// losing them makes the device log in again. One the user's directory no
+// longer has (left by a logout) goes like any other files.
 //
 // It is deliberately timid. Kept are: the config, the databases and the
 // cache (top level, by name), every file in keep (the providers of the
@@ -210,7 +255,7 @@ func (s *Supervisor) stage(spec protocol.Spec, withData bool) (string, error) {
 // stays as long as it is refreshed. What goes is, in practice, the
 // provider files of subscriptions the user left a month ago. Losing a
 // file here costs the core one download.
-func pruneWorkDir(root *os.Root, keep map[string]bool, before time.Time) (removed int) {
+func pruneWorkDir(root *os.Root, keep, tsDirs map[string]bool, before time.Time) (removed int) {
 	seen := 0
 	var dirs []string
 	_ = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
@@ -229,6 +274,12 @@ func pruneWorkDir(root *os.Root, keep map[string]bool, before time.Time) (remove
 				if root.RemoveAll(rel) == nil {
 					removed++
 				}
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if tsDirs[pathKey(first)] {
+			if d.IsDir() {
 				return fs.SkipDir
 			}
 			return nil

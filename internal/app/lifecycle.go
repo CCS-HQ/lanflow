@@ -81,6 +81,7 @@ func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, 
 	probe := s.state.probePort
 	helperOK := s.state.helperOK
 	co := s.state.coexist
+	tsInfo := s.state.tailscale
 	sysDNS := s.state.net.DNS
 	s.mu.Unlock()
 	if a.settings != nil {
@@ -116,6 +117,10 @@ func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, 
 		Advanced: set.Advanced,
 	}
 	in.Coexist = coexistInput(co, set, sysDNS)
+	in.Tailscale = tailscaleInput(tsInfo, set, sysDNS)
+	if n := in.Tailscale.Node; n != nil {
+		n.AuthKey = s.tailscaleAuthKey() // the keychain; tailscale_builtin.go
+	}
 	in.Capture = s.captureInput(set) // capture.go
 	if a.useRules {
 		in.CustomRules = a.custom
@@ -315,7 +320,8 @@ func (s *Service) startLocked() (err error) {
 			}
 		}
 	}
-	s.detectCoexist() // compose with aTrust's routes when it is already running
+	s.detectTailscale() // compose with Tailscale's interface when it is already up
+	s.detectCoexist()   // compose with aTrust's routes when it is already running
 	p, err := s.prepare(composeArgs{})
 	if err != nil {
 		if errors.Is(err, errNoSubscription) {
@@ -716,7 +722,8 @@ func (s *Service) afterConfigChange() {
 	s.refreshRules()
 	s.refreshProviders()
 	s.rebuildRoutes()
-	s.captureAfterReload() // capture.go
+	s.captureAfterReload()   // capture.go
+	s.tailscaleAfterConfig() // tailscale_builtin.go
 }
 
 func (s *Service) running() bool {

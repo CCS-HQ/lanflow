@@ -439,3 +439,49 @@ func TestReadsOnlyShownList(t *testing.T) {
 		t.Fatalf("已关闭 tab read active %d more, closed %d", api.active-a, api.closed)
 	}
 }
+
+func TestCaptureReturnFoldingView(t *testing.T) {
+	f := fake.NewInstant()
+	e, _ := testEnv(f)
+	p := New(e)
+
+	cnLeg := model.Connection{
+		ID:                  "leg-1",
+		Host:                "api.example.com:443",
+		CaptureLeg:          true,
+		Chains:              []string{"LANFLOW-MITM-abcd"},
+		CaptureReturnChains: []string{"Select", "JP-01"},
+	}
+	cnRet := model.Connection{
+		ID:            "ret-1",
+		Host:          "api.example.com:443",
+		CaptureReturn: true,
+		Chains:        []string{"Select", "JP-01"},
+	}
+	cnNorm := model.Connection{
+		ID:     "norm-1",
+		Host:   "plain.example.com:443",
+		Chains: []string{"DIRECT"},
+	}
+
+	folded := foldCaptureConns([]model.Connection{cnLeg, cnRet, cnNorm})
+	if len(folded) != 2 {
+		t.Fatalf("expected 2 connections after folding, got %d", len(folded))
+	}
+	if got := chain(cnLeg); got != "已解密 · 回流经 Select › JP-01" {
+		t.Fatalf("chain(cnLeg) = %q", got)
+	}
+	if got := chain(model.Connection{CaptureLeg: true, Chains: []string{"LANFLOW-MITM-abcd"}}); got != "已解密" {
+		t.Fatalf("chain(unresolved leg) = %q", got)
+	}
+	if got := p.defaultTarget(cnLeg); got != "Select" {
+		t.Fatalf("p.defaultTarget(cnLeg) = %q", got)
+	}
+	if !strings.Contains(haystack(cnLeg), "Select › JP-01") {
+		t.Fatalf("haystack missing return chains: %q", haystack(cnLeg))
+	}
+	topo := topologyCaptureChains(folded)
+	if len(topo) != 2 || len(topo[0].Chains) != 2 || topo[0].Chains[0] != "Select" {
+		t.Fatalf("topologyCaptureChains = %+v", topo)
+	}
+}

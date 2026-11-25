@@ -246,6 +246,7 @@ var Excluded = []ExcludedItem{
 	{"settings.advanced.tunIncludeInterface", "an interface name of this machine"},
 	{"settings.advanced.tunExcludeInterface", "an interface name of this machine"},
 	{"settings.advanced.interfaceName", "an interface name of this machine"},
+	{"settings.tailscaleBuiltin", "this machine's own tailnet device"},
 }
 
 func isExcluded(path string) bool {

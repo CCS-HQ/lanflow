@@ -71,6 +71,9 @@ var methodLevels = map[string]Level{
 	"EditSubscription":       LevelWrite,
 	"DeleteSubscription":     LevelDanger,
 	"SubscriptionRaw":        LevelSensitive,
+	"AggregateSpec":          LevelSensitive, // source links
+	"PreviewAggregate":       LevelSensitive, // downloads the sources; the result holds the profile
+	"SaveAggregate":          LevelWrite,
 
 	// ---- manual nodes ----
 	"ManualNodes":      LevelSensitive,
@@ -167,6 +170,13 @@ var methodLevels = map[string]Level{
 	"ImportATrustConfig": LevelSensitive, // reads a local file
 	"ExportATrustConfig": LevelWrite,
 
+	// ---- Tailscale ----
+	"TailscaleReport": LevelRead,
+	// the auth key is a credential: only the user enters it, in the window
+	"SetTailscaleAuthKey": LevelUI,
+	"TailscaleAuthKeySet": LevelRead,
+	"LogoutTailscale":     LevelDanger,
+
 	// ---- mirror ----
 	"TestMirrors": LevelRead,
 
@@ -200,23 +210,26 @@ var methodLevels = map[string]Level{
 	// keys / types / lengths, never values); they cannot turn decryption
 	// on, change the selection or touch the root: danger (MCP refused,
 	// ctl confirmed every time) or window only.
-	"CaptureStatus":       LevelRead,
-	"CaptureFlows":        LevelSensitive,
-	"CaptureFlow":         LevelSensitive,
-	"SetCapture":          LevelDanger,
-	"ExtendCapture":       LevelDanger,
-	"SaveCaptureSettings": LevelDanger,
-	"AddCaptureDomain":    LevelDanger,
-	"AddCaptureApp":       LevelDanger,
-	"ClearCaptureFlows":   LevelWrite,
-	"CheckCaptureTarget":  LevelSensitive,
-	"SetCaptureRecording": LevelWrite,
-	"ReplayRequest":       LevelDanger,
-	"InstallCACert":       LevelDanger,
-	"RegenerateCA":        LevelDanger,
-	"RemoveCACert":        LevelDanger,
-	"ExportCACert":        LevelUI,
-	"ExportHAR":           LevelUI,
+	"CaptureStatus":              LevelRead,
+	"CaptureFlows":               LevelSensitive,
+	"CaptureFlow":                LevelSensitive,
+	"SetCapture":                 LevelDanger,
+	"ExtendCapture":              LevelDanger,
+	"SaveCaptureSettings":        LevelDanger,
+	"AddCaptureDomain":           LevelDanger,
+	"AddCaptureApp":              LevelDanger,
+	"ClearCaptureFlows":          LevelWrite,
+	"SearchCaptureBodies":        LevelUI,
+	"CheckCaptureTarget":         LevelSensitive,
+	"SetCaptureRecording":        LevelWrite,
+	"ReplayRequest":              LevelDanger,
+	"InstallCACert":              LevelDanger,
+	"RegenerateCA":               LevelDanger,
+	"RemoveCACert":               LevelDanger,
+	"CaptureLeftoverRoots":       LevelRead,
+	"RemoveCaptureLeftoverRoots": LevelDanger,
+	"ExportCACert":               LevelUI,
+	"ExportHAR":                  LevelUI,
 
 	"Shutdown": LevelDanger,
 }

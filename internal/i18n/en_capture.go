@@ -183,6 +183,24 @@ func init() {
 		"还没有解密的请求": "No decrypted requests yet",
 		"这是一条 UDP 连接，只能看到目标和流量。": "This is a UDP connection: only its destination and traffic are visible.",
 		"需要授权读取根证书私钥：澜流更新后，系统会弹出对话框询问是否允许访问钥匙串，请输入登录密码并点「始终允许」，然后再开启一次。如果没有出现对话框，可以在「更多 › 重新生成根证书」换一个新的根证书（需要重新信任）。": "Lanflow needs permission to read the root certificate's key: after an update, macOS asks whether to allow access to the Keychain — enter your login password and click Always Allow, then turn decryption on again. If no dialog appears, use More › Regenerate Root Certificate to make a new root (it has to be trusted again).",
+
+		// body search & leftover root cleanup
+		"解密已关闭，没有可搜索的记录。": "Decryption is off; no records to search.",
+		"清理旧根证书失败：%v":       "Removing leftover root certificates failed: %v",
+		"搜正文":             "Search Body",
+		"搜索中…":            "Searching…",
+		"在后台扫描请求/响应头、已解码正文和 WebSocket 文本消息": "Search request/response headers, decoded bodies, and WebSocket text messages in the background",
+		"清理旧证书":           "Remove Leftovers",
+		"清理旧版根证书？":        "Remove leftover root certificates?",
+		"会从当前用户的系统信任库中移除不再使用的旧版澜流根证书（系统可能弹窗要求确认）。": "This removes unused older Lanflow root certificates from your user trust store (the system may prompt for confirmation).",
+		"清理":                                    "Remove",
+		"已清理旧根证书":                               "Leftover root certificates removed",
+		"检测到 %d 个旧版澜流根证书仍留在系统信任库中（之前安装的残留）。":     "%d leftover Lanflow root certificates remain in the system trust store from previous installations.",
+		"检测到 %d 个旧版澜流根证书仍留在系统信任库中（之前安装的残留）。|one": "%d leftover Lanflow root certificate remains in the system trust store from a previous installation.",
+		"正在后台搜索正文“%s”…":                         "Searching bodies for “%s” in the background…",
+		"正文搜索失败：%s":                             "Body search failed: %s",
+		"正文搜索“%s”：命中 %d 条记录（同时保留地址匹配项）。":         "Body search “%s”: %d matches (address matches are also kept).",
+		"清除正文搜索":                                "Clear Body Search",
 	} {
 		en[k] = v
 	}

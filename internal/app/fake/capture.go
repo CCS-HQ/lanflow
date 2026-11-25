@@ -3,10 +3,13 @@ package fake
 import (
 	"bytes"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"lanflow/internal/app"
+	"lanflow/internal/capture/redact"
 	"lanflow/internal/model"
 )
 
@@ -14,13 +17,14 @@ import (
 // handful of requests (JSON, form, image, a passthrough, a pinned host).
 
 type fakeCapture struct {
-	mu      sync.Mutex
-	init    bool
-	set     model.CaptureSettings
-	enabled bool
-	until   time.Time
-	ca      model.CAState
-	flows   []model.CaptureFlowDetail
+	mu        sync.Mutex
+	init      bool
+	set       model.CaptureSettings
+	enabled   bool
+	until     time.Time
+	ca        model.CAState
+	leftovers []string
+	flows     []model.CaptureFlowDetail
 }
 
 var fcaps sync.Map // *Fake → *fakeCapture
@@ -78,7 +82,8 @@ func (f *Fake) CaptureStatus() model.CaptureStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return model.CaptureStatus{Enabled: c.enabled, Domains: len(c.set.Domains), Apps: len(c.set.Apps), Until: c.until, CA: c.ca,
-		CAExpires: time.Now().Add(80 * 24 * time.Hour), CAName: "Lanflow Local CA (fake 2026-11-10)", AgentUp: c.enabled,
+		LeftoverRoots: slices.Clone(c.leftovers),
+		CAExpires:     time.Now().Add(80 * 24 * time.Hour), CAName: "Lanflow Local CA (fake 2026-11-10)", AgentUp: c.enabled,
 		Flows: len(c.flows), FindProcess: true, Settings: c.set}
 }
 
@@ -167,6 +172,82 @@ func (f *Fake) ClearCaptureFlows() error {
 	c.mu.Unlock()
 	f.emit(app.TopicCapture)
 	return nil
+}
+
+// SearchCaptureBodies scans the demo capture records' headers, decoded bodies,
+// and WebSocket text frames.
+func (f *Fake) SearchCaptureBodies(query string) ([]int64, error) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil, nil
+	}
+	c := f.capInit()
+	c.mu.Lock()
+	flows := slices.Clone(c.flows)
+	c.mu.Unlock()
+	var ids []int64
+	for _, d := range flows {
+		matched := false
+		for _, kv := range d.ReqHeader {
+			if strings.Contains(strings.ToLower(kv.Key), q) || strings.Contains(strings.ToLower(kv.Value), q) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			for _, kv := range d.RespHeader {
+				if strings.Contains(strings.ToLower(kv.Key), q) || strings.Contains(strings.ToLower(kv.Value), q) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched && len(d.ReqBody) > 0 && strings.Contains(strings.ToLower(string(d.ReqBody)), q) {
+			matched = true
+		}
+		if !matched && len(d.RespBody) > 0 && redact.Kind(d.Flow.ContentType, d.RespBody) != "image" &&
+			redact.Kind(d.Flow.ContentType, d.RespBody) != "binary" &&
+			strings.Contains(strings.ToLower(string(d.RespBody)), q) {
+			matched = true
+		}
+		if !matched {
+			for _, wf := range d.WSFrames {
+				if wf.Text != "" && strings.Contains(strings.ToLower(wf.Text), q) {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched {
+			ids = append(ids, d.Flow.ID)
+		}
+	}
+	return ids, nil
+}
+
+func (f *Fake) CaptureLeftoverRoots() []string {
+	c := f.capInit()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.leftovers)
+}
+
+func (f *Fake) RemoveCaptureLeftoverRoots() error {
+	c := f.capInit()
+	c.mu.Lock()
+	c.leftovers = nil
+	c.mu.Unlock()
+	f.emit(app.TopicCapture)
+	return nil
+}
+
+// SetCaptureLeftoverRoots sets leftover root hashes for UI/unit tests.
+func (f *Fake) SetCaptureLeftoverRoots(hashes []string) {
+	c := f.capInit()
+	c.mu.Lock()
+	c.leftovers = slices.Clone(hashes)
+	c.mu.Unlock()
+	f.emit(app.TopicCapture)
 }
 
 func (f *Fake) InstallCACert() error {

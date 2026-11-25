@@ -24,6 +24,7 @@ import (
 	"lanflow/internal/model"
 	"lanflow/internal/platform/atrust"
 	"lanflow/internal/platform/helper"
+	"lanflow/internal/platform/tailscale"
 	"lanflow/internal/profile"
 )
 
@@ -94,11 +95,12 @@ type Service struct {
 	bgMu    sync.Mutex
 	closing bool
 
-	stats   *statsStore   // 流量统计 (stats.go); its own lock
-	cores   coresState    // installed Mihomo versions and release lists (cores.go); its own lock
-	started time.Time     // when the service was created
-	fb      feedbackState // reports built for 反馈问题 and the automatic report (feedback.go); its own lock
-	capst   captureState  // HTTPS 选择性解密 (capture.go); its own locks
+	stats   *statsStore    // 流量统计 (stats.go); its own lock
+	cores   coresState     // installed Mihomo versions and release lists (cores.go); its own lock
+	started time.Time      // when the service was created
+	fb      feedbackState  // reports built for 反馈问题 and the automatic report (feedback.go); its own lock
+	capst   captureState   // HTTPS 选择性解密 (capture.go); its own locks
+	tsb     tsBuiltinState // 内置 Tailscale (tailscale_builtin.go); its own lock
 }
 
 // state is everything the reads return. Every slice/map handed out is copied.
@@ -174,15 +176,18 @@ type state struct {
 
 	coreBin       string // resolved binary ("" when missing)
 	probePort     int
-	weSetProxy    bool        // Lanflow pointed the system proxy at itself
-	tunRunner     bool        // the manager currently uses the helper runner
-	rootStoppedAt time.Time   // when a helper-run (root) core last went away; see portwait.go
-	stray         *strayRun   // a core of the previous run found at start (takeover.go)
-	helperOK      bool        // helper.Check passed at last check
-	helperStale   bool        // last Check: installed helper of another version/protocol
-	helperSlow    bool        // last Check timed out: the helper may be there but slow to answer
-	runningTUN    bool        // the running config has TUN enabled
-	coexist       atrust.Info // aTrust found beside Lanflow (coexist.go)
+	weSetProxy    bool           // Lanflow pointed the system proxy at itself
+	tunRunner     bool           // the manager currently uses the helper runner
+	rootStoppedAt time.Time      // when a helper-run (root) core last went away; see portwait.go
+	stray         *strayRun      // a core of the previous run found at start (takeover.go)
+	helperOK      bool           // helper.Check passed at last check
+	helperStale   bool           // last Check: installed helper of another version/protocol
+	helperSlow    bool           // last Check timed out: the helper may be there but slow to answer
+	runningTUN    bool           // the running config has TUN enabled
+	coexist       atrust.Info    // aTrust found beside Lanflow (coexist.go)
+	tailscale     tailscale.Info // Tailscale found beside Lanflow (tailscale.go)
+	tsMisses      int            // detections in a row that missed Tailscale while its layer is on
+	tsNotified    bool           // the 「检测到 Tailscale」 toast was shown in this run
 	lastAutoStart time.Time
 	autoFail      map[string]autoUpdateFailure // subscription ID → failed auto updates (subs.go)
 	youDone       bool                         // You() fetched (or being fetched) for this start
@@ -344,6 +349,7 @@ func (s *Service) run() {
 	s.goBackground(s.watchSystem)
 	s.goBackground(s.configSyncLoop)
 	s.goBackground(s.watchCoexist)
+	s.goBackground(s.watchTailscale)
 	s.goBackground(s.bootstrap)
 	s.goBackground(s.coreUpdateLoop)
 	s.goBackground(func() { s.stats.loop(s.rootCtx) })
@@ -701,6 +707,16 @@ func copyBundledGeo(src, dst string) {
 
 // ---- reads ----
 
+func visibleGroupCount(groups []model.ProxyGroup) int {
+	n := 0
+	for _, g := range groups {
+		if !g.Hidden && g.Name != "GLOBAL" {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Service) Status() model.Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -716,6 +732,9 @@ func (s *Service) Status() model.Status {
 		}
 	}
 	st.ShowProxyHint = st.Core == model.CoreRunning && !st.SystemProxy && !s.state.hintDone
+	st.GroupCount = visibleGroupCount(s.state.proxies.Groups)
+	st.RuleCount = len(s.state.rules)
+	st.OverrideCount = len(s.state.overrides.List)
 	return st
 }
 
@@ -920,6 +939,7 @@ func copySettings(in model.Settings) model.Settings {
 	out.Sniffer.SkipDomain = append([]string(nil), in.Sniffer.SkipDomain...)
 	out.Sniffer.SkipDstAddress = append([]string(nil), in.Sniffer.SkipDstAddress...)
 	out.ATrust = in.ATrust.Clone()
+	out.Tailscale = in.Tailscale.Clone()
 	out.Advanced = in.Advanced.Clone()
 	out.UI = copyUIState(in.UI)
 	out.ConnHiddenColumns = append([]string(nil), in.ConnHiddenColumns...)

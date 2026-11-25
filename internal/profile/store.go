@@ -250,6 +250,45 @@ func (s *store) contentPath(id string) string {
 	return filepath.Join(s.dir, profilesDir, id+".yaml")
 }
 
+// aggregatePath is where an aggregate subscription's spec is kept, next
+// to its generated content.
+func (s *store) aggregatePath(id string) string {
+	return filepath.Join(s.dir, profilesDir, id+".aggregate.json")
+}
+
+func (s *store) aggregateSpec(id string) (model.AggregateSpec, bool) {
+	if !validID(id) {
+		return model.AggregateSpec{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := os.ReadFile(s.aggregatePath(id))
+	if err != nil {
+		return model.AggregateSpec{}, false
+	}
+	var spec model.AggregateSpec
+	if json.Unmarshal(data, &spec) != nil {
+		return model.AggregateSpec{}, false
+	}
+	return spec, true
+}
+
+func (s *store) setAggregateSpec(id string, spec model.AggregateSpec) error {
+	if !validID(id) {
+		return fmt.Errorf("订阅 ID 无效：%q", id)
+	}
+	data, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.find(id) < 0 {
+		return fmt.Errorf("订阅不存在（%s），可能已被删除", id)
+	}
+	return atomicWrite(s.aggregatePath(id), append(data, '\n'))
+}
+
 func (s *store) overridePath(key string) string {
 	return filepath.Join(s.dir, overridesDir, key+".yaml")
 }
@@ -347,6 +386,7 @@ func (s *store) delete(id string) error {
 	// The index is authoritative; leftover files are harmless, so errors
 	// removing them are ignored.
 	_ = os.Remove(s.contentPath(id))
+	_ = os.Remove(s.aggregatePath(id))
 	_ = os.Remove(s.overridePath(id))
 	// The subscription's own (legacy) override entry goes with it.
 	if i := s.findOverride(id); i >= 0 {

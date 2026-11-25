@@ -68,22 +68,28 @@ func TestComposeCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := toStrings(doc["rules"])
-	// order: capture (apps, then domains) → coexist domains/ranges → custom
+	// order: QUIC UDP/443 REJECT + capture TCP (apps, then domains) → coexist domains/ranges → custom
 	// → IPv6 reject → subscription: a selected corp host is captured and its
 	// return leg then meets the coexist DIRECT rule
-	if !strings.HasPrefix(rules[2], "DOMAIN-SUFFIX,corp.example,DIRECT") {
-		t.Fatalf("coexist not after capture: %v", rules[:3])
+	if !strings.HasPrefix(rules[4], "DOMAIN-SUFFIX,corp.example,DIRECT") {
+		t.Fatalf("coexist not after capture: %v", rules[:5])
 	}
-	if !strings.HasPrefix(rules[0], "AND,((RULE-SET,lanflow-mitm-app-0),") || !strings.HasSuffix(rules[0], ",LANFLOW-MITM-abcd-A0") {
-		t.Fatalf("app rule: %s", rules[0])
+	if !strings.HasPrefix(rules[0], "AND,((RULE-SET,lanflow-mitm-app-0),") || !strings.Contains(rules[0], "(NETWORK,UDP),(DST-PORT,443)") || !strings.HasSuffix(rules[0], ",REJECT") {
+		t.Fatalf("quic app rule: %s", rules[0])
 	}
-	if !strings.HasPrefix(rules[1], "AND,((RULE-SET,lanflow-mitm-sel),(NOT,((IN-NAME,lanflow-mitm-up))),(NETWORK,TCP),(DST-PORT,80/443/8443),(OR,((SRC-IP-CIDR,127.0.0.0/8),(SRC-IP-CIDR,::1/128),(IN-TYPE,TUN))),(NOT,((IP-CIDR6,::/0,no-resolve))),(NOT,((RULE-SET,lanflow-mitm-bypass)))),LANFLOW-MITM-abcd") {
-		t.Fatalf("domain rule: %s", rules[1])
+	if !strings.HasPrefix(rules[1], "AND,((RULE-SET,lanflow-mitm-sel),(NOT,((IN-NAME,lanflow-mitm-up))),(NETWORK,UDP),(DST-PORT,443),") || !strings.HasSuffix(rules[1], ",REJECT") {
+		t.Fatalf("quic domain rule: %s", rules[1])
 	}
-	if rules[3] != "DOMAIN,custom.com,DIRECT" || rules[4] != ipv6RejectRule {
-		t.Fatalf("custom / ipv6: %v", rules[3:5])
+	if !strings.HasPrefix(rules[2], "AND,((RULE-SET,lanflow-mitm-app-0),") || !strings.HasSuffix(rules[2], ",LANFLOW-MITM-abcd-A0") {
+		t.Fatalf("app rule: %s", rules[2])
 	}
-	for _, r := range rules[3:] {
+	if !strings.HasPrefix(rules[3], "AND,((RULE-SET,lanflow-mitm-sel),(NOT,((IN-NAME,lanflow-mitm-up))),(NETWORK,TCP),(DST-PORT,80/443/8443),(OR,((SRC-IP-CIDR,127.0.0.0/8),(SRC-IP-CIDR,::1/128),(IN-TYPE,TUN))),(NOT,((IP-CIDR6,::/0,no-resolve))),(NOT,((RULE-SET,lanflow-mitm-bypass)))),LANFLOW-MITM-abcd") {
+		t.Fatalf("domain rule: %s", rules[3])
+	}
+	if rules[5] != "DOMAIN,custom.com,DIRECT" || rules[6] != ipv6RejectRule {
+		t.Fatalf("custom / ipv6: %v", rules[5:7])
+	}
+	for _, r := range rules[5:] {
 		if strings.Contains(strings.ToUpper(r), "LANFLOW-MITM") {
 			t.Fatalf("reference kept: %s", r)
 		}
@@ -273,17 +279,23 @@ func TestComposeCapturePrivate(t *testing.T) {
 	}
 	rules := toStrings(doc["rules"])
 	if rules[0] != "PROCESS-NAME,aTrustAgent,DIRECT" {
-		t.Fatalf("VPN process not first: %v", rules[:4])
+		t.Fatalf("VPN process not first: %v", rules[:6])
 	}
-	lan, rest := rules[1], rules[2]
+	qlan, qrest, lan, rest := rules[1], rules[2], rules[3], rules[4]
+	if !strings.HasPrefix(qlan, "AND,((RULE-SET,lanflow-mitm-sel-lan),") || !strings.Contains(qlan, "(NETWORK,UDP),(DST-PORT,443)") || strings.Contains(qlan, "lanflow-mitm-private") || !strings.HasSuffix(qlan, ",REJECT") {
+		t.Fatalf("quic lan rule: %s", qlan)
+	}
+	if !strings.HasPrefix(qrest, "AND,((RULE-SET,lanflow-mitm-sel),") || !strings.Contains(qrest, "(NETWORK,UDP),(DST-PORT,443)") || !strings.Contains(qrest, "(NOT,((RULE-SET,lanflow-mitm-private)))") || !strings.HasSuffix(qrest, ",REJECT") {
+		t.Fatalf("quic domain rule: %s", qrest)
+	}
 	if !strings.HasPrefix(lan, "AND,((RULE-SET,lanflow-mitm-sel-lan),") || strings.Contains(lan, "lanflow-mitm-private") || !strings.Contains(lan, "lanflow-mitm-bypass") {
 		t.Fatalf("lan rule: %s", lan)
 	}
 	if !strings.HasPrefix(rest, "AND,((RULE-SET,lanflow-mitm-sel),") || !strings.Contains(rest, "(NOT,((RULE-SET,lanflow-mitm-private)))") {
 		t.Fatalf("domain rule: %s", rest)
 	}
-	if !strings.HasPrefix(rules[3], "DOMAIN-SUFFIX,corp.example,DIRECT") {
-		t.Fatalf("coexist domain not after capture: %v", rules[:5])
+	if !strings.HasPrefix(rules[5], "DOMAIN-SUFFIX,corp.example,DIRECT") {
+		t.Fatalf("coexist domain not after capture: %v", rules[:7])
 	}
 	rp := doc["rule-providers"].(map[string]any)
 	if got := toStrings(rp["lanflow-mitm-sel-lan"].(map[string]any)["payload"]); len(got) != 1 || got[0] != "DOMAIN,portal.test.za.biz" {
@@ -333,5 +345,45 @@ func TestComposeCaptureFindProcess(t *testing.T) {
 	in.Capture = Capture{}
 	if got := mode(in); got != "" {
 		t.Errorf("no capture: %q", got)
+	}
+}
+
+func TestComposeCaptureQUIC(t *testing.T) {
+	t.Parallel()
+	quicRules := func(in Input) []string {
+		out, err := compose(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		yaml.Unmarshal(out.YAML, &doc)
+		var q []string
+		for _, r := range toStrings(doc["rules"]) {
+			if strings.Contains(r, "(NETWORK,UDP),(DST-PORT,443)") && strings.HasSuffix(r, ",REJECT") {
+				q = append(q, r)
+			}
+		}
+		return q
+	}
+
+	// Default Ports ("") expands to 80/443/8443 -> includes 443.
+	in := captureInput()
+	in.Capture.Ports = ""
+	if q := quicRules(in); len(q) != 2 {
+		t.Fatalf("default ports expected 2 QUIC reject rules, got %v", q)
+	}
+
+	// Range containing 443.
+	in = captureInput()
+	in.Capture.Ports = "400-500"
+	if q := quicRules(in); len(q) != 2 {
+		t.Fatalf("range 400-500 expected 2 QUIC reject rules, got %v", q)
+	}
+
+	// Ports without 443 -> no QUIC reject rule emitted.
+	in = captureInput()
+	in.Capture.Ports = "80/8443"
+	if q := quicRules(in); len(q) != 0 {
+		t.Fatalf("ports 80/8443 expected 0 QUIC reject rules, got %v", q)
 	}
 }

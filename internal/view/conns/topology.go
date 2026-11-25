@@ -79,6 +79,25 @@ type topology struct {
 // topoIconSize is the edge of a process node's icon, in DIPs.
 const topoIconSize = 14
 
+// topologyCaptureChains replaces the internal LANFLOW-MITM-* chain on
+// folded capture connections with the paired return leg's real chain.
+func topologyCaptureChains(conns []model.Connection) []model.Connection {
+	var out []model.Connection
+	for i, cn := range conns {
+		if !cn.CaptureLeg || len(cn.CaptureReturnChains) == 0 {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(conns)
+		}
+		out[i].Chains = cn.CaptureReturnChains
+	}
+	if out == nil {
+		return conns
+	}
+	return out
+}
+
 // topology draws the 拓扑 view under the header.
 func (p *Page) topology(c *ui.Context, t *ui.Theme, active, closed []model.Connection) {
 	tp := &p.topo
@@ -87,6 +106,7 @@ func (p *Page) topology(c *ui.Context, t *ui.Theme, active, closed []model.Conne
 		src = append(append(make([]model.Connection, 0, len(active)+len(closed)), active...), closed...)
 	}
 	conns := p.filter(src)
+	conns = topologyCaptureChains(conns)
 	if len(conns) == 0 {
 		tp.graph = nil
 		if strings.TrimSpace(p.query) != "" {

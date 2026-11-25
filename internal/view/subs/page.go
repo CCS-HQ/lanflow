@@ -31,6 +31,7 @@ type Page struct {
 
 	imp  importDialog
 	edit editDialog
+	agg  aggEditor // the aggregate subscription editor, shown instead of the table
 	raw  rawDialog
 	// rawBig: 查看配置 fills the window (its 放大 button), kept for the next one.
 	rawBig bool
@@ -87,9 +88,19 @@ func (p *Page) View(c *ui.Context) {
 	p.mu.Lock()
 	switching, updating := p.switching, p.updating
 	p.mu.Unlock()
-	switch arg := p.e.Arg(env.Subs); arg {
-	case "import-file":
+	switch arg := p.e.Arg(env.Subs); {
+	case arg == "import-file":
 		p.importFile()
+	case arg == "aggregate":
+		p.openAggregate(nil)
+	case strings.HasPrefix(arg, "aggregate:"):
+		// "aggregate:<id>": the editor of that aggregate subscription
+		// ("aggregate" alone: a new one)
+		for _, s := range subs {
+			if s.ID == strings.TrimPrefix(arg, "aggregate:") && s.Source == model.SourceAggregate {
+				p.openAggregate(&s)
+			}
+		}
 	default:
 		// "import-url", or a deep link's "import-url:<url>[\n<name>]": the
 		// dialog opens prefilled; nothing imports by itself (docs/design.md §6.1).
@@ -99,6 +110,11 @@ func (p *Page) View(c *ui.Context) {
 				p.imp.url, p.imp.name = u, name
 			}
 		}
+	}
+
+	if p.agg.open {
+		p.aggregateView(c)
+		return
 	}
 
 	k.Header(c, i18n.T("订阅"), "", func() {
@@ -125,6 +141,10 @@ func (p *Page) View(c *ui.Context) {
 			if m.Item(i18n.T("从文件导入…")).Chosen() {
 				p.importFile()
 			}
+			m.Separator()
+			if m.Item(i18n.T("新建聚合订阅…")).Chosen() {
+				p.openAggregate(nil)
+			}
 		}).Label(i18n.T("导入"))
 	})
 	if len(subs) > 0 && c.Shortcut(ui.Cmd, ui.KeyR) {
@@ -138,6 +158,9 @@ func (p *Page) View(c *ui.Context) {
 			}
 			if ui.Button(c, i18n.T("从文件导入")).Clicked() {
 				p.importFile()
+			}
+			if ui.Button(c, i18n.T("新建聚合订阅")).Clicked() {
+				p.openAggregate(nil)
 			}
 		})
 		p.dialogs(c)
@@ -267,8 +290,11 @@ func (p *Page) cell(c *ui.Context, s model.Subscription, col string, switching s
 		})
 	case "source":
 		src := i18n.T("文件")
-		if s.Source == "url" {
+		switch s.Source {
+		case "url":
 			src = i18n.T("链接")
+		case model.SourceAggregate:
+			src = i18n.T("聚合")
 		}
 		ui.Text(c, src).FontSize(12).TextColor(t.TextMuted)
 	case "usage":
@@ -337,13 +363,20 @@ func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, s model.Subscription) {
 		p.use(sub)
 	}
 	update := i18n.T("更新")
-	if sub.Source != "url" {
+	switch sub.Source {
+	case "file":
 		update = i18n.T("更新（重新读取文件）")
+	case model.SourceAggregate:
+		update = i18n.T("更新（重新下载来源并生成）")
 	}
 	if m.Item(update).Disabled(sub.Updating).Chosen() {
 		p.update(sub)
 	}
-	if m.Item(i18n.T("编辑…")).Chosen() {
+	if sub.Source == model.SourceAggregate {
+		if m.Item(i18n.T("编辑聚合…")).Chosen() {
+			p.openAggregate(&sub)
+		}
+	} else if m.Item(i18n.T("编辑…")).Chosen() {
 		p.edit = editDialog{open: true, id: sub.ID, name: sub.Name, url: sub.URL, isURL: sub.Source == "url",
 			auto: autoIndex(sub.AutoUpdateHours), ua: sub.UserAgent, viaProxy: sub.ViaProxy, timeout: timeoutText(sub.TimeoutSec)}
 	}
@@ -400,7 +433,7 @@ func (p *Page) askDelete(s model.Subscription) {
 // is not toasted again.
 func (p *Page) update(s model.Subscription) {
 	ok := i18n.Tf("已更新「%s」", s.Name)
-	if s.Source != "url" {
+	if s.Source == "file" {
 		ok = i18n.Tf("已重新读取「%s」", s.Name)
 	}
 	p.e.Run(func() error {

@@ -122,10 +122,23 @@ func TestUserPipeSDDL(t *testing.T) {
 		if err != nil {
 			t.Fatalf("dial #%d: %v", i+1, err)
 		}
+		// Wait for the server to accept and close this instance before
+		// closing it: a client that disconnects before ConnectNamedPipe
+		// returns makes go-winio drop the connection (ERROR_NO_DATA) and
+		// wait for another, so the accept loop would never see three.
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, err := c.Read(make([]byte, 1)); err == nil {
+			t.Fatalf("read #%d: got data, want the server's close", i+1)
+		}
 		_ = c.Close()
 	}
-	if err := <-acceptErr; err != nil {
-		t.Fatalf("Accept failed: %v", err)
+	select {
+	case err := <-acceptErr:
+		if err != nil {
+			t.Fatalf("Accept failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the server did not accept all three connections")
 	}
 }
 

@@ -30,6 +30,7 @@ import (
 type Fake struct {
 	mu             sync.Mutex
 	appLogsCleared bool
+	tsKey          string // SetTailscaleAuthKey
 	st             model.Status
 	up, down       []int64
 	px             model.ProxySnapshot
@@ -45,6 +46,7 @@ type Fake struct {
 	custom             []model.CustomRule
 	manualNodes        []model.ManualNode
 	chains             []model.ProxyChain
+	aggs               map[string]model.AggregateSpec // aggregate subscriptions' specs (aggregate.go)
 	provs              []model.RuleProvider
 	pprovs             []model.ProxyProvider
 	set                model.Settings
@@ -284,7 +286,7 @@ func (f *Fake) Tick() {
 		}
 	}
 	f.mu.Unlock()
-	f.emit(app.TopicTraffic, app.TopicStatus, app.TopicConns, app.TopicLogs, app.TopicExits)
+	f.emit(app.TopicTraffic, app.TopicMetrics, app.TopicConns, app.TopicLogs, app.TopicExits)
 }
 
 func (f *Fake) emit(ts ...app.Topic) {
@@ -305,7 +307,21 @@ func (f *Fake) wait() { time.Sleep(f.Delay) }
 
 // ---- reads ----
 
-func (f *Fake) Status() model.Status { f.mu.Lock(); defer f.mu.Unlock(); return f.st }
+func (f *Fake) Status() model.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.st
+	groups := 0
+	for _, g := range f.px.Groups {
+		if !g.Hidden && g.Name != "GLOBAL" {
+			groups++
+		}
+	}
+	st.GroupCount = groups
+	st.RuleCount = len(f.rules)
+	st.OverrideCount = len(f.ovl)
+	return st
+}
 func (f *Fake) TrafficHistory() ([]int64, []int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -955,7 +971,7 @@ func (f *Fake) UpdateSubscription(id string) error {
 func (f *Fake) UpdateAllSubscriptions() error {
 	var errs []string
 	for _, s := range f.Subscriptions() {
-		if s.Source == "url" {
+		if s.Source == "url" || s.Source == model.SourceAggregate {
 			if err := f.UpdateSubscription(s.ID); err != nil {
 				errs = append(errs, err.Error())
 			}
@@ -2007,4 +2023,37 @@ func (f *Fake) ClearSubscriptions() {
 	f.mu.Unlock()
 	f.emit(app.TopicSubs)
 	f.emit(app.TopicStatus)
+}
+
+// TailscaleReport implements app.API.
+func (f *Fake) TailscaleReport() model.TailscaleReport {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return model.TailscaleReport{Compat: f.set.TailscaleCompat, Config: f.set.Tailscale.Clone(), Builtin: f.set.TailscaleBuiltin, AuthKey: f.tsKey != "", State: f.st.Tailscale}
+}
+
+// SetTailscaleAuthKey implements app.API.
+func (f *Fake) SetTailscaleAuthKey(key string) error {
+	f.mu.Lock()
+	f.tsKey = key
+	f.mu.Unlock()
+	f.emit(app.TopicSettings)
+	return nil
+}
+
+// TailscaleAuthKeySet implements app.API.
+func (f *Fake) TailscaleAuthKeySet() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tsKey != ""
+}
+
+// LogoutTailscale implements app.API.
+func (f *Fake) LogoutTailscale() error {
+	f.mu.Lock()
+	f.set.TailscaleBuiltin.StateGen++
+	f.st.Tailscale.Builtin = model.TailscaleBuiltinState{State: model.TSStateNeedsLogin, Hostname: f.st.Tailscale.Builtin.Hostname}
+	f.mu.Unlock()
+	f.emit(app.TopicSettings, app.TopicStatus)
+	return nil
 }

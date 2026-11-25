@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,8 +64,9 @@ var TrustHooks = struct {
 	Remove  func(der []byte) error
 	Trusted func(leaf *x509.Certificate) bool
 	// Leftovers lists the Lanflow roots in the store other than keep.
-	Leftovers func(keep []byte) []string
-}{trust.Install, trust.Remove, trust.Trusted, trust.Leftovers}
+	Leftovers    func(keep []byte) []string
+	RemoveByHash func(sha1Hex string) error
+}{trust.Install, trust.Remove, trust.Trusted, trust.Leftovers, trust.RemoveByHash}
 
 const (
 	captureDir          = "capture"
@@ -80,22 +82,24 @@ const (
 type captureState struct {
 	opMu sync.Mutex // on/off, CA operations, agent restarts
 
-	mu        sync.Mutex
-	loaded    bool
-	set       model.CaptureSettings
-	enabled   bool
-	until     time.Time
-	run       *captureRun
-	caPEM     []byte
-	caCert    *x509.Certificate
-	trustLeaf *x509.Certificate
-	trusted   bool
-	flows     []model.CaptureFlow // by ID
-	index     map[int64]int
-	seq       int64
-	epoch     int64
-	err       string
-	restarts  []time.Time
+	mu               sync.Mutex
+	loaded           bool
+	set              model.CaptureSettings
+	enabled          bool
+	until            time.Time
+	run              *captureRun
+	caPEM            []byte
+	caCert           *x509.Certificate
+	trustLeaf        *x509.Certificate
+	trusted          bool
+	leftovers        []string
+	flows            []model.CaptureFlow // by ID
+	index            map[int64]int
+	seq              int64
+	epoch            int64
+	lastCountdownSec int64
+	err              string
+	restarts         []time.Time
 	// the automatic removal of the root failed removeFails times in a row
 	// and is not tried again before removeNext
 	removeFails int
@@ -415,7 +419,8 @@ func (s *Service) CaptureStatus() model.CaptureStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st := model.CaptureStatus{Enabled: c.enabled, Domains: len(c.set.Domains), Apps: len(c.set.Apps), Until: c.until,
-		AgentUp: c.run != nil, Flows: len(c.flows), Error: c.err, Settings: cloneCaptureSettings(c.set), FindProcess: true}
+		LeftoverRoots: slices.Clone(c.leftovers),
+		AgentUp:       c.run != nil, Flows: len(c.flows), Error: c.err, Settings: cloneCaptureSettings(c.set), FindProcess: true}
 	if strings.EqualFold(fpm, "off") {
 		st.FindProcess = false
 	}
@@ -477,6 +482,29 @@ func (s *Service) CaptureFlow(id int64) (model.CaptureFlowDetail, error) {
 		return d, err
 	}
 	return d, nil
+}
+
+// SearchCaptureBodies asks the capture agent to search request/response
+// headers, decoded bodies, and WebSocket text frames for query.
+func (s *Service) SearchCaptureBodies(query string) ([]int64, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, nil
+	}
+	c := &s.capst
+	c.mu.Lock()
+	r := c.run
+	c.mu.Unlock()
+	if r == nil {
+		return nil, i18n.Error("解密已关闭，没有可搜索的记录。")
+	}
+	var resp struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := r.call("GET", "/search?q="+url.QueryEscape(q), nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.IDs, nil
 }
 
 // ---- switch ----
@@ -982,6 +1010,10 @@ func (s *Service) capRefreshLeaf() error {
 // itself (docs/capture.md §6 旧证书扫描).
 func (s *Service) CaptureLeftoverRoots() []string {
 	s.capLoad()
+	return s.capRefreshLeftovers()
+}
+
+func (s *Service) capRefreshLeftovers() []string {
 	c := &s.capst
 	c.mu.Lock()
 	var keep []byte
@@ -989,7 +1021,41 @@ func (s *Service) CaptureLeftoverRoots() []string {
 		keep = c.caCert.Raw
 	}
 	c.mu.Unlock()
-	return TrustHooks.Leftovers(keep)
+	got := TrustHooks.Leftovers(keep)
+	c.mu.Lock()
+	changed := !slices.Equal(c.leftovers, got)
+	c.leftovers = got
+	c.mu.Unlock()
+	if changed {
+		s.em.emit(TopicCapture)
+	}
+	return slices.Clone(got)
+}
+
+// RemoveCaptureLeftoverRoots deletes leftover Lanflow roots (other than
+// the active root) from the user's trust store.
+func (s *Service) RemoveCaptureLeftoverRoots() (err error) {
+	defer func() { s.logOp("capture remove leftover roots", err) }()
+	s.capLoad()
+	c := &s.capst
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	c.mu.Lock()
+	var keep []byte
+	if c.caCert != nil {
+		keep = c.caCert.Raw
+	}
+	c.mu.Unlock()
+	for _, h := range TrustHooks.Leftovers(keep) {
+		if rerr := TrustHooks.RemoveByHash(h); rerr != nil && err == nil {
+			err = rerr
+		}
+	}
+	s.capRefreshLeftovers()
+	if err != nil {
+		return fmt.Errorf(i18n.T("清理旧根证书失败：%v"), err)
+	}
+	return nil
 }
 
 // InstallCACert creates the root when there is none (or it nears expiry)
@@ -1030,6 +1096,7 @@ func (s *Service) InstallCACert() (err error) {
 	c.trusted = TrustHooks.Trusted(c.trustLeaf)
 	trusted = c.trusted
 	c.mu.Unlock()
+	s.capRefreshLeftovers()
 	s.em.emit(TopicCapture)
 	if !trusted {
 		return i18n.Error("已请求安装根证书，但系统仍不信任它（可能被取消，或被设备管理策略禁止）。")
@@ -1076,6 +1143,7 @@ func (s *Service) RegenerateCA() (err error) {
 	c.trusted = TrustHooks.Trusted(c.trustLeaf)
 	c.mu.Unlock()
 	c.opMu.Unlock()
+	s.capRefreshLeftovers()
 	s.em.emit(TopicCapture)
 	if ierr != nil {
 		return fmt.Errorf(i18n.T("安装根证书失败：%v"), ierr)
@@ -1118,6 +1186,7 @@ func (s *Service) removeCALocked() error {
 	c.mu.Lock()
 	c.caPEM, c.caCert, c.trustLeaf, c.trusted = nil, nil, nil, false
 	c.mu.Unlock()
+	s.capRefreshLeftovers()
 	s.em.emit(TopicCapture)
 	return nil
 }
@@ -1143,6 +1212,7 @@ func (s *Service) ExportCACert(path string) error {
 func (s *Service) captureLoop() {
 	s.capLoad()
 	s.captureAutoRemove()
+	s.capRefreshLeftovers()
 	poll := time.NewTicker(capturePoll)
 	defer poll.Stop()
 	hourly := time.NewTicker(time.Hour)
@@ -1155,6 +1225,7 @@ func (s *Service) captureLoop() {
 		case <-hourly.C:
 			s.captureAutoRemove()
 			s.capRecheckTrust()
+			s.capRefreshLeftovers()
 		case <-poll.C:
 			s.captureTick()
 		}
@@ -1180,9 +1251,18 @@ func (s *Service) captureTick() {
 	}
 	c.mu.Lock()
 	ticking := c.enabled && !c.until.IsZero()
+	sec := time.Now().Unix()
+	countdownTick := false
+	if ticking && !s.background.Load() && !s.running() && sec != c.lastCountdownSec {
+		c.lastCountdownSec = sec
+		countdownTick = true
+	}
 	c.mu.Unlock()
-	if ticking {
-		s.em.emit(TopicCapture) // the countdown shown by the window and the tray
+	if countdownTick {
+		// While the core runs, TopicTraffic already redraws the foreground
+		// window every second; only tick the countdown on its own when the
+		// core is stopped and the window is visible.
+		s.em.emit(TopicMetrics)
 	}
 }
 
@@ -1367,15 +1447,19 @@ func (s *Service) captureAfterReload() {
 	}
 }
 
-// hideCaptureProxies removes the decrypting outbounds from a snapshot.
+// hideCaptureProxies removes Lanflow's internal outbounds from a snapshot:
+// the decrypting ones and the Tailscale one (profile.TailscaleOutbound).
 func hideCaptureProxies(p *model.ProxySnapshot) {
+	internal := func(n string) bool {
+		return strings.HasPrefix(n, profile.CaptureOutboundPrefix) || n == profile.TailscaleOutbound
+	}
 	for k := range p.Proxies {
-		if strings.HasPrefix(k, profile.CaptureOutboundPrefix) {
+		if internal(k) {
 			delete(p.Proxies, k)
 		}
 	}
 	for i := range p.Groups {
-		p.Groups[i].All = slices.DeleteFunc(p.Groups[i].All, func(n string) bool { return strings.HasPrefix(n, profile.CaptureOutboundPrefix) })
+		p.Groups[i].All = slices.DeleteFunc(p.Groups[i].All, internal)
 	}
 }
 

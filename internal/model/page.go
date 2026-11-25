@@ -37,11 +37,18 @@ func SameConnection(a, b Connection) bool {
 		a.Host != b.Host || a.DstIP != b.DstIP || a.Network != b.Network || a.Type != b.Type ||
 		a.Process != b.Process || a.ProcessPath != b.ProcessPath || a.Rule != b.Rule || a.RulePayload != b.RulePayload ||
 		a.SourceIP != b.SourceIP || a.SourcePort != b.SourcePort || a.RemoteDestination != b.RemoteDestination ||
-		a.CaptureLeg != b.CaptureLeg || !a.Start.Equal(b.Start) || !a.ClosedAt.Equal(b.ClosedAt) || len(a.Chains) != len(b.Chains) {
+		a.CaptureLeg != b.CaptureLeg || a.CaptureReturn != b.CaptureReturn ||
+		!a.Start.Equal(b.Start) || !a.ClosedAt.Equal(b.ClosedAt) ||
+		len(a.Chains) != len(b.Chains) || len(a.CaptureReturnChains) != len(b.CaptureReturnChains) {
 		return false
 	}
 	for i := range a.Chains {
 		if a.Chains[i] != b.Chains[i] {
+			return false
+		}
+	}
+	for i := range a.CaptureReturnChains {
+		if a.CaptureReturnChains[i] != b.CaptureReturnChains[i] {
 			return false
 		}
 	}

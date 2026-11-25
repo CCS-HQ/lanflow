@@ -16,6 +16,7 @@ import (
 var plainSettings = strings.Fields(`
 	OpenAtLogin SilentStart CloseToTray Appearance Language Bypass
 	ATrustCompat ATrust.Always ATrust.CorpDomains ATrust.DirectDomains ATrust.CorpDNS ATrust.ExcludeCIDRs ATrust.DirectCIDRs
+	TailscaleCompat Tailscale.Domains Tailscale.Routes Tailscale.DNS
 	ProbeExits Mode HideTraySpeed TraySpeed TrayGraph TrayNode TrayMode GlobalShortcut DisableUpdateCheck
 	LogLevel CoreAutoCheck MainGroup DelayURL DelayTimeoutMs DisconnectOnSwitch
 	Sniffer.Enable Sniffer.TakeOver Sniffer.HTTP Sniffer.TLS Sniffer.QUIC Sniffer.HTTPPorts Sniffer.TLSPorts Sniffer.QUICPorts
@@ -191,5 +192,28 @@ func TestApplyPatch(t *testing.T) {
 	}
 	if next, _ := apply(`{"DownloadMirror":"https://x/"}`, false); next.DownloadMirror != "https://x/" {
 		t.Errorf("DownloadMirror = %q", next.DownloadMirror)
+	}
+}
+
+// TestPatchTailscaleValidated: agents maintain the Tailscale lists through
+// PatchSettings; an invalid entry is refused naming it, a valid patch
+// goes through.
+func TestPatchTailscaleValidated(t *testing.T) {
+	cur := model.Settings{TailscaleCompat: true}
+	next, changed, err := applyPatch(cur, json.RawMessage(`{"Tailscale":{"Domains":["lab.example.net"],"Routes":["10.9.0.0/16"],"DNS":["10.9.0.53"]}}`), true)
+	if err != nil || len(changed) != 1 || changed[0] != "Tailscale" || next.Tailscale.Routes[0] != "10.9.0.0/16" {
+		t.Fatalf("valid patch: %v %v %+v", err, changed, next.Tailscale)
+	}
+	for _, bad := range []string{
+		`{"Tailscale":{"Routes":["0.0.0.0/0"]}}`,
+		`{"Tailscale":{"Domains":["not a domain"]}}`,
+		`{"Tailscale":{"DNS":["fd7a:115c:a1e0::53"]}}`,
+	} {
+		if _, _, err := applyPatch(cur, json.RawMessage(bad), true); err == nil || !strings.Contains(err.Error(), "Tailscale.") {
+			t.Errorf("%s: err = %v", bad, err)
+		}
+	}
+	if next, _, err := applyPatch(cur, json.RawMessage(`{"TailscaleCompat":false}`), true); err != nil || next.TailscaleCompat {
+		t.Fatalf("switch: %v", err)
 	}
 }

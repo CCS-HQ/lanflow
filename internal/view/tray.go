@@ -119,15 +119,32 @@ func (tr *tray) destroy() {
 func (tr *tray) changed(t app.Topic) {
 	switch t {
 	case app.TopicTraffic:
-		// Every second: only the speed beside the icon and the graph can
-		// have changed.
+		// Every second: only the speed beside the icon, the status line,
+		// tooltip and the graph can have changed.
 		st := tr.h.hostAPI().Status()
 		tr.setTitle(st)
 		tr.updateGraph()
-		if runtime.GOOS == "windows" {
-			tr.setToolTip(st, tr.h.hostAPI().CaptureStatus().Enabled, false)
+		tr.mu.Lock()
+		menu := tr.menu
+		capOn := tr.look.Capture
+		tr.mu.Unlock()
+		if menu != nil {
+			if it := menu.ItemByID("status"); it != nil {
+				it.SetLabel(statusLine(st))
+			}
 		}
-	case app.TopicStatus, app.TopicProxies, app.TopicSubs, app.TopicSettings, app.TopicCapture:
+		if runtime.GOOS == "windows" {
+			tr.setToolTip(st, capOn, false)
+		}
+	case app.TopicCapture:
+		capOn := tr.h.hostAPI().CaptureStatus().Enabled
+		tr.mu.Lock()
+		changed := capOn != tr.look.Capture || tr.menu == nil
+		tr.mu.Unlock()
+		if changed {
+			tr.refresh(false)
+		}
+	case app.TopicStatus, app.TopicProxies, app.TopicSubs, app.TopicSettings:
 		tr.refresh(false)
 	}
 }
@@ -202,7 +219,7 @@ func (tr *tray) refresh(force bool) {
 		tr.mu.Lock()
 		tr.menu = menu
 		tr.mu.Unlock()
-		if runtime.GOOS != "windows" {
+		if tr.t != nil && runtime.GOOS != "windows" {
 			tr.t.SetMenu(menu)
 		}
 		tr.setToolTip(st, capOn, true)

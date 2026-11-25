@@ -19,6 +19,7 @@ import (
 	"lanflow/internal/platform/helper"
 	"lanflow/internal/platform/sysdns"
 	"lanflow/internal/platform/sysproxy"
+	"lanflow/internal/platform/tailscale"
 	"lanflow/internal/profile"
 )
 
@@ -573,11 +574,30 @@ type fakeStore struct {
 	rules       []model.CustomRule
 	manualNodes []model.ManualNode
 	chains      []model.ProxyChain
+	aggs        map[string]model.AggregateSpec
 	nextID      int
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{content: map[string][]byte{}}
+	return &fakeStore{content: map[string][]byte{}, aggs: map[string]model.AggregateSpec{}}
+}
+
+func (s *fakeStore) AggregateSpec(id string) (model.AggregateSpec, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	spec, ok := s.aggs[id]
+	return spec.Clone(), ok
+}
+func (s *fakeStore) SetAggregateSpec(id string, spec model.AggregateSpec) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, x := range s.subs {
+		if x.ID == id {
+			s.aggs[id] = spec.Clone()
+			return nil
+		}
+	}
+	return errors.New("no such subscription")
 }
 
 func (s *fakeStore) List() []model.Subscription {
@@ -643,6 +663,7 @@ func (s *fakeStore) Delete(id string) error {
 		}
 	}
 	delete(s.content, id)
+	delete(s.aggs, id)
 	s.removeOverride(id)
 	return nil
 }
@@ -827,6 +848,9 @@ type fakeProf struct {
 	fetched  profile.Fetched
 	fetchErr error
 	inputs   []profile.Input
+	// raw answers FetchRaw by URL (an aggregate subscription's sources);
+	// a URL not in it fails.
+	raw map[string]profile.Fetched
 }
 
 func (p *fakeProf) Compose(in profile.Input) (profile.Output, error) {
@@ -858,6 +882,15 @@ func (p *fakeProf) Fetch(context.Context, *http.Client, string, string) (profile
 	defer p.mu.Unlock()
 	return p.fetched, p.fetchErr
 }
+func (p *fakeProf) FetchRaw(_ context.Context, _ *http.Client, url, _ string) (profile.Fetched, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f, ok := p.raw[url]
+	if !ok {
+		return profile.Fetched{}, errors.New("HTTP 404")
+	}
+	return f, nil
+}
 func (p *fakeProf) CheckYAML(data []byte) error {
 	if !strings.Contains(string(data), "proxies") {
 		return errors.New("不是 Clash/Mihomo 格式的订阅")
@@ -883,6 +916,7 @@ type harness struct {
 	taken  map[int]bool // ports another program listens on
 	tunOf  string       // another client's TUN interface, "" for none
 	vpn    *fakeVPN
+	ts     *fakeTS
 }
 
 // fakeVPN is the aTrust detector.
@@ -897,6 +931,19 @@ func (f *fakeVPN) detect(context.Context, func(string) bool) atrust.Info {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	return f.info
+}
+
+// fakeTS is the Tailscale detector.
+type fakeTS struct {
+	mu   sync.Mutex
+	info tailscale.Info
+}
+
+func (f *fakeTS) set(i tailscale.Info) { f.mu.Lock(); f.info = i; f.mu.Unlock() }
+func (f *fakeTS) detect(context.Context, func(string) bool) tailscale.Info {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.info
 }
 
@@ -933,7 +980,7 @@ func newHarness(t testingT, prepare func(h *harness)) *harness {
 	dir := t.TempDir()
 	h := &harness{
 		ctrl: newFakeCtrl(), mgr: newFakeMgr(), core: &fakeCore{bin: "/fake/mihomo"},
-		sys: &fakeSys{}, dns: &fakeDNS{}, helper: &fakeHelper{}, stray: &fakeStray{}, loc: &fakeLoc{}, store: newFakeStore(), prof: &fakeProf{}, dir: dir, taken: map[int]bool{}, vpn: &fakeVPN{},
+		sys: &fakeSys{}, dns: &fakeDNS{}, helper: &fakeHelper{}, stray: &fakeStray{}, loc: &fakeLoc{}, store: newFakeStore(), prof: &fakeProf{}, dir: dir, taken: map[int]bool{}, vpn: &fakeVPN{}, ts: &fakeTS{},
 	}
 	sub, _ := h.store.Put(model.Subscription{Name: "测试机场", Source: "url", URL: "https://example.com/sub"})
 	_ = h.store.SetContent(sub.ID, []byte("proxies: []\n"))
@@ -951,6 +998,7 @@ func newHarness(t testingT, prepare func(h *harness)) *harness {
 		portInUse:  func(p int, _ bool) bool { return h.taken[p] },
 		otherTUN:   func(context.Context) (string, bool) { return h.tunOf, h.tunOf != "" },
 		vpnDetect:  h.vpn.detect,
+		tsDetect:   h.ts.detect,
 		stray:      h.stray,
 		diagCommands: func(context.Context) map[string]string {
 			return map[string]string{"routes.txt": "default 192.168.1.1 en0\nfetched https://sub.example.com/link/abc?token=zzz9"}

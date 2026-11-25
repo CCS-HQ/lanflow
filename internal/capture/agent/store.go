@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -10,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	"lanflow/internal/capture/redact"
 	"lanflow/internal/model"
 )
 
@@ -342,6 +346,95 @@ func (s *store) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.recs)
+}
+
+const bodySearchScanCap = 2 << 20
+
+// searchBodies scans request/response headers, decoded non-binary bodies (up
+// to 2 MiB each), and WebSocket text frames across all records in the ring
+// (including AES-256-GCM spilled segments).
+func (s *store) searchBodies(ctx context.Context, query string) []int64 {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil
+	}
+	s.mu.Lock()
+	ids := make([]int64, len(s.recs))
+	for i, r := range s.recs {
+		ids[i] = r.d.Flow.ID
+	}
+	s.mu.Unlock()
+
+	qBytes := []byte(q)
+	var hits []int64
+	for _, id := range ids {
+		if ctx != nil && ctx.Err() != nil {
+			return hits
+		}
+		d, ok := s.detail(id)
+		if !ok {
+			continue
+		}
+		if detailMatchesQuery(d, q, qBytes) {
+			hits = append(hits, id)
+		}
+	}
+	return hits
+}
+
+func detailMatchesQuery(d model.CaptureFlowDetail, q string, qBytes []byte) bool {
+	for _, kv := range d.ReqHeader {
+		if strings.Contains(strings.ToLower(kv.Key), q) || strings.Contains(strings.ToLower(kv.Value), q) {
+			return true
+		}
+	}
+	for _, kv := range d.RespHeader {
+		if strings.Contains(strings.ToLower(kv.Key), q) || strings.Contains(strings.ToLower(kv.Value), q) {
+			return true
+		}
+	}
+	if bodyContains(d.ReqBody, d.ReqHeader, "", qBytes) {
+		return true
+	}
+	if bodyContains(d.RespBody, d.RespHeader, d.Flow.ContentType, qBytes) {
+		return true
+	}
+	for _, f := range d.WSFrames {
+		if f.Text != "" && strings.Contains(strings.ToLower(f.Text), q) {
+			return true
+		}
+	}
+	return false
+}
+
+func bodyContains(raw []byte, hs []model.KV, fallbackCT string, qBytes []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	b, ok := redact.Decode(raw, headerVal(hs, "Content-Encoding"))
+	if !ok || len(b) == 0 {
+		return false
+	}
+	ct := headerVal(hs, "Content-Type")
+	if ct == "" {
+		ct = fallbackCT
+	}
+	if kind := redact.Kind(ct, b); kind == "image" || kind == "binary" {
+		return false
+	}
+	if len(b) > bodySearchScanCap {
+		b = b[:bodySearchScanCap]
+	}
+	return bytes.Contains(bytes.ToLower(b), qBytes)
+}
+
+func headerVal(hs []model.KV, name string) string {
+	for _, kv := range hs {
+		if strings.EqualFold(kv.Key, name) {
+			return kv.Value
+		}
+	}
+	return ""
 }
 
 // clear forgets everything and deletes the spill file.

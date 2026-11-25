@@ -50,6 +50,9 @@ type Status struct {
 	TotalUp, TotalDown int64 // since core start, bytes
 	Memory             int64 // core memory, bytes
 	Connections        int   // active connections
+	GroupCount         int   // visible proxy groups (excluding hidden and GLOBAL)
+	RuleCount          int   // active runtime rules
+	OverrideCount      int   // configured overrides
 
 	CurrentSubscription string // subscription ID in use, "" if none
 	HasSubscriptions    bool
@@ -61,6 +64,8 @@ type Status struct {
 
 	// ATrust is what the aTrust detection found (aTrust 兼容).
 	ATrust ATrustState
+	// Tailscale is what the Tailscale detection found (Tailscale 兼容).
+	Tailscale TailscaleState
 
 	// ImportPhase is where a running subscription import is (docs/design.md
 	// §6.1 下载 → 校验 → 完成): "" when none runs, ImportDownloading while
@@ -173,6 +178,14 @@ type Connection struct {
 	// capture agent or the agent's connection back into the core. The
 	// 抓包 page lists the decrypted requests instead.
 	CaptureLeg bool `json:",omitempty"`
+	// CaptureReturn marks the agent's return leg back into the core
+	// (inboundName == lanflow-mitm-up). Its bytes are already counted on
+	// the client-to-agent leg.
+	CaptureReturn bool `json:",omitempty"`
+	// CaptureReturnChains holds the real outbound chain of the paired
+	// return leg (e.g. ["节点选择", "东京 03"]), attached to the
+	// client-to-agent leg when folded.
+	CaptureReturnChains []string `json:",omitempty"`
 }
 
 // InnerType is the inbound type of the connection the core opens for a
@@ -513,6 +526,15 @@ type Settings struct {
 	// aTrust runs (route exclusion, DIRECT rules, proxy bypass); off by default.
 	ATrustCompat bool
 	ATrust       ATrustConfig // the user's lists for aTrust 兼容 (model/atrust.go)
+	// TailscaleCompat keeps the tailnet (100.64.0.0/10, MagicDNS, subnet
+	// routes) out of Lanflow's TUN, fake-ip and nodes while Tailscale runs;
+	// on by default.
+	TailscaleCompat bool
+	Tailscale       TailscaleConfig // the user's lists for Tailscale 兼容 (model/tailscale.go)
+	// TailscaleBuiltin makes the core itself a node of a tailnet (内置
+	// Tailscale, model/tailscale.go); off by default. Its auth key is in
+	// the keychain (API.SetTailscaleAuthKey), never here.
+	TailscaleBuiltin TailscaleBuiltin
 	// CaptureEnabled shows the 抓包 page and its entry points (sidebar,
 	// connection menu, tray) and allows HTTPS decryption; off by default.
 	// Turning it off also turns decryption off.

@@ -103,7 +103,7 @@ var privateKeys = map[string]bool{
 	"rules": true, "subrules": true, "ruleproviders": true, "payload": true,
 	"hosts": true, "nameserverpolicy": true, "fakeipfilter": true,
 	"skipdomain": true, "forcedomain": true, "bypass": true, "sites": true,
-	"ssidrules": true, "ssiddefaultsub": true, "atrust": true, "ui": true,
+	"ssidrules": true, "ssiddefaultsub": true, "atrust": true, "tailscale": true, "ui": true,
 	"agentgrants": true, "connhiddencolumns": true, "webdav": true, "customrules": true,
 	"authentication": true, "skipsrcaddress": true, "skipdstaddress": true,
 	"routeaddress": true, "routeexcludeaddress": true, "includeuid": true,

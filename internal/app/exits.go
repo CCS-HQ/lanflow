@@ -49,10 +49,20 @@ func buildRoutes(conns []model.Connection, snap model.ProxySnapshot, mode model.
 	order := []string{main}
 	stats := map[string]*routeStat{main: {}}
 	for _, c := range conns {
-		if len(c.Chains) == 0 || c.IsInner() {
-			continue // an INNER connection is the front hop of another one
+		if c.IsInner() || c.CaptureReturn {
+			continue // an INNER or capture-return connection is counted on its outer/client leg
 		}
-		g := c.Chains[0]
+		chains := c.Chains
+		if c.CaptureLeg {
+			if len(c.CaptureReturnChains) == 0 {
+				continue // never expose LANFLOW-MITM-* in the exit map
+			}
+			chains = c.CaptureReturnChains
+		}
+		if len(chains) == 0 {
+			continue
+		}
+		g := chains[0]
 		if g == "DIRECT" || g == "REJECT" || g == probeGroup {
 			continue
 		}
@@ -75,9 +85,13 @@ func buildRoutes(conns []model.Connection, snap model.ProxySnapshot, mode model.
 	for _, g := range order {
 		st := stats[g]
 		node := resolveNode(snap, g)
-		if st.hasNew && len(st.newest.Chains) > 0 {
+		newestChains := st.newest.Chains
+		if st.newest.CaptureLeg && len(st.newest.CaptureReturnChains) > 0 {
+			newestChains = st.newest.CaptureReturnChains
+		}
+		if st.hasNew && len(newestChains) > 0 {
 			// the connection knows the real final node (last chain entry)
-			node = st.newest.Chains[len(st.newest.Chains)-1]
+			node = newestChains[len(newestChains)-1]
 		}
 		info, ok := exits[node]
 		if !ok {

@@ -1240,6 +1240,51 @@
             "null"
           ]
         },
+        "tailscale": {
+          "additionalProperties": false,
+          "properties": {
+            "dns": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "domains": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "routes": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "tailscaleCompat": {
+          "type": "boolean"
+        },
         "trayGraph": {
           "type": "boolean"
         },

@@ -3,6 +3,7 @@ package trust
 import (
 	"bufio"
 	"bytes"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
@@ -54,6 +55,47 @@ func remove(der []byte) error {
 			return nil
 		}
 		return err
+	}
+	return nil
+}
+
+// findCerts returns DER bytes for Lanflow roots in the login keychain; tests
+// replace it.
+var findCerts = func() [][]byte {
+	out, err := exec.Command("/usr/bin/security", "find-certificate", "-a", "-c", "Lanflow Local CA", "-p", loginKeychain()).Output()
+	if err != nil {
+		return nil
+	}
+	var ders [][]byte
+	for len(out) > 0 {
+		var blk *pem.Block
+		blk, out = pem.Decode(out)
+		if blk == nil {
+			break
+		}
+		if blk.Type == "CERTIFICATE" && len(blk.Bytes) > 0 {
+			ders = append(ders, blk.Bytes)
+		}
+	}
+	return ders
+}
+
+func removeByHash(hash string) error {
+	want := strings.ToUpper(strings.TrimSpace(hash))
+	if want == "" {
+		return nil
+	}
+	for _, der := range findCerts() {
+		if strings.EqualFold(SHA1(der), want) {
+			return remove(der)
+		}
+	}
+	derr := run("/usr/bin/security", "delete-certificate", "-Z", want, loginKeychain())
+	if derr != nil {
+		if strings.Contains(derr.Error(), "could not be found") || strings.Contains(derr.Error(), "Unable to delete") {
+			return nil
+		}
+		return derr
 	}
 	return nil
 }

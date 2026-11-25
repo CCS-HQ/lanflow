@@ -1007,6 +1007,10 @@ func (a *Agent) Flows(since, epoch int64) ([]model.CaptureFlow, int64, int64, in
 
 func (a *Agent) Flow(id int64) (model.CaptureFlowDetail, bool) { return a.st.detail(id) }
 
+func (a *Agent) SearchBodies(ctx context.Context, query string) []int64 {
+	return a.st.searchBodies(ctx, query)
+}
+
 func (a *Agent) Clear() { a.st.clear() }
 
 func (a *Agent) Count() int { return a.st.count() }

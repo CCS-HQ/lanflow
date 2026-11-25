@@ -3,6 +3,7 @@ package profile
 import (
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -165,33 +166,44 @@ func applyCapture(c *composer, cp Capture) {
 		mapSet(rp, captureBypassSet, c.mark(inlineProvider(bypass)))
 	}
 
+	// ① selected ∧ UDP 443 → REJECT (forces QUIC fallback to TCP/HTTPS when 443 is captured)
 	// ② ¬return ∧ TCP ∧ port ∧ local source ∧ ¬bypass ∧ selected; the
 	// selection comes first so unselected connections stop there (an
 	// IP-CIDR in the bypass list would otherwise resolve every name).
 	common := "(NOT,((IN-NAME," + CaptureUpListener + "))),(NETWORK,TCP),(DST-PORT," + ports + ")," +
 		"(OR,((SRC-IP-CIDR,127.0.0.0/8),(SRC-IP-CIDR,::1/128),(IN-TYPE,TUN)))"
+	udpCommon := "(NOT,((IN-NAME," + CaptureUpListener + "))),(NETWORK,UDP),(DST-PORT,443)," +
+		"(OR,((SRC-IP-CIDR,127.0.0.0/8),(SRC-IP-CIDR,::1/128),(IN-TYPE,TUN)))"
 	if !cp.IPv6 {
 		// IPv6 is refused further down (ipv6RejectRule): keep literals out of
 		// the agent so the client falls back at once (docs/capture.md §13)
 		common += ",(NOT,((IP-CIDR6,::/0,no-resolve)))"
+		udpCommon += ",(NOT,((IP-CIDR6,::/0,no-resolve)))"
 	}
 	if len(bypass) > 0 {
 		common += ",(NOT,((RULE-SET," + captureBypassSet + ")))"
+		udpCommon += ",(NOT,((RULE-SET," + captureBypassSet + ")))"
 	}
 	// the private-network entries apply to every selection except the
 	// domain patterns allowed onto intranet destinations
 	lanCommon := common
+	udpLanCommon := udpCommon
 	if priv := captureRuleLines(cp.Private); len(priv) > 0 {
 		mapSet(rp, capturePrivSet, c.mark(inlineProvider(priv)))
 		common += ",(NOT,((RULE-SET," + capturePrivSet + ")))"
+		udpCommon += ",(NOT,((RULE-SET," + capturePrivSet + ")))"
 	}
-	var rules []*yaml.Node
+	rejectQUIC := portsContain(ports, 443)
+	var quicRules, rules []*yaml.Node
 	for i, a := range cp.Apps {
 		if len(a.Rules) == 0 {
 			continue
 		}
 		set := fmt.Sprintf("%s%d", captureAppSet, i)
 		mapSet(rp, set, c.mark(inlineProvider(a.Rules)))
+		if rejectQUIC {
+			quicRules = append(quicRules, c.mark(strNode("AND,((RULE-SET,"+set+"),"+udpCommon+"),REJECT")))
+		}
 		rules = append(rules, c.mark(strNode("AND,((RULE-SET,"+set+"),"+common+"),"+a.Outbound)))
 	}
 	if len(cp.Domains) > 0 && cp.Domain.Outbound != "" {
@@ -200,15 +212,44 @@ func applyCapture(c *composer, cp Capture) {
 		// the exemption the user asked for
 		if l := captureRuleLines(lan); len(l) > 0 {
 			mapSet(rp, captureSelLANSet, c.mark(inlineProvider(l)))
+			if rejectQUIC {
+				quicRules = append(quicRules, c.mark(strNode("AND,((RULE-SET,"+captureSelLANSet+"),"+udpLanCommon+"),REJECT")))
+			}
 			rules = append(rules, c.mark(strNode("AND,((RULE-SET,"+captureSelLANSet+"),"+lanCommon+"),"+cp.Domain.Outbound)))
 		}
 		if r := captureRuleLines(rest); len(r) > 0 {
 			mapSet(rp, captureSelSet, c.mark(inlineProvider(r)))
+			if rejectQUIC {
+				quicRules = append(quicRules, c.mark(strNode("AND,((RULE-SET,"+captureSelSet+"),"+udpCommon+"),REJECT")))
+			}
 			rules = append(rules, c.mark(strNode("AND,((RULE-SET,"+captureSelSet+"),"+common+"),"+cp.Domain.Outbound)))
 		}
 	}
 	rs := c.seq("rules")
-	rs.Content = append(rules, rs.Content...)
+	rs.Content = append(append(quicRules, rules...), rs.Content...)
+}
+
+// portsContain reports whether ports (Mihomo DST-PORT syntax, e.g.
+// "80/443/8443" or "400-500") includes target.
+func portsContain(ports string, target int) bool {
+	for _, part := range strings.Split(ports, "/") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if loStr, hiStr, isRange := strings.Cut(part, "-"); isRange {
+			lo, err1 := strconv.Atoi(strings.TrimSpace(loStr))
+			hi, err2 := strconv.Atoi(strings.TrimSpace(hiStr))
+			if err1 == nil && err2 == nil && lo <= target && target <= hi {
+				return true
+			}
+			continue
+		}
+		if p, err := strconv.Atoi(part); err == nil && p == target {
+			return true
+		}
+	}
+	return false
 }
 
 // splitAllowPrivate separates the selections allowed onto intranet
@@ -383,27 +424,8 @@ func scrubCaptureRefs(c *composer) []string {
 		}
 	}
 
-	// groups that collect proxies by themselves: exclude ours, appending to
-	// any exclude-filter already there (Mihomo separates regexes with `)
-	if gs := deref(mapGet(c.root, "proxy-groups")); gs != nil && gs.Kind == yaml.SequenceNode {
-		for _, it := range gs.Content {
-			m := deref(it)
-			if m == nil || m.Kind != yaml.MappingNode {
-				continue
-			}
-			if !truthy(mapGet(m, "include-all")) && !truthy(mapGet(m, "include-all-proxies")) && deref(mapGet(m, "filter")) == nil {
-				continue
-			}
-			const ex = "^" + CaptureOutboundPrefix
-			if old := deref(mapGet(m, "exclude-filter")); old != nil && old.Kind == yaml.ScalarNode && old.Value != "" {
-				if !strings.Contains(old.Value, ex) {
-					mapSet(m, "exclude-filter", strNode(old.Value+"`"+ex))
-				}
-			} else {
-				mapSet(m, "exclude-filter", strNode(ex))
-			}
-		}
-	}
+	// groups that collect proxies by themselves: exclude ours
+	excludeFromAutoGroups(c, "^"+CaptureOutboundPrefix)
 	return warns
 }
 

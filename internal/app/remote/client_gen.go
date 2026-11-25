@@ -271,6 +271,21 @@ func (cl *Client) SubscriptionRaw(id string) (res0 string, err error) {
 	return
 }
 
+func (cl *Client) AggregateSpec(id string) (res0 model.AggregateSpec, err error) {
+	err = cl.call("AggregateSpec", []any{id}, &res0)
+	return
+}
+
+func (cl *Client) PreviewAggregate(s model.Subscription, spec model.AggregateSpec) (res0 model.AggregatePreview, err error) {
+	err = cl.call("PreviewAggregate", []any{s, spec}, &res0)
+	return
+}
+
+func (cl *Client) SaveAggregate(s model.Subscription, spec model.AggregateSpec, use bool) (res0 model.Subscription, err error) {
+	err = cl.call("SaveAggregate", []any{s, spec, use}, &res0)
+	return
+}
+
 func (cl *Client) ManualNodes() (res0 []model.ManualNode) {
 	_ = cl.call("ManualNodes", nil, &res0)
 	return
@@ -615,6 +630,26 @@ func (cl *Client) ExportATrustConfig(path string) (err error) {
 	return
 }
 
+func (cl *Client) TailscaleReport() (res0 model.TailscaleReport) {
+	_ = cl.call("TailscaleReport", nil, &res0)
+	return
+}
+
+func (cl *Client) SetTailscaleAuthKey(key string) (err error) {
+	err = cl.call("SetTailscaleAuthKey", []any{key})
+	return
+}
+
+func (cl *Client) TailscaleAuthKeySet() (res0 bool) {
+	_ = cl.call("TailscaleAuthKeySet", nil, &res0)
+	return
+}
+
+func (cl *Client) LogoutTailscale() (err error) {
+	err = cl.call("LogoutTailscale", nil)
+	return
+}
+
 func (cl *Client) TestMirrors() (res0 []model.MirrorTest) {
 	_ = cl.call("TestMirrors", nil, &res0)
 	return
@@ -743,6 +778,11 @@ func (cl *Client) ClearCaptureFlows() (err error) {
 	return
 }
 
+func (cl *Client) SearchCaptureBodies(query string) (res0 []int64, err error) {
+	err = cl.call("SearchCaptureBodies", []any{query}, &res0)
+	return
+}
+
 func (cl *Client) SetCaptureRecording(on bool) (err error) {
 	err = cl.call("SetCaptureRecording", []any{on})
 	return
@@ -770,6 +810,16 @@ func (cl *Client) RegenerateCA() (err error) {
 
 func (cl *Client) RemoveCACert() (err error) {
 	err = cl.call("RemoveCACert", nil)
+	return
+}
+
+func (cl *Client) CaptureLeftoverRoots() (res0 []string) {
+	_ = cl.call("CaptureLeftoverRoots", nil, &res0)
+	return
+}
+
+func (cl *Client) RemoveCaptureLeftoverRoots() (err error) {
+	err = cl.call("RemoveCaptureLeftoverRoots", nil)
 	return
 }
 

@@ -72,15 +72,17 @@ type Page struct {
 	tab int
 
 	// immediate settings (常规 / 代理 / 内核)
-	port     field
-	portErr  string
-	geoURLs  [4]field
-	bypass   dialogText
-	atrust   atrustDialog // aTrust 兼容 › 配置… (atrust.go)
-	checking bool
-	saving   bool           // a settings save is running or queued; switches wait for it
-	caches   cacheState     // 缓存 row of 数据 (caches.go)
-	menuBar  menuBarPreview // 菜单栏 preview (menubar.go)
+	port      field
+	portErr   string
+	geoURLs   [4]field
+	bypass    dialogText
+	atrust    atrustDialog    // aTrust 兼容 › 配置… (atrust.go)
+	tailscale tailscaleDialog // Tailscale 兼容 › 配置… (tailscale.go)
+	tsBuiltin tsBuiltinDialog // 内置 Tailscale › 配置… (tailscale_builtin.go)
+	checking  bool
+	saving    bool           // a settings save is running or queued; switches wait for it
+	caches    cacheState     // 缓存 row of 数据 (caches.go)
+	menuBar   menuBarPreview // 菜单栏 preview (menubar.go)
 
 	// DNS (dns.go)
 	dns        dnsForm
@@ -204,7 +206,7 @@ func (p *Page) View(c *ui.Context) {
 				labels := i18n.Options(tabNames...)
 				for i, lbl := range labels {
 					active := p.tab == i
-					btn := ui.ButtonBase(c.Key("tab:"+tabKeys[i])).Grow(1).Basis(0).Height(28).Radius(7).
+					btn := ui.ButtonBase(c.Key("tab:" + tabKeys[i])).Grow(1).Basis(0).Height(28).Radius(7).
 						AlignItems(ui.Center).Justify(ui.Center).Label(lbl).Cursor(ui.CursorPointer)
 					if active {
 						btn.Background(t.Accent)
@@ -262,6 +264,8 @@ func (p *Page) View(c *ui.Context) {
 	})
 	p.bypassDialog(c, t, s)
 	p.atrustDialog(c, t, s)
+	p.tailscaleDialog(c, t, s)
+	p.tailscaleBuiltinDialog(c, t, s, st)
 	p.hostsDialog(c, t)
 	p.overrideEditor(c, t)
 	p.runtimeDialog(c, t)
@@ -617,6 +621,8 @@ func (p *Page) tunTab(c *ui.Context, t *ui.Theme, s model.Settings, st model.Sta
 			}
 		}
 		p.atrustRow(c, s, st)
+		p.tailscaleRow(c, s, st)
+		p.tailscaleBuiltinRow(c, s, st)
 	})
 	e.Kit.Section(c, i18n.T("进阶 TUN 参数"), "", func() {
 		e.Kit.Row(c, i18n.T("MTU、严格路由与排除网段"), i18n.T("在「高级」分栏中配置精细的虚拟网卡参数"), func() {

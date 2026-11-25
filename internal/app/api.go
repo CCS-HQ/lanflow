@@ -12,8 +12,9 @@ import "lanflow/internal/model"
 type Topic string
 
 const (
-	TopicStatus   Topic = "status"   // Status() changed (core state, switches, mode, speeds)
-	TopicTraffic  Topic = "traffic"  // TrafficHistory() got a new sample (every second while running)
+	TopicStatus   Topic = "status"   // Status() structural state changed (core state, switches, mode, ports, subscriptions, helper, counts)
+	TopicTraffic  Topic = "traffic"  // TrafficHistory() and live Up/Down speeds got a new sample (every second while running)
+	TopicMetrics  Topic = "metrics"  // live runtime metrics in Status() changed (Memory, Connections, TotalUp/TotalDown)
 	TopicProxies  Topic = "proxies"  // Proxies() changed (selection, delays, testing flags)
 	TopicSubs     Topic = "subs"     // Subscriptions() changed
 	TopicConns    Topic = "conns"    // Connections()/ClosedConnections() changed (≈ every second)
@@ -131,6 +132,20 @@ type API interface {
 	EditSubscription(s model.Subscription) error // name, URL, auto update, UA, via proxy
 	DeleteSubscription(id string) error          // refuses the current one
 	SubscriptionRaw(id string) (string, error)
+
+	// ---- aggregate subscriptions (docs/aggregate.md) ----
+	// AggregateSpec returns how an aggregate subscription is built; it
+	// holds the source links (secrets).
+	AggregateSpec(id string) (model.AggregateSpec, error)
+	// PreviewAggregate downloads the sources and builds the profile
+	// without saving it; s gives the download options (User-Agent, via
+	// proxy, timeout). It takes as long as the downloads.
+	PreviewAggregate(s model.Subscription, spec model.AggregateSpec) (model.AggregatePreview, error)
+	// SaveAggregate creates (empty ID) or changes an aggregate
+	// subscription: name, auto update, download options and spec. The
+	// profile is built and checked with the core before anything is
+	// stored; use switches to a new one.
+	SaveAggregate(s model.Subscription, spec model.AggregateSpec, use bool) (model.Subscription, error)
 
 	// ---- manual nodes ----
 	ManualNodes() []model.ManualNode
@@ -353,6 +368,23 @@ type API interface {
 	// ExportATrustConfig writes Settings().ATrust to path as YAML.
 	ExportATrustConfig(path string) error
 
+	// ---- Tailscale 兼容 (tailscale.go) ----
+	// TailscaleReport is the Tailscale compatibility at a glance: the switch
+	// (Settings.TailscaleCompat), the user's lists (Settings.Tailscale, which
+	// PatchSettings changes), what detection found, what the running config
+	// sends to Tailscale, and notes on what needs attention.
+	TailscaleReport() model.TailscaleReport
+	// ---- 内置 Tailscale (tailscale_builtin.go) ----
+	// SetTailscaleAuthKey keeps the built-in node's auth key in the
+	// keychain ("" removes it) and reloads the core when the node is in its
+	// config. A node already logged in ignores it.
+	SetTailscaleAuthKey(key string) error
+	// TailscaleAuthKeySet reports whether an auth key is stored (cheap).
+	TailscaleAuthKeySet() bool
+	// LogoutTailscale moves the built-in node to a fresh state directory:
+	// it starts again without a login.
+	LogoutTailscale() error
+
 	// ---- GitHub download mirror (mirror.go) ----
 	// TestMirrors HEAD-requests a GitHub link through every MirrorPresets
 	// entry, directly, and returns the round trips (Ms = -1: failed). Blocks.
@@ -425,6 +457,9 @@ type API interface {
 	// AddCaptureApp adds the program behind a connection (and turns on).
 	AddCaptureApp(processPath, process string, enable bool) error
 	ClearCaptureFlows() error
+	// SearchCaptureBodies searches captured request/response headers, decoded
+	// bodies, and WebSocket text frames on the agent, returning matching IDs.
+	SearchCaptureBodies(query string) ([]int64, error)
 	// SetCaptureRecording pauses (false) or resumes the request list; paused,
 	// decryption relays without decrypting or storing anything.
 	SetCaptureRecording(on bool) error
@@ -442,6 +477,12 @@ type API interface {
 	// RemoveCACert turns decryption off and removes the root's trust,
 	// key and certificate.
 	RemoveCACert() error
+	// CaptureLeftoverRoots lists SHA-1 hashes of old Lanflow CA roots left
+	// in the user's trust store other than the active root.
+	CaptureLeftoverRoots() []string
+	// RemoveCaptureLeftoverRoots deletes leftover Lanflow CA roots from the
+	// user's trust store.
+	RemoveCaptureLeftoverRoots() error
 	// ExportCACert writes the root certificate (never the key) as PEM.
 	ExportCACert(path string) error
 	// ExportHAR writes the records as HAR 1.2; bodies only with withBodies,

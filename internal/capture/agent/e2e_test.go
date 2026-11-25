@@ -307,7 +307,7 @@ func TestE2ELANSourceIsNotDecrypted(t *testing.T) {
 
 	// Second line: with the rule's source clause removed, the agent's own
 	// check (the kernel's connection list) still refuses.
-	cfg := strings.Replace(string(r.compose(true)), ",(OR,((SRC-IP-CIDR,127.0.0.0/8),(SRC-IP-CIDR,::1/128),(IN-TYPE,TUN)))", "", 1)
+	cfg := strings.ReplaceAll(string(r.compose(true)), ",(OR,((SRC-IP-CIDR,127.0.0.0/8),(SRC-IP-CIDR,::1/128),(IN-TYPE,TUN)))", "")
 	cfg = strings.Replace(cfg, "allow-lan: false", "allow-lan: true", 1) + fmt.Sprintf("bind-address: %s\nlan-allowed-ips: [%s/32]\n", lan, lan)
 	r.k.reload([]byte(cfg))
 	resp = get()
