@@ -167,10 +167,6 @@ func (p *Page) openAddManualNodeOfType(typ string) {
 	p.openManualNode(defaultManualNodeForType(typ))
 }
 
-func (p *Page) openAddManualNode() {
-	p.openAddManualNodeOfType(model.ProxyTypeVLESS)
-}
-
 func (p *Page) importManualNodeFromClipboard(c *ui.Context) {
 	node, err := profile.ParseManualNodeClipboard(c.ReadClipboard())
 	if err != nil {
