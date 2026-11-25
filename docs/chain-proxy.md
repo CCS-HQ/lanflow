@@ -1,8 +1,10 @@
-# 链式代理（草案）
+# 链式代理
 
 让用户在澜流里按顺序选几个节点（入口 → … → 落地），合成一条「链路」，像普通节点一样被选用、测速和探测出口；不需要手写 YAML。
 
 ## 1. 现状
+
+实现之前的情况（实现见第 6 节）：
 
 | 部分 | 状态 |
 | --- | --- |
@@ -119,7 +121,7 @@ type ProxyChain struct {
 
 ### 3.5 ctl / MCP
 
-- 新增 `get_proxy_chains` / `set_proxy_chains`（`lanflow ctl chains list|set <file>`），写入记入 `audit.log`，`undo` 可撤销。
+- 新增 `proxy_chains` / `set_proxy_chains`（接口方法 `ProxyChains` / `SetProxyChains`，工具名按方法名生成，与 `manual_nodes`、`custom_rules` 一致；`lanflow ctl chains list|set <文件|->`），写入记入 `audit.log`，`undo` 可撤销（连同改名时改写的自定义规则）。
 - 风险等级与手动节点相同：会改变流量路径，每个连接确认一次。
 
 ### 3.6 暂不做
@@ -144,3 +146,22 @@ type ProxyChain struct {
 - 改名、删除正在使用的链路后，所在组的选择符合 3.4。
 - 带 `url-test` + `include-all` 的订阅：克隆不出现在组里，不会被自动选中。
 - TUN 开启时 UDP（DNS over QUIC、hysteria2 落地）经链路可用；入口不支持 UDP 时得到明确提示。
+
+## 6. 实现说明
+
+| 部分 | 位置 |
+| --- | --- |
+| 数据与存储 | `model/proxy_chain.go`；`profile.Store.ProxyChains / SetProxyChains`（`proxy-chains.json`）；`syncfile` 的 `proxyChains` |
+| 合成 | `profile/chains.go`：`addProxyChains`（手动节点之后、自定义规则之前）、`excludeChainClones`（所有组就位之后） |
+| 服务 | `app/chains.go`：改名、删除、停用时的规则与选择；合成警告变化时提示 |
+| 跳数与流量 | `app/exits.go` 的 `chainHops` / `dialersOf`；`app/streams.go` 扣除 `INNER` 连接 |
+| 界面 | `view/proxies/chains.go`；连接页与出口卡片用 `profile.DisplayName` 显示克隆对应的原节点 |
+
+与第 3 节的取舍：
+
+- **排除克隆**：`include-all` / `include-all-proxies` 组改写 `filter`（没有时设为 `^(?!LANFLOW-CHAIN-)`，已有的每个正则 F 改为 `^(?!LANFLOW-CHAIN-)(?=.*?(?:F))`，匹配结果不变，只去掉克隆）。配置没有自己的 `GLOBAL` 时，写出一个成员与内核自动生成的相同（DIRECT、REJECT、节点、组，按配置顺序）但不含克隆的 `GLOBAL`；配置自带的 `GLOBAL` 不改。`LANFLOW-PROBE` 同样改写 `filter`，并加入各链路组：探测链路落地时选的是链路组。
+- **删除被自定义规则引用的链路**：拒绝并提示先改规则或改为停用，而不是删除后占位——删除后合成时已不知道这个名字。停用的链路仍按 3.3 占位。订阅或覆写里引用被删链路的规则不在此列，交给内核校验。
+- **删除前的选择**：服务在本次运行内记下每个组的上一个选择；删除或停用正在使用的链路后，内核退到组的第一个成员时改选回去并提示。重启后没有记录，保持内核的结果。
+- **编辑弹层**：跳的顺序用「上移 / 下移」调整，没有拖动；不可选的入口与节点不出现在下拉列表里（规则写在弹层的说明里），而不是灰显。「测试延迟」只对已保存并生效的链路可用，不做临时链路。
+- **连接页**：`INNER` 连接单独标为「链路前置」，不折叠到外层连接下（内核不记录二者的对应关系）；它们不计入流量统计和出口路由，内核的总量与 `/traffic` 网速扣除它们，托盘网速随之只算一次。
+- **同步**：`lanflow.yaml` 总是写出 `proxyChains`；读到没有这个键的文件（旧版本写的）时保留本机链路，`proxyChains: []` 才清空。

@@ -92,7 +92,10 @@ const (
 	GroupURLTest     GroupType = "url-test"
 	GroupFallback    GroupType = "fallback"
 	GroupLoadBalance GroupType = "load-balance"
-	GroupRelay       GroupType = "relay"
+	// GroupRelay is kept for older cores only: Mihomo removed the relay
+	// group (chains are dialer-proxy now, docs/chain-proxy.md), and
+	// nothing Lanflow creates uses it.
+	GroupRelay GroupType = "relay"
 )
 
 // ProxyGroup is a policy group in config order.

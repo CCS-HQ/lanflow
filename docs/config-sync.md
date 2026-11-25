@@ -53,6 +53,11 @@ customRules:         # 自定义规则，按匹配顺序，位于订阅规则之
   - type: DOMAIN-SUFFIX
     payload: openai.com
     target: 节点选择
+proxyChains:         # 链式代理（docs/chain-proxy.md），只有节点和代理组的名称；没有这个键的文件不改动本机的链路
+  - id: 5e6f7a8b     # 各设备相同，生成的节点按它命名
+    name: 家宽中转
+    hops: [香港自动, 东京 VPS]
+    enabled: true
 subscriptions:       # 带链接的订阅
   - id: a1b2c3d4     # 各设备相同，覆写选择和 Wi-Fi 规则靠它对应
     name: 机场
