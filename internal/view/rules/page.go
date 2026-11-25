@@ -52,7 +52,7 @@ type Page struct {
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	p := &Page{e: e, sort: ui.SortOrder{Column: "#"}, stale: env.Watch(e.API, app.TopicRules, app.TopicStatus)}
+	p := &Page{e: e, sort: ui.SortOrder{Column: "#"}, stale: env.Watch(e.API, app.TopicRules)}
 	p.table.Sort = &p.sort
 	// The rows move as hit counts change (sorted by 命中) and when the
 	// user sorts by another column: the table stays where it is scrolled

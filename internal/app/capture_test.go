@@ -374,3 +374,71 @@ func TestAgentStartEndsOnShutdown(t *testing.T) {
 		t.Fatal("Shutdown did not finish")
 	}
 }
+
+func TestCaptureTickNoSpuriousTopicCapture(t *testing.T) {
+	h := newHarness(t, nil)
+	s := h.s
+	t.Cleanup(s.Shutdown)
+
+	var mu sync.Mutex
+	seen := map[Topic]int{}
+	off := s.OnChange(func(tp Topic) {
+		mu.Lock()
+		seen[tp]++
+		mu.Unlock()
+	})
+	defer off()
+
+	nowSec := time.Now().Unix()
+	s.capst.mu.Lock()
+	s.capst.enabled = true
+	s.capst.until = time.Now().Add(10 * time.Minute)
+	s.capst.lastCountdownSec = nowSec - 1
+	s.capst.mu.Unlock()
+
+	// Core stopped, foreground: emits TopicMetrics once for the current second, never TopicCapture.
+	s.captureTick()
+	if time.Now().Unix() == nowSec {
+		s.captureTick()
+	}
+	time.Sleep(coalesceWindow + 30*time.Millisecond)
+	mu.Lock()
+	capCount, metCount := seen[TopicCapture], seen[TopicMetrics]
+	clear(seen)
+	mu.Unlock()
+	if capCount != 0 || metCount != 1 {
+		t.Fatalf("stopped foreground ticks: capture=%d metrics=%d, want 0/1", capCount, metCount)
+	}
+
+	// Background: emits nothing.
+	s.SetBackground(true)
+	s.capst.mu.Lock()
+	s.capst.lastCountdownSec = 0
+	s.capst.mu.Unlock()
+	s.captureTick()
+	time.Sleep(coalesceWindow + 30*time.Millisecond)
+	mu.Lock()
+	capCount, metCount = seen[TopicCapture], seen[TopicMetrics]
+	clear(seen)
+	mu.Unlock()
+	if capCount != 0 || metCount != 0 {
+		t.Fatalf("background tick: capture=%d metrics=%d, want 0/0", capCount, metCount)
+	}
+
+	// Core running, foreground: TopicTraffic already ticks every second, so captureTick emits nothing.
+	s.SetBackground(false)
+	s.mu.Lock()
+	s.state.st.Core = model.CoreRunning
+	s.mu.Unlock()
+	s.capst.mu.Lock()
+	s.capst.lastCountdownSec = 0
+	s.capst.mu.Unlock()
+	s.captureTick()
+	time.Sleep(coalesceWindow + 30*time.Millisecond)
+	mu.Lock()
+	capCount, metCount = seen[TopicCapture], seen[TopicMetrics]
+	mu.Unlock()
+	if capCount != 0 || metCount != 0 {
+		t.Fatalf("running foreground tick: capture=%d metrics=%d, want 0/0", capCount, metCount)
+	}
+}

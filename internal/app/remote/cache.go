@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"container/list"
 	"encoding/json"
 	"reflect"
 	"sync"
@@ -15,30 +16,34 @@ import (
 // read depends on, and drops everything after an action (whose effect the
 // events report a moment later).
 
+const lookupIPCap = 2048
+
 // topicReads lists the reads each topic invalidates. A read missing from
 // every list is dropped on every event; staticReads are never dropped.
 var topicReads = map[app.Topic][]string{
-	app.TopicStatus:       {"Status", "TUNHelperInstalled", "Proxies", "NetInfo"},
+	app.TopicStatus:       {"Status", "TUNHelperInstalled", "CaptureStatus"},
 	app.TopicTraffic:      {"Status", "TrafficHistory"},
+	app.TopicMetrics:      {"Status"},
 	app.TopicProxies:      {"Proxies", "ProxyProviders", "IconData", "ProbeRegions", "Status", "ManualNodes", "ProxyChains"},
 	app.TopicSubs:         {"Subscriptions", "EffectiveDNS", "EffectiveSniffer", "ProbeRegions", "Status", "Proxies", "OverrideList", "Overrides", "ManualNodes", "ProxyChains"},
 	app.TopicConns:        {"Connections", "ClosedConnections", "Status"},
 	app.TopicLogs:         {"Logs", "AppLogs"},
-	app.TopicRules:        {"Rules", "CustomRules", "RuleProviders"},
+	app.TopicRules:        {"Rules", "CustomRules", "RuleProviders", "Status"},
 	app.TopicExits:        {"ExitRoutes", "You"},
 	app.TopicNet:          {"NetInfo", "Sites", "LeakCheck"},
-	app.TopicSettings:     {"Settings", "Overrides", "OverrideList", "EffectiveDNS", "EffectiveSniffer", "WebDAVInfo", "ConfigSyncStatus", "FeedbackInfo", "UIState", "GeoDataInfo", "Status", "Proxies", "CacheUsage"},
+	app.TopicSettings:     {"Settings", "Overrides", "OverrideList", "EffectiveDNS", "EffectiveSniffer", "WebDAVInfo", "ConfigSyncStatus", "FeedbackInfo", "UIState", "GeoDataInfo", "Status", "Proxies", "CacheUsage", "CaptureStatus"},
 	app.TopicCoreDownload: {"CoreDownload"},
 	app.TopicCores:        {"InstalledCores", "Status"},
 	app.TopicProbe:        {"Probe", "ProbeRegions"},
 	app.TopicStats:        {"TrafficStats"},
 	app.TopicProcIcons:    {"ProcessIcon"},
+	app.TopicCapture:      {"CaptureStatus", "CaptureFlows"},
 }
 
 var staticReads = map[string]bool{"ConfigDir": true, "LogDir": true, "ATrustReference": true, "LookupIP": true}
 
 // uncachedReads are reads with effects or that block.
-var uncachedReads = map[string]bool{"TakeNotices": true, "TestMirrors": true}
+var uncachedReads = map[string]bool{"TakeNotices": true, "TestMirrors": true, "CheckCaptureTarget": true}
 
 var listedReads = func() map[string]bool {
 	m := map[string]bool{}
@@ -66,13 +71,34 @@ type cacheEntry struct {
 	vals   []reflect.Value
 }
 
-type readCache struct {
-	mu  sync.Mutex
-	gen uint64
-	m   map[string]cacheEntry
+type cacheGen struct {
+	reset    uint64
+	clear    uint64
+	method   uint64
+	unlisted uint64
 }
 
-func newReadCache() *readCache { return &readCache{m: map[string]cacheEntry{}} }
+type readCache struct {
+	mu          sync.Mutex
+	resetGen    uint64
+	clearGen    uint64
+	unlistedGen uint64
+	methGen     map[string]uint64
+	m           map[string]cacheEntry
+	lookupCap   int
+	lookupList  *list.List
+	lookupElems map[string]*list.Element
+}
+
+func newReadCache() *readCache {
+	return &readCache{
+		methGen:     map[string]uint64{},
+		m:           map[string]cacheEntry{},
+		lookupCap:   lookupIPCap,
+		lookupList:  list.New(),
+		lookupElems: map[string]*list.Element{},
+	}
+}
 
 func cacheKey(method string, args []any) string {
 	if len(args) == 0 {
@@ -82,13 +108,29 @@ func cacheKey(method string, args []any) string {
 	return method + string(b)
 }
 
+func (c *readCache) genLocked(method string) cacheGen {
+	if staticReads[method] {
+		return cacheGen{reset: c.resetGen, method: c.methGen[method]}
+	}
+	if listedReads[method] {
+		return cacheGen{reset: c.resetGen, clear: c.clearGen, method: c.methGen[method]}
+	}
+	return cacheGen{reset: c.resetGen, clear: c.clearGen, method: c.methGen[method], unlisted: c.unlistedGen}
+}
+
 // get fills outs from the cache.
 func (c *readCache) get(method string, args []any, outs []any) bool {
 	if !cacheable(method) {
 		return false
 	}
+	key := cacheKey(method, args)
 	c.mu.Lock()
-	e, ok := c.m[cacheKey(method, args)]
+	e, ok := c.m[key]
+	if ok && len(e.vals) == len(outs) && method == "LookupIP" {
+		if elem, exists := c.lookupElems[key]; exists {
+			c.lookupList.MoveToFront(elem)
+		}
+	}
 	c.mu.Unlock()
 	if !ok || len(e.vals) != len(outs) {
 		return false
@@ -99,25 +141,52 @@ func (c *readCache) get(method string, args []any, outs []any) bool {
 	return true
 }
 
-// generation is read before a call; put stores only when nothing was
-// invalidated meanwhile.
-func (c *readCache) generation() uint64 {
+// generation is read before a call; putAt stores only when nothing invalidated
+// that method meanwhile.
+func (c *readCache) generation(method string) cacheGen {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.gen
+	return c.genLocked(method)
 }
 
-func (c *readCache) putAt(gen uint64, method string, args []any, outs []any) {
+func (c *readCache) putAt(gen cacheGen, method string, args []any, outs []any) {
 	vals := make([]reflect.Value, len(outs))
 	for i, o := range outs {
 		vals[i] = copyTop(reflect.ValueOf(o).Elem())
 	}
+	key := cacheKey(method, args)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if gen != c.gen {
+	if gen != c.genLocked(method) {
 		return
 	}
-	c.m[cacheKey(method, args)] = cacheEntry{method: method, vals: vals}
+	c.m[key] = cacheEntry{method: method, vals: vals}
+	if method == "LookupIP" {
+		c.touchLookupLocked(key)
+	}
+}
+
+func (c *readCache) touchLookupLocked(key string) {
+	if elem, ok := c.lookupElems[key]; ok {
+		c.lookupList.MoveToFront(elem)
+		return
+	}
+	elem := c.lookupList.PushFront(key)
+	c.lookupElems[key] = elem
+	capLimit := c.lookupCap
+	if capLimit <= 0 {
+		capLimit = lookupIPCap
+	}
+	for c.lookupList.Len() > capLimit {
+		back := c.lookupList.Back()
+		if back == nil {
+			break
+		}
+		evicted := back.Value.(string)
+		c.lookupList.Remove(back)
+		delete(c.lookupElems, evicted)
+		delete(c.m, evicted)
+	}
 }
 
 // invalidate drops the reads that depend on t and those depending on no
@@ -129,7 +198,10 @@ func (c *readCache) invalidate(t app.Topic) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.gen++
+	for _, m := range topicReads[t] {
+		c.methGen[m]++
+	}
+	c.unlistedGen++
 	for k, e := range c.m {
 		if drop[e.method] || (!listedReads[e.method] && !staticReads[e.method]) {
 			delete(c.m, k)
@@ -141,11 +213,15 @@ func (c *readCache) invalidate(t app.Topic) {
 func (c *readCache) drop(method string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.gen++
+	c.methGen[method]++
 	for k, e := range c.m {
 		if e.method == method {
 			delete(c.m, k)
 		}
+	}
+	if method == "LookupIP" {
+		c.lookupList.Init()
+		clear(c.lookupElems)
 	}
 }
 
@@ -153,7 +229,7 @@ func (c *readCache) drop(method string) {
 func (c *readCache) clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.gen++
+	c.clearGen++
 	for k, e := range c.m {
 		if !staticReads[e.method] {
 			delete(c.m, k)
@@ -165,8 +241,10 @@ func (c *readCache) clear() {
 func (c *readCache) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.gen++
+	c.resetGen++
 	clear(c.m)
+	c.lookupList.Init()
+	clear(c.lookupElems)
 }
 
 // copyTop copies a slice's backing array, so that a view sorting the list

@@ -92,9 +92,10 @@ type captureState struct {
 	trusted   bool
 	flows     []model.CaptureFlow // by ID
 	index     map[int64]int
-	seq       int64
-	epoch     int64
-	err       string
+	seq              int64
+	epoch            int64
+	lastCountdownSec int64
+	err              string
 	restarts  []time.Time
 	// the automatic removal of the root failed removeFails times in a row
 	// and is not tried again before removeNext
@@ -1180,9 +1181,18 @@ func (s *Service) captureTick() {
 	}
 	c.mu.Lock()
 	ticking := c.enabled && !c.until.IsZero()
+	sec := time.Now().Unix()
+	countdownTick := false
+	if ticking && !s.background.Load() && !s.running() && sec != c.lastCountdownSec {
+		c.lastCountdownSec = sec
+		countdownTick = true
+	}
 	c.mu.Unlock()
-	if ticking {
-		s.em.emit(TopicCapture) // the countdown shown by the window and the tray
+	if countdownTick {
+		// While the core runs, TopicTraffic already redraws the foreground
+		// window every second; only tick the countdown on its own when the
+		// core is stopped and the window is visible.
+		s.em.emit(TopicMetrics)
 	}
 }
 

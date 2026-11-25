@@ -701,6 +701,16 @@ func copyBundledGeo(src, dst string) {
 
 // ---- reads ----
 
+func visibleGroupCount(groups []model.ProxyGroup) int {
+	n := 0
+	for _, g := range groups {
+		if !g.Hidden && g.Name != "GLOBAL" {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Service) Status() model.Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -716,6 +726,9 @@ func (s *Service) Status() model.Status {
 		}
 	}
 	st.ShowProxyHint = st.Core == model.CoreRunning && !st.SystemProxy && !s.state.hintDone
+	st.GroupCount = visibleGroupCount(s.state.proxies.Groups)
+	st.RuleCount = len(s.state.rules)
+	st.OverrideCount = len(s.state.overrides.List)
 	return st
 }
 
