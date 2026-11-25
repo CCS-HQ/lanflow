@@ -125,9 +125,9 @@ func (cl *Client) forgetAll() {
 	}
 }
 
-var allTopics = []app.Topic{app.TopicStatus, app.TopicTraffic, app.TopicProxies, app.TopicSubs, app.TopicConns, app.TopicLogs,
+var allTopics = []app.Topic{app.TopicStatus, app.TopicTraffic, app.TopicMetrics, app.TopicProxies, app.TopicSubs, app.TopicConns, app.TopicLogs,
 	app.TopicRules, app.TopicExits, app.TopicNet, app.TopicSettings, app.TopicNotice, app.TopicCoreDownload, app.TopicCores,
-	app.TopicProbe, app.TopicStats, app.TopicProcIcons}
+	app.TopicProbe, app.TopicStats, app.TopicProcIcons, app.TopicCapture}
 
 // windowCall calls a window op on conn (the current one when nil).
 func (cl *Client) windowCall(conn *rpc.Conn, method string, args []any, out any) error {

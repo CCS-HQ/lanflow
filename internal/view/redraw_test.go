@@ -68,12 +68,12 @@ func TestPageTopics(t *testing.T) {
 	s := New(api, Options{Mac: true, Sync: true})
 	defer s.Close()
 	s.navigate(env.Overview, "")
-	if !s.wants(app.TopicTraffic) || s.wants(app.TopicLogs) {
-		t.Fatal("概览 reads traffic, not logs")
+	if !s.wants(app.TopicExits) || s.wants(app.TopicLogs) {
+		t.Fatal("概览 reads exits, not logs")
 	}
 	s.navigate(env.Logs, "")
-	if !s.wants(app.TopicLogs) || s.wants(app.TopicTraffic) {
-		t.Fatal("日志 reads logs, not traffic")
+	if !s.wants(app.TopicLogs) || s.wants(app.TopicExits) {
+		t.Fatal("日志 reads logs, not exits")
 	}
 	for _, tp := range shellTopics {
 		if !s.wants(tp) {

@@ -286,7 +286,7 @@ func (f *Fake) Tick() {
 		}
 	}
 	f.mu.Unlock()
-	f.emit(app.TopicTraffic, app.TopicStatus, app.TopicConns, app.TopicLogs, app.TopicExits)
+	f.emit(app.TopicTraffic, app.TopicMetrics, app.TopicConns, app.TopicLogs, app.TopicExits)
 }
 
 func (f *Fake) emit(ts ...app.Topic) {
@@ -307,7 +307,21 @@ func (f *Fake) wait() { time.Sleep(f.Delay) }
 
 // ---- reads ----
 
-func (f *Fake) Status() model.Status { f.mu.Lock(); defer f.mu.Unlock(); return f.st }
+func (f *Fake) Status() model.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.st
+	groups := 0
+	for _, g := range f.px.Groups {
+		if !g.Hidden && g.Name != "GLOBAL" {
+			groups++
+		}
+	}
+	st.GroupCount = groups
+	st.RuleCount = len(f.rules)
+	st.OverrideCount = len(f.ovl)
+	return st
+}
 func (f *Fake) TrafficHistory() ([]int64, []int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

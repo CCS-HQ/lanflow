@@ -94,24 +94,29 @@ func (s *Shell) sidebar(c *ui.Context, st model.Status) {
 	busy := st.Core == model.CoreStarting || st.Core == model.CoreMissing
 	stab := s.settingsTab()
 
-	px := s.api.Proxies()
-	subs := s.api.Subscriptions()
-	rules := s.api.Rules()
-	ovs := s.api.OverrideList()
+	if s.sbSubsDirty.Swap(false) {
+		var cur *model.Subscription
+		for _, sub := range s.api.Subscriptions() {
+			if sub.Current {
+				subCopy := sub
+				cur = &subCopy
+				break
+			}
+		}
+		s.sbCurSub = cur
+	}
+	if s.sbSetDirty.Swap(false) {
+		s.sbCapOn = s.api.Settings().CaptureEnabled
+	}
+	if s.sbCapDirty.Swap(false) {
+		s.sbCap = s.api.CaptureStatus()
+	}
 
-	groupCount := 0
-	for _, g := range px.Groups {
-		if !g.Hidden && g.Name != "GLOBAL" {
-			groupCount++
-		}
-	}
-	var curSub *model.Subscription
-	for i := range subs {
-		if subs[i].Current {
-			curSub = &subs[i]
-			break
-		}
-	}
+	curSub := s.sbCurSub
+	groupCount := st.GroupCount
+	ruleCount := st.RuleCount
+	overrideCount := st.OverrideCount
+	cs := s.sbCap
 
 	ui.Scroll(c).Grow(1).Shrink(1).Children(func() {
 		ui.Column(c).Padding(4, 10, 12, 10).Gap(10).Children(func() {
@@ -149,8 +154,8 @@ func (s *Shell) sidebar(c *ui.Context, st model.Status) {
 					gb = fmt.Sprint(groupCount)
 				}
 				rb := ""
-				if len(rules) > 0 {
-					rb = fmt.Sprint(len(rules))
+				if ruleCount > 0 {
+					rb = fmt.Sprint(ruleCount)
 				}
 				s.bentoNavCard(c, env.Proxies, gb, t, k)
 				s.bentoNavCard(c, env.Rules, rb, t, k)
@@ -159,8 +164,8 @@ func (s *Shell) sidebar(c *ui.Context, st model.Status) {
 			// 5. 2-column bento cards: 覆写 (Settings › override) + 概览 (3D Exit Globe)
 			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
 				ob := ""
-				if len(ovs) > 0 {
-					ob = fmt.Sprint(len(ovs))
+				if overrideCount > 0 {
+					ob = fmt.Sprint(overrideCount)
 				}
 				s.bentoActionCard(c, "nav:override", "doc", i18n.T("覆写"), ob, stab == "override", t, k, func() {
 					s.navigate(env.Settings, "override")
@@ -177,7 +182,7 @@ func (s *Shell) sidebar(c *ui.Context, st model.Status) {
 			// 8. 2-column bento cards: 日志 + 抓包
 			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
 				s.bentoNavCard(c, env.Logs, "", t, k)
-				if cs := s.api.CaptureStatus(); cs.Enabled || s.api.Settings().CaptureEnabled {
+				if cs.Enabled || s.sbCapOn {
 					cb := ""
 					if cs.Enabled {
 						cb = i18n.T("解密中")
@@ -187,7 +192,7 @@ func (s *Shell) sidebar(c *ui.Context, st model.Status) {
 			})
 
 			// 9. Capture active warning banner (if decrypting)
-			if cs := s.env.API.CaptureStatus(); cs.Enabled {
+			if cs.Enabled {
 				ui.Row(c).Gap(6).Padding(6, 8).Radius(8).Background(t.Warning.Alpha(0.12)).AlignItems(ui.Center).Children(func() {
 					k.Dot(c, "orange")
 					txt := capture.StatusText(cs)

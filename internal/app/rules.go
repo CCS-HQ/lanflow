@@ -67,11 +67,16 @@ func (s *Service) refreshRules() {
 	}
 	rules := mapRules(raw, len(s.state.custom))
 	changed := !reflect.DeepEqual(rules, s.state.rules)
+	countChanged := len(rules) != len(s.state.rules)
 	s.state.rules = rules
 	s.state.rulesAt = s.d.now()
 	s.mu.Unlock()
 	if changed {
-		s.em.emit(TopicRules)
+		if countChanged {
+			s.em.emit(TopicRules, TopicStatus)
+		} else {
+			s.em.emit(TopicRules)
+		}
 	}
 }
 

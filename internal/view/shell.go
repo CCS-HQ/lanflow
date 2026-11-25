@@ -84,7 +84,7 @@ type topicPage interface{ Topics() []app.Topic }
 // shellTopics are the topics the shell's own parts draw: the sidebar's
 // status bar and badge (Status), the queued notices (Notice) and the
 // language and appearance (Settings). They rebuild whatever page shows.
-var shellTopics = []app.Topic{app.TopicStatus, app.TopicNotice, app.TopicSettings, app.TopicCapture, app.TopicSubs}
+var shellTopics = []app.Topic{app.TopicStatus, app.TopicTraffic, app.TopicMetrics, app.TopicNotice, app.TopicSettings, app.TopicCapture, app.TopicSubs}
 
 // toastReq is a queued toast, shown on the next build.
 type toastReq struct {
@@ -156,6 +156,16 @@ type Shell struct {
 
 	// notify shows a system notification; mygo by default, replaced in tests.
 	notify func(title, body string, onClick func())
+
+	// Cached sidebar snapshots refreshed on their topics, avoiding per-frame
+	// slice/struct cloning in sidebar(). Dirty flags are set from onChange
+	// (any goroutine) and consumed on the UI thread in sidebar().
+	sbSubsDirty atomic.Bool
+	sbSetDirty  atomic.Bool
+	sbCapDirty  atomic.Bool
+	sbCurSub    *model.Subscription
+	sbCapOn     bool
+	sbCap       model.CaptureStatus
 }
 
 // New builds the shell and all pages over api.
@@ -229,6 +239,9 @@ func New(api app.API, opts Options) *Shell {
 		}
 		s.topics[id] = set
 	}
+	s.sbSubsDirty.Store(true)
+	s.sbSetDirty.Store(true)
+	s.sbCapDirty.Store(true)
 	s.shown.Store(s.page)
 	s.off = api.OnChange(s.onChange)
 	return s
@@ -357,6 +370,10 @@ func (s *Shell) redrawData() {
 // onChange is called by the API from any goroutine.
 func (s *Shell) onChange(t app.Topic) {
 	switch t {
+	case app.TopicSubs:
+		s.sbSubsDirty.Store(true)
+	case app.TopicStatus:
+		s.sbCapDirty.Store(true)
 	case app.TopicNotice:
 		ns := s.api.TakeNotices()
 		if len(ns) > 0 {
@@ -373,6 +390,7 @@ func (s *Shell) onChange(t app.Topic) {
 			}
 		}
 	case app.TopicCapture:
+		s.sbCapDirty.Store(true)
 		if s.win != nil { // docs/capture.md §7.2: 窗口标题加「· 解密中」
 			title := i18n.T("澜流 Lanflow")
 			if s.api.CaptureStatus().Enabled {
@@ -381,6 +399,8 @@ func (s *Shell) onChange(t app.Topic) {
 			s.win.SetTitle(title)
 		}
 	case app.TopicSettings:
+		s.sbSetDirty.Store(true)
+		s.sbCapDirty.Store(true)
 		set := s.api.Settings()
 		if lang := i18n.Normalize(set.Language); lang != i18n.Lang() {
 			// The service sets the language itself; a backend that does

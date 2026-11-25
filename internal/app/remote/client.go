@@ -156,7 +156,7 @@ func (cl *Client) call(method string, args []any, outs ...any) error {
 	if cl.cache.get(method, args, outs) {
 		return nil
 	}
-	gen := cl.cache.generation()
+	gen := cl.cache.generation(method)
 	err := cl.raw(method, args, outs...)
 	switch {
 	case cacheable(method):

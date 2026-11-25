@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -536,5 +537,76 @@ func TestRecoveryPromptFollowsStatus(t *testing.T) {
 	tt.Frame()
 	if tt.HasText("恢复为关闭") || s.recovery {
 		t.Fatal("prompt of the old service kept after reconnecting")
+	}
+}
+
+type countSidebarAPI struct {
+	*fake.Fake
+	proxies, subs, rules, overrides, settings, captureStatus atomic.Int32
+}
+
+func (a *countSidebarAPI) Proxies() model.ProxySnapshot {
+	a.proxies.Add(1)
+	return a.Fake.Proxies()
+}
+func (a *countSidebarAPI) Subscriptions() []model.Subscription {
+	a.subs.Add(1)
+	return a.Fake.Subscriptions()
+}
+func (a *countSidebarAPI) Rules() []model.Rule {
+	a.rules.Add(1)
+	return a.Fake.Rules()
+}
+func (a *countSidebarAPI) OverrideList() []model.Override {
+	a.overrides.Add(1)
+	return a.Fake.OverrideList()
+}
+func (a *countSidebarAPI) Settings() model.Settings {
+	a.settings.Add(1)
+	return a.Fake.Settings()
+}
+func (a *countSidebarAPI) CaptureStatus() model.CaptureStatus {
+	a.captureStatus.Add(1)
+	return a.Fake.CaptureStatus()
+}
+
+func TestSidebarAvoidsHeavyReadsPerFrame(t *testing.T) {
+	inner := fake.NewInstant()
+	api := &countSidebarAPI{Fake: inner}
+	s := New(api, Options{Mac: true, Sync: true})
+	t.Cleanup(s.Close)
+	s.navigate(env.Logs, "")
+	tt := ui.NewTester(s.View, DefaultWidth, DefaultHeight)
+	for range 5 {
+		tt.Frame()
+	}
+	if api.proxies.Load() != 0 || api.rules.Load() != 0 || api.overrides.Load() != 0 {
+		t.Fatalf("heavy reads called on steady frames: proxies=%d rules=%d overrides=%d",
+			api.proxies.Load(), api.rules.Load(), api.overrides.Load())
+	}
+	if api.subs.Load() != 1 || api.settings.Load() != 1 || api.captureStatus.Load() != 1 {
+		t.Fatalf("cached sidebar reads called too often: subs=%d settings=%d captureStatus=%d",
+			api.subs.Load(), api.settings.Load(), api.captureStatus.Load())
+	}
+
+	// Sidebar still shows the lightweight counts from Status().
+	st := inner.Status()
+	for _, count := range []int{st.GroupCount, st.RuleCount, st.OverrideCount} {
+		if !tt.HasText(strconv.Itoa(count)) {
+			t.Fatalf("missing badge count %d in sidebar", count)
+		}
+	}
+
+	// TopicSubs and TopicCapture invalidate only their respective cached reads.
+	s.onChange(app.TopicSubs)
+	tt.Frame()
+	if api.subs.Load() != 2 || api.captureStatus.Load() != 1 || api.settings.Load() != 1 {
+		t.Fatalf("after TopicSubs: subs=%d capture=%d settings=%d",
+			api.subs.Load(), api.captureStatus.Load(), api.settings.Load())
+	}
+	s.onChange(app.TopicCapture)
+	tt.Frame()
+	if api.captureStatus.Load() != 2 || api.subs.Load() != 2 {
+		t.Fatalf("after TopicCapture: capture=%d subs=%d", api.captureStatus.Load(), api.subs.Load())
 	}
 }

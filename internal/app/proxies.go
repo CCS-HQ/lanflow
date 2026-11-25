@@ -201,11 +201,16 @@ func (s *Service) refreshProxiesCtx(parent context.Context) {
 	s.state.rawProxy = raw
 	snap := buildSnapshot(raw, s.state.testing, s.state.settings.MainGroup)
 	changed := !reflect.DeepEqual(snap, s.state.proxies)
+	countChanged := visibleGroupCount(snap.Groups) != visibleGroupCount(s.state.proxies.Groups)
 	s.state.proxies = snap
 	s.state.snapPending = false
 	s.mu.Unlock()
 	if changed {
-		s.em.emit(TopicProxies)
+		if countChanged {
+			s.em.emit(TopicProxies, TopicStatus)
+		} else {
+			s.em.emit(TopicProxies)
+		}
 	}
 	s.refreshProxyProvidersCtx(parent)
 	if changed {
