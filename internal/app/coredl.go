@@ -31,7 +31,7 @@ const (
 	// pinnedCoreVersion is the release DownloadCore("") installs; keep in
 	// sync with PINNED_VERSION in scripts/fetch-core.sh, and its checksums
 	// with pinnedCoreSHA256 (coresums.go).
-	pinnedCoreVersion = "v1.19.33"
+	pinnedCoreVersion = "v1.19.34"
 
 	coreDownloadTimeout = 15 * time.Minute
 	maxCoreArchive      = 256 << 20 // refuse anything larger (a real core is ~20 MB)
@@ -65,7 +65,7 @@ func coreAsset(goos, goarch, version string) (name string, isZip bool, err error
 	return "", false, fmt.Errorf(i18n.T("Mihomo 没有提供 %s/%s 平台的官方内核，请手动选择内核文件"), goos, goarch)
 }
 
-// normalizeVersion gives "v1.19.33" for "1.19.33" / " v1.19.33 ".
+// normalizeVersion gives "v1.19.34" for "1.19.34" / " v1.19.34 ".
 func normalizeVersion(v string) string {
 	v = strings.TrimSpace(v)
 	if v != "" && v[0] >= '0' && v[0] <= '9' {

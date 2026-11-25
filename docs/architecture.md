@@ -37,7 +37,7 @@ Mihomo 子进程：代理协议、路由规则、DNS
 
 ## 内核接入
 
-- 固定版本 v1.19.33（`scripts/fetch-core.sh` 的 `PINNED_VERSION`、`internal/app/coredl.go` 的 `pinnedCoreVersion`），独立于 MyGo 版本升级。各平台官方压缩包的 SHA-256 取自 github.com/MetaCubeX/mihomo 发布页的 asset digest，同时写在 `fetch-core.sh` 和 `internal/app/coresums.go` 中，测试保证两处一致。
+- 固定版本 v1.19.34（`scripts/fetch-core.sh` 的 `PINNED_VERSION`、`internal/app/coredl.go` 的 `pinnedCoreVersion`），独立于 MyGo 版本升级。各平台官方压缩包的 SHA-256 取自 github.com/MetaCubeX/mihomo 发布页的 asset digest，同时写在 `fetch-core.sh` 和 `internal/app/coresums.go` 中，测试保证两处一致。
 - 随包分发：`fetch-core.sh` 先确定期望的 SHA-256（固定版本用内置值，其他版本向 api.github.com 查询 asset digest，不经镜像），下载（可经 `GITHUB_MIRROR`）后核对，不符即退出；通过后写入 `bin/<goos>-<goarch>/`，`prepare-resources.sh` 再拷入 `resources/<goos>-<goarch>/`。地理数据（MetaCubeX/meta-rules-dat）只有滚动更新的 `latest`，没有可固定的 tag，按同一 release 的 asset digest 校验，也可用 `GEOIP_SHA256` 等环境变量指定。发布流程在校验作业里下载一次，各平台的构建作业用 `GEOIP_SHA256` 等变量核对同一份文件，SHA-256 记入 Release 说明。
 - 应用内下载（设置 › 内核）：同样先取得期望的 SHA-256 再下载，压缩包核对通过后才解压、运行 `mihomo -v` 与 `-t` 并安装；GitHub 没有给出 digest 的版本一律拒绝。也可选择用户指定的本机内核文件。
 - 启动前检查版本和配置，使用独立工作目录；管理自己启动的 PID，不结束其他代理客户端的进程。

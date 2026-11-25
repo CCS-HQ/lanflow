@@ -43,7 +43,7 @@
 #   SKIP_GEO=1       do not download geodata
 set -euo pipefail
 
-PINNED_VERSION="v1.19.33"
+PINNED_VERSION="v1.19.34"
 MIHOMO_VERSION="${MIHOMO_VERSION:-$PINNED_VERSION}"
 GEO_TAG="${GEO_TAG:-latest}"
 GITHUB_MIRROR="${GITHUB_MIRROR:-}"
@@ -53,12 +53,12 @@ SKIP_GEO="${SKIP_GEO:-0}"
 # PINNED_VERSION. Keep in sync with internal/app/coresums.go (a test checks).
 pinned_sha256() {
 	case "$1" in
-	mihomo-darwin-amd64-v1.19.33.gz) echo 551ae54ef8d77a5e21f7a8185a59b441fb13a0fb0514fcdef5ca2816f6f50015 ;;
-	mihomo-darwin-arm64-v1.19.33.gz) echo 060b64b0f2c9a310831db0fe4adb2878de67bfa606c311813c1f13966aa504b6 ;;
-	mihomo-linux-amd64-v1.19.33.gz) echo 132f6f3edf9a65e62f04853aed3358472e0b2b7666daa8419edfa2ddf5bb6323 ;;
-	mihomo-linux-arm64-v1.19.33.gz) echo ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187 ;;
-	mihomo-windows-amd64-v1.19.33.zip) echo 6ab2180875f9f6fff8b19386d760daec257f66b45f72b3afc650634272fa837a ;;
-	mihomo-windows-arm64-v1.19.33.zip) echo a2a26869a14634c49f3fbcecc593b498ed8591fbdd7616b24475b3d60b148da3 ;;
+	mihomo-darwin-amd64-v1.19.34.gz) echo 089b033be801ff365b6558851115238b443b237433aa0841bc3fa41ad75a3927 ;;
+	mihomo-darwin-arm64-v1.19.34.gz) echo 1a7a20eca63fbbaec90137717465bfde488d0db2a3a79b8fadebf9b2545b6e4c ;;
+	mihomo-linux-amd64-v1.19.34.gz) echo 223fab877e5795ce780ba39902e5f0b1113c1256ae244a7160f1165e017e9ccc ;;
+	mihomo-linux-arm64-v1.19.34.gz) echo daaf78a6240a282cdfd75bcbf98fe321f6bd52765cc29e79f344191198f0b50f ;;
+	mihomo-windows-amd64-v1.19.34.zip) echo f6b855de8722781caea62686f0301f89625fc558d48c1103ffdd98dad7f7f488 ;;
+	mihomo-windows-arm64-v1.19.34.zip) echo 076cb04a21377675bcf009b8d1dd83006ce2464aa537e37bce1faf6d3504f554 ;;
 	*) return 1 ;;
 	esac
 }
@@ -107,8 +107,8 @@ windows/amd64 | windows/arm64) ASSET_EXT="zip"; OUT_NAME="mihomo.exe" ;;
 esac
 PLAT_DIR="$BIN_DIR/$GOOS-$GOARCH"
 
-# Official asset naming, e.g. mihomo-darwin-arm64-v1.19.33.gz,
-# mihomo-windows-amd64-v1.19.33.zip (the plain amd64 build, not -v1/-v2/-v3).
+# Official asset naming, e.g. mihomo-darwin-arm64-v1.19.34.gz,
+# mihomo-windows-amd64-v1.19.34.zip (the plain amd64 build, not -v1/-v2/-v3).
 ASSET="mihomo-${GOOS}-${GOARCH}-${MIHOMO_VERSION}.${ASSET_EXT}"
 CORE_URL="${GITHUB_MIRROR}https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/${ASSET}"
 GEO_BASE="${GITHUB_MIRROR}https://github.com/MetaCubeX/meta-rules-dat/releases/download/${GEO_TAG}"

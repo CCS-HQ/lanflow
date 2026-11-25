@@ -93,12 +93,16 @@ func realFind(custom string) (string, error) {
 	return custom, nil
 }
 
+// reportsPinned makes the fake core report pinnedCoreVersion, the version
+// DownloadCore("") asks for.
+func reportsPinned(string) (string, error) { return pinnedCoreVersion, nil }
+
 func TestDownloadCoreInstallsAndStarts(t *testing.T) {
 	body := []byte("#!/bin/sh\necho fake mihomo\n")
 	srv, hits := coreServer(t, body, http.StatusOK)
 	useCoreServer(t, srv)
 
-	h := newHarness(t, func(h *harness) { h.core.findFn = realFind })
+	h := newHarness(t, func(h *harness) { h.core.findFn = realFind; h.core.versionFn = reportsPinned })
 	if h.s.Status().Core != model.CoreMissing {
 		t.Fatalf("precondition: core should be missing, got %v", h.s.Status().Core)
 	}
@@ -295,7 +299,7 @@ func TestDownloadCoreUpdatesRunningCoreAndKeepsOld(t *testing.T) {
 func TestDownloadCoreRollsBackWhenStartFails(t *testing.T) {
 	srv, _ := coreServer(t, []byte("new core"), http.StatusOK)
 	useCoreServer(t, srv)
-	h := newHarness(t, func(h *harness) { h.core.findFn = realFind })
+	h := newHarness(t, func(h *harness) { h.core.findFn = realFind; h.core.versionFn = reportsPinned })
 	managed := installOldCore(t, h)
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
@@ -323,6 +327,7 @@ func TestDownloadCoreReregistersHelper(t *testing.T) {
 	useCoreServer(t, srv)
 	h := newHarness(t, func(h *harness) {
 		h.core.findFn = realFind
+		h.core.versionFn = reportsPinned
 		h.helper.installed = true
 	})
 	h.s.refreshHelper()
@@ -341,6 +346,7 @@ func TestDownloadCoreHelperFailureRollsBack(t *testing.T) {
 	useCoreServer(t, srv)
 	h := newHarness(t, func(h *harness) {
 		h.core.findFn = realFind
+		h.core.versionFn = reportsPinned
 		h.helper.installed = true
 		h.helper.installErr = errors.New("用户取消了授权")
 	})

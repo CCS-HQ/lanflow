@@ -17,7 +17,7 @@ import (
 // run (`mihomo -v`, `-t`) or installed:
 //
 //   - pinnedCoreVersion: the sums below, taken from the asset digests of the
-//     official release (github.com/MetaCubeX/mihomo, release v1.19.33).
+//     official release (github.com/MetaCubeX/mihomo, release v1.19.34).
 //     scripts/fetch-core.sh carries the same table; a test keeps the two
 //     in sync.
 //   - any other version (stable or Alpha): the `digest` field GitHub's
@@ -30,12 +30,12 @@ import (
 // pinnedCoreSHA256 maps the official assets of pinnedCoreVersion to the
 // SHA-256 of the archive (.gz / .zip) as published.
 var pinnedCoreSHA256 = map[string]string{
-	"mihomo-darwin-amd64-v1.19.33.gz":   "551ae54ef8d77a5e21f7a8185a59b441fb13a0fb0514fcdef5ca2816f6f50015",
-	"mihomo-darwin-arm64-v1.19.33.gz":   "060b64b0f2c9a310831db0fe4adb2878de67bfa606c311813c1f13966aa504b6",
-	"mihomo-linux-amd64-v1.19.33.gz":    "132f6f3edf9a65e62f04853aed3358472e0b2b7666daa8419edfa2ddf5bb6323",
-	"mihomo-linux-arm64-v1.19.33.gz":    "ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187",
-	"mihomo-windows-amd64-v1.19.33.zip": "6ab2180875f9f6fff8b19386d760daec257f66b45f72b3afc650634272fa837a",
-	"mihomo-windows-arm64-v1.19.33.zip": "a2a26869a14634c49f3fbcecc593b498ed8591fbdd7616b24475b3d60b148da3",
+	"mihomo-darwin-amd64-v1.19.34.gz":   "089b033be801ff365b6558851115238b443b237433aa0841bc3fa41ad75a3927",
+	"mihomo-darwin-arm64-v1.19.34.gz":   "1a7a20eca63fbbaec90137717465bfde488d0db2a3a79b8fadebf9b2545b6e4c",
+	"mihomo-linux-amd64-v1.19.34.gz":    "223fab877e5795ce780ba39902e5f0b1113c1256ae244a7160f1165e017e9ccc",
+	"mihomo-linux-arm64-v1.19.34.gz":    "daaf78a6240a282cdfd75bcbf98fe321f6bd52765cc29e79f344191198f0b50f",
+	"mihomo-windows-amd64-v1.19.34.zip": "f6b855de8722781caea62686f0301f89625fc558d48c1103ffdd98dad7f7f488",
+	"mihomo-windows-arm64-v1.19.34.zip": "076cb04a21377675bcf009b8d1dd83006ce2464aa537e37bce1faf6d3504f554",
 }
 
 var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
