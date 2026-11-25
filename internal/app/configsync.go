@@ -18,6 +18,7 @@ import (
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 	"lanflow/internal/syncfile"
 )
 
@@ -100,8 +101,9 @@ var ErrConfigSyncChoice = i18n.Error("同步文件夹中已有不同的 lanflow.
 // configSyncState is the in-memory state of configuration sync.
 type configSyncState struct {
 	// secrets replaces Secrets for this service (tests); nil = Secrets.
-	secrets SecretStore
-	links   linkSecrets // links this run put into the keychain (configsecrets.go)
+	secrets            SecretStore
+	links              linkSecrets // links this run put into the keychain (configsecrets.go)
+	unresolvedNodeRefs map[string]string // manualNodes.<id>.<field> → unresolved keychain:<key> ref (under cs.mu)
 	// webdavPW is the WebDAV password (backup.go). It lives here, beside
 	// secrets, because both go through secretStore.
 	webdavPW secretSlot
@@ -248,7 +250,7 @@ func (s *Service) knownHash(path string) string {
 func (s *Service) configSyncLoop() {
 	off := s.em.add(func(t Topic) {
 		switch t {
-		case TopicSettings, TopicSubs, TopicRules:
+		case TopicSettings, TopicSubs, TopicRules, TopicProxies:
 			s.cs.mu.Lock()
 			s.cs.dirty = true
 			s.cs.mu.Unlock()
@@ -477,7 +479,7 @@ func (s *Service) loadExternal(path string, data []byte, hash string) {
 	s.cs.mu.Unlock()
 	s.setSyncStatus(func(st *model.ConfigSyncStatus) {
 		st.State, st.Error, st.ErrorLine = model.SyncStateOK, "", 0
-		st.MissingSecrets, st.WebDAVPasswordMissing = missing.subs, missing.webdav
+		st.MissingSecrets, st.MissingNodeSecrets, st.WebDAVPasswordMissing = missing.subs, missing.nodes, missing.webdav
 		if res.Applied {
 			st.LastAppliedAt, st.Summary = now, res.Summary
 		}
@@ -514,6 +516,7 @@ func (s *Service) syncFailed(path, hash string, err error, line int) {
 
 type missingInfo struct {
 	subs   []string
+	nodes  []string
 	webdav bool
 }
 
@@ -526,10 +529,87 @@ func (s *Service) missingSecrets(doc syncfile.Doc) missingInfo {
 			m.subs = append(m.subs, sub.Name)
 		}
 	}
+	s.cs.mu.Lock()
+	unresolved := make(map[string]string, len(s.cs.unresolvedNodeRefs))
+	for k, v := range s.cs.unresolvedNodeRefs {
+		unresolved[k] = v
+	}
+	s.cs.mu.Unlock()
+	for _, n := range s.d.store.ManualNodes() {
+		miss := profile.ManualNodeMissingSecret(n)
+		if !miss {
+			for _, f := range syncfile.ManualNodeSecretFields {
+				if unresolved[syncfile.ManualNodeSecretPath(n.ID, f)] != "" {
+					miss = true
+					break
+				}
+			}
+		}
+		if miss {
+			m.nodes = append(m.nodes, n.Name)
+		}
+	}
 	if doc.WebDAVPassword != "" && !s.WebDAVInfo().HasPassword && s.resolveRef(doc.WebDAVPassword) == "" {
 		m.webdav = true
 	}
 	return m
+}
+
+func (s *Service) markSyncDirty() {
+	s.cs.mu.Lock()
+	s.cs.dirty = true
+	s.cs.mu.Unlock()
+}
+
+func (s *Service) setUnresolvedNodeRefs(refs map[string]string) {
+	s.cs.mu.Lock()
+	if len(refs) == 0 {
+		s.cs.unresolvedNodeRefs = nil
+	} else {
+		cp := make(map[string]string, len(refs))
+		for k, v := range refs {
+			cp[k] = v
+		}
+		s.cs.unresolvedNodeRefs = cp
+	}
+	s.cs.mu.Unlock()
+}
+
+func (s *Service) clearUnresolvedNodeRefsForNode(id string) {
+	prefix := "manualNodes." + id + "."
+	s.cs.mu.Lock()
+	for k := range s.cs.unresolvedNodeRefs {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.cs.unresolvedNodeRefs, k)
+		}
+	}
+	s.cs.mu.Unlock()
+}
+
+func (s *Service) applyUnresolvedNodeRefs(doc *syncfile.Doc) {
+	s.cs.mu.Lock()
+	refs := s.cs.unresolvedNodeRefs
+	if len(refs) == 0 {
+		s.cs.mu.Unlock()
+		return
+	}
+	cp := make(map[string]string, len(refs))
+	for k, v := range refs {
+		cp[k] = v
+	}
+	s.cs.mu.Unlock()
+	for i := range doc.ManualNodes {
+		e := &doc.ManualNodes[i]
+		for _, f := range syncfile.ManualNodeSecretFields {
+			fp := e.SecretFieldPtr(f)
+			if fp == nil || *fp != "" {
+				continue
+			}
+			if ref := cp[syncfile.ManualNodeSecretPath(e.ID, f)]; ref != "" {
+				*fp = ref
+			}
+		}
+	}
 }
 
 // writeSyncFile writes this machine's configuration when its canonical
@@ -540,7 +620,11 @@ func (s *Service) writeSyncFile(dir string) {
 	if err := s.storeLinkSecrets(st.subs); err != nil {
 		s.alog.Warnf("config sync: keychain: %v (the file keeps keychain references; this machine keeps its links)", err)
 	}
+	if err := s.storeManualNodeSecrets(st.manualNodes); err != nil {
+		s.alog.Warnf("config sync: keychain manual nodes: %v (the file keeps keychain references; this machine keeps its credentials)", err)
+	}
 	doc := buildDoc(st, linksKeychain)
+	s.applyUnresolvedNodeRefs(&doc)
 	if s.WebDAVInfo().HasPassword {
 		doc.WebDAVPassword = syncfile.WebDAVPasswordRef
 	}
@@ -549,7 +633,7 @@ func (s *Service) writeSyncFile(dir string) {
 		if doc.WebDAVPassword != "" {
 			pw, _ = s.loadPassword()
 		}
-		s.sealDoc(&doc, st.subs, pw)
+		s.sealDoc(&doc, st.subs, st.manualNodes, pw)
 	}
 	data := syncfile.Encode(doc)
 	s.cs.mu.Lock()
@@ -677,6 +761,7 @@ func (s *Service) setSyncStatus(fn func(*model.ConfigSyncStatus)) {
 	before := s.cs.st
 	before.Conflicts = append([]string(nil), before.Conflicts...)
 	before.MissingSecrets = append([]string(nil), before.MissingSecrets...)
+	before.MissingNodeSecrets = append([]string(nil), before.MissingNodeSecrets...)
 	fn(&s.cs.st)
 	changed := !reflect.DeepEqual(normalStatus(before), normalStatus(s.cs.st))
 	s.cs.mu.Unlock()
@@ -694,6 +779,9 @@ func normalStatus(st model.ConfigSyncStatus) model.ConfigSyncStatus {
 	if len(st.MissingSecrets) == 0 {
 		st.MissingSecrets = nil
 	}
+	if len(st.MissingNodeSecrets) == 0 {
+		st.MissingNodeSecrets = nil
+	}
 	return st
 }
 
@@ -706,6 +794,7 @@ func (s *Service) ConfigSyncStatus() model.ConfigSyncStatus {
 	st := s.cs.st
 	st.Conflicts = append([]string(nil), st.Conflicts...)
 	st.MissingSecrets = append([]string(nil), st.MissingSecrets...)
+	st.MissingNodeSecrets = append([]string(nil), st.MissingNodeSecrets...)
 	s.cs.mu.Unlock()
 	st.Mode = set.Mode
 	st.ICloudDir = s.iCloudDir()
@@ -734,6 +823,7 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 	switch mode {
 	case model.SyncOff:
 		err := s.updateSettings(func(set *model.Settings) { set.Sync = model.ConfigSyncSettings{} })
+		s.setUnresolvedNodeRefs(nil)
 		s.resetSeal()
 		s.releaseHeld()
 		s.setSyncStatus(func(st *model.ConfigSyncStatus) { *st = model.ConfigSyncStatus{} })
@@ -833,9 +923,16 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 		s.rememberHash(path, syncfile.Hash(fileData))
 		m := s.missingSecrets(fileDoc)
 		s.setSyncStatus(func(st *model.ConfigSyncStatus) {
-			*st = model.ConfigSyncStatus{State: model.SyncStateOK, LastAppliedAt: s.d.now(), MissingSecrets: m.subs, WebDAVPasswordMissing: m.webdav}
+			*st = model.ConfigSyncStatus{
+				State:                 model.SyncStateOK,
+				LastAppliedAt:         s.d.now(),
+				MissingSecrets:        m.subs,
+				MissingNodeSecrets:    m.nodes,
+				WebDAVPasswordMissing: m.webdav,
+			}
 		})
 	} else {
+		s.setUnresolvedNodeRefs(nil)
 		s.setSyncStatus(func(st *model.ConfigSyncStatus) { *st = model.ConfigSyncStatus{State: model.SyncStateOK} })
 	}
 	s.writeSyncFile(target)
@@ -853,6 +950,15 @@ func refsOnly(d syncfile.Doc) syncfile.Doc {
 	for i, sub := range d.Subscriptions {
 		if syncfile.IsSealed(sub.URL) {
 			d.Subscriptions[i].URL = syncfile.SubscriptionRef(sub.ID)
+		}
+	}
+	d.ManualNodes = append([]syncfile.ManualNode(nil), d.ManualNodes...)
+	for i := range d.ManualNodes {
+		n := &d.ManualNodes[i]
+		for _, f := range syncfile.ManualNodeSecretFields {
+			if fp := n.SecretFieldPtr(f); fp != nil && syncfile.IsSealed(*fp) {
+				*fp = syncfile.ManualNodeSecretRef(n.ID, f)
+			}
 		}
 	}
 	return d

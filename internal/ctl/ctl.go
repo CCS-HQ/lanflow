@@ -743,8 +743,9 @@ type SyncStatusView struct {
 	Summary        string   `json:"summary,omitempty"`
 	Error          string   `json:"error,omitempty"`
 	ErrorLine      int      `json:"errorLine,omitempty"`
-	Conflicts      []string `json:"conflicts,omitempty"`
-	MissingSecrets []string `json:"missingSecrets,omitempty"`
+	Conflicts          []string `json:"conflicts,omitempty"`
+	MissingSecrets     []string `json:"missingSecrets,omitempty"`
+	MissingNodeSecrets []string `json:"missingNodeSecrets,omitempty"`
 }
 
 // syncStatusView builds the view of st.
@@ -754,7 +755,7 @@ func syncStatusView(st model.ConfigSyncStatus) SyncStatusView {
 		mode = "off"
 	}
 	v := SyncStatusView{Mode: mode, State: st.State, Path: st.Path, Summary: st.Summary, Error: st.Error,
-		ErrorLine: st.ErrorLine, Conflicts: st.Conflicts, MissingSecrets: st.MissingSecrets}
+		ErrorLine: st.ErrorLine, Conflicts: st.Conflicts, MissingSecrets: st.MissingSecrets, MissingNodeSecrets: st.MissingNodeSecrets}
 	if !st.LastAppliedAt.IsZero() {
 		v.LastAppliedAt = st.LastAppliedAt.Local().Format(time.RFC3339)
 	}

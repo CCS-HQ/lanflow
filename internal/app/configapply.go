@@ -20,6 +20,7 @@ import (
 // Loading lanflow.yaml into the service (configuration sync and
 // API.ApplyConfigFile). The document is declarative: for the parts it
 // covers — settings without the machine-local items, the override list,
+// the manual nodes (kept when the file has no manualNodes key),
 // the proxy chains (kept when the file has no proxyChains key),
 // the custom rules and the URL subscriptions — this machine ends up with
 // exactly what the file says. Subscriptions imported from local files
@@ -84,17 +85,26 @@ func retryable(err error) (retry bool, limit int) {
 	return true, 0
 }
 
+type nodeSecretKey struct {
+	id, field string
+}
+
 // applyPlan is what loading a document changes.
 type applyPlan struct {
-	cur, next localState
-	put       []model.Subscription // subscriptions to add or update
-	del       []model.Subscription // URL subscriptions the file no longer has
-	keptCur   string               // the current subscription, which the file drops but stays
-	missing   []string             // names of subscriptions without a link on this machine
-	fresh     []string             // IDs of new subscriptions to download
-	changed   []string             // "settings", "overrides", "customRules", "proxyChains", "subscriptions"
-	before    []byte               // lanflow.yaml of this machine now
-	after     []byte               // lanflow.yaml of this machine after loading
+	cur, next             localState
+	put                   []model.Subscription // subscriptions to add or update
+	del                   []model.Subscription // URL subscriptions the file no longer has
+	delNodes              []string             // manual node IDs the file no longer has
+	clearedNodeSecrets    []nodeSecretKey      // manual node secret fields explicitly cleared in the file
+	keptCur               string               // the current subscription, which the file drops but stays
+	missing               []string             // names of subscriptions without a link on this machine
+	missingNodes          []string             // names of manual nodes without credentials on this machine
+	unresolvedRefs        map[string]string    // manualNodes.<id>.<field> → unresolved keychain:<key> ref
+	replaceUnresolvedRefs bool
+	fresh                 []string // IDs of new subscriptions to download
+	changed               []string // "settings", "overrides", "customRules", "manualNodes", "proxyChains", "subscriptions"
+	before                []byte   // lanflow.yaml of this machine now
+	after                 []byte   // lanflow.yaml of this machine after loading
 }
 
 // planDoc works out what loading doc does, without changing anything.
@@ -178,6 +188,59 @@ func (s *Service) planDoc(doc syncfile.Doc) (*applyPlan, error) {
 		}
 	}
 
+	// ---- manual nodes: a file without the key keeps this machine's ----
+	next.manualNodes = model.CloneManualNodes(cur.manualNodes)
+	if doc.ManualNodes != nil {
+		p.replaceUnresolvedRefs = true
+		p.unresolvedRefs = map[string]string{}
+		curNodes := map[string]model.ManualNode{}
+		for _, n := range cur.manualNodes {
+			curNodes[n.ID] = n
+		}
+		inNodes := map[string]bool{}
+		next.manualNodes = make([]model.ManualNode, 0, len(doc.ManualNodes))
+		for i, e := range doc.ManualNodes {
+			inNodes[e.ID] = true
+			old, had := curNodes[e.ID]
+			n := manualNodeFromDoc(e)
+			nodeMissing := false
+			for _, f := range syncfile.ManualNodeSecretFields {
+				ref := *e.SecretFieldPtr(f)
+				localVal := ""
+				if had {
+					localVal = *modelSecretPtr(&old, f)
+				}
+				val, miss := s.resolveManualSecret(ref, localVal)
+				*modelSecretPtr(&n, f) = val
+				if miss {
+					nodeMissing = true
+					p.unresolvedRefs[syncfile.ManualNodeSecretPath(e.ID, f)] = ref
+				} else if had && ref == "" && localVal != "" {
+					p.clearedNodeSecrets = append(p.clearedNodeSecrets, nodeSecretKey{id: e.ID, field: f})
+				}
+			}
+			var v model.ManualNode
+			var err error
+			if nodeMissing {
+				v, err = profile.ValidateManualNodeAllowMissingSecret(n)
+			} else {
+				v, err = profile.ValidateManualNode(n)
+			}
+			if err != nil {
+				return nil, &docError{"manualNodes[" + strconv.Itoa(i) + "]", err}
+			}
+			if nodeMissing {
+				p.missingNodes = append(p.missingNodes, v.Name)
+			}
+			next.manualNodes = append(next.manualNodes, v)
+		}
+		for _, old := range cur.manualNodes {
+			if !inNodes[old.ID] {
+				p.delNodes = append(p.delNodes, old.ID)
+			}
+		}
+	}
+
 	// ---- proxy chains: a file without the key keeps this machine's ----
 	next.chains = cur.chains
 	if doc.ProxyChains != nil {
@@ -213,7 +276,7 @@ func (s *Service) planDoc(doc syncfile.Doc) (*applyPlan, error) {
 		d := buildDoc(st, linksKeychain)
 		switch part {
 		case "settings":
-			d.Overrides, d.CustomRules, d.Subscriptions, d.ProxyChains = nil, nil, nil, nil
+			d.Overrides, d.CustomRules, d.Subscriptions, d.ManualNodes, d.ProxyChains = nil, nil, nil, nil, nil
 		case "overrides":
 			d = syncfile.Doc{Overrides: d.Overrides}
 		case "customRules":
@@ -223,10 +286,17 @@ func (s *Service) planDoc(doc syncfile.Doc) (*applyPlan, error) {
 		}
 		return syncfile.Encode(d)
 	}
-	for _, part := range []string{"settings", "overrides", "customRules", "proxyChains"} {
+	for _, part := range []string{"settings", "overrides", "customRules"} {
 		if !bytes.Equal(section(cur, part), section(next, part)) {
 			p.changed = append(p.changed, part)
 		}
+	}
+	// Compare full ManualNode models because linksKeychain masks credentials.
+	if !manualNodesEqual(cur.manualNodes, next.manualNodes) {
+		p.changed = append(p.changed, "manualNodes")
+	}
+	if !bytes.Equal(section(cur, "proxyChains"), section(next, "proxyChains")) {
+		p.changed = append(p.changed, "proxyChains")
 	}
 	if len(p.put) > 0 || len(p.del) > 0 {
 		p.changed = append(p.changed, "subscriptions")
@@ -297,7 +367,8 @@ func (s *Service) applyDoc(doc syncfile.Doc, dryRun bool) (model.ConfigApplyResu
 // summary says what loading the plan does, in one sentence.
 func (p *applyPlan) summary() string {
 	names := map[string]string{
-		"settings": i18n.T("设置"), "overrides": i18n.T("覆写"), "customRules": i18n.T("自定义规则"), "proxyChains": i18n.T("链式代理"), "subscriptions": i18n.T("订阅"),
+		"settings": i18n.T("设置"), "overrides": i18n.T("覆写"), "customRules": i18n.T("自定义规则"),
+		"manualNodes": i18n.T("手动节点"), "proxyChains": i18n.T("链式代理"), "subscriptions": i18n.T("订阅"),
 	}
 	var parts []string
 	for _, c := range p.changed {
@@ -306,6 +377,9 @@ func (p *applyPlan) summary() string {
 	out := i18n.Tf("更新了%s", strings.Join(parts, i18n.T("、")))
 	if n := len(p.missing); n > 0 {
 		out += i18n.Tf("；%d 个订阅需要重新输入链接", n)
+	}
+	if n := len(p.missingNodes); n > 0 {
+		out += i18n.Tf("；%d 个手动节点需要重新填写凭据", n)
 	}
 	if p.keptCur != "" {
 		out += i18n.Tf("；正在使用的订阅「%s」已保留", p.keptCur)
@@ -320,11 +394,13 @@ func (s *Service) checkPlan(p *applyPlan) error {
 		return &docError{"settings", err}
 	}
 	cur, ok := s.d.store.Current()
-	if !ok {
+	if !ok && len(readyManualNodes(p.next.manualNodes)) == 0 {
 		return nil // nothing to compose yet
 	}
-	if _, err := s.d.store.Content(cur.ID); err != nil {
-		return nil // not downloaded yet: the core checks it when it is
+	if ok {
+		if _, err := s.d.store.Content(cur.ID); err != nil {
+			return nil // not downloaded yet: the core checks it when it is
+		}
 	}
 	s.mu.Lock()
 	bin := s.state.coreBin
@@ -340,7 +416,17 @@ func (s *Service) checkPlan(p *applyPlan) error {
 	}
 	set := p.next.set
 	ovs := p.next.ovs
-	pr, err := s.prepare(composeArgs{settings: &set, custom: p.next.rules, useRules: true, chains: p.next.chains, useChains: true, ovs: &ovs, subOverrides: &sel})
+	pr, err := s.prepare(composeArgs{
+		settings:       &set,
+		custom:         p.next.rules,
+		useRules:       true,
+		manualNodes:    p.next.manualNodes,
+		useManualNodes: true,
+		chains:         p.next.chains,
+		useChains:      true,
+		ovs:            &ovs,
+		subOverrides:   &sel,
+	})
 	if err != nil {
 		return err
 	}
@@ -359,6 +445,11 @@ func (s *Service) storePlan(p *applyPlan) error {
 	}
 	if err := s.storeOverrides(p.next.ovs); err != nil {
 		return err
+	}
+	if !manualNodesEqual(p.cur.manualNodes, p.next.manualNodes) {
+		if _, err := st.SetManualNodes(p.next.manualNodes); err != nil {
+			return err
+		}
 	}
 	if !chainsEqual(p.cur.chains, p.next.chains) {
 		if _, err := st.SetProxyChains(p.next.chains); err != nil {
@@ -409,9 +500,19 @@ func (s *Service) storeOverrides(want []model.Override) error {
 }
 
 // dropPlan deletes the URL subscriptions the file no longer has, with
-// their keychain links. It runs after everything else succeeded; a
-// failure here is logged and leaves a subscription the next load drops.
+// their keychain links, updates unresolved manual node keychain references,
+// and forgets credentials of deleted or cleared manual nodes. It runs after
+// everything else succeeded.
 func (s *Service) dropPlan(p *applyPlan) {
+	if p.replaceUnresolvedRefs {
+		s.setUnresolvedNodeRefs(p.unresolvedRefs)
+	}
+	for _, id := range p.delNodes {
+		s.forgetManualNodeSecrets(id)
+	}
+	for _, k := range p.clearedNodeSecrets {
+		s.forgetManualNodeSecret(k.id, k.field)
+	}
 	if len(p.del) == 0 {
 		return
 	}
@@ -443,6 +544,10 @@ func (s *Service) restorePlan(p *applyPlan) error {
 		_, err := st.SetCustomRules(p.cur.rules)
 		note(err)
 	}
+	if !manualNodesEqual(p.cur.manualNodes, st.ManualNodes()) {
+		_, err := st.SetManualNodes(p.cur.manualNodes)
+		note(err)
+	}
 	if !chainsEqual(p.cur.chains, st.ProxyChains()) {
 		_, err := st.SetProxyChains(p.cur.chains)
 		note(err)
@@ -462,8 +567,24 @@ func (s *Service) restorePlan(p *applyPlan) error {
 			}
 		}
 	}
-	s.refreshStore(TopicSubs, TopicSettings, TopicRules)
+	s.refreshStore(TopicSubs, TopicSettings, TopicRules, TopicProxies)
 	return first
+}
+
+func readyManualNodes(nodes []model.ManualNode) []model.ManualNode {
+	var out []model.ManualNode
+	for _, n := range nodes {
+		if !profile.ManualNodeMissingSecret(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func manualNodesEqual(a, b []model.ManualNode) bool {
+	return slices.EqualFunc(a, b, func(x, y model.ManualNode) bool {
+		return reflect.DeepEqual(model.CloneManualNode(x), model.CloneManualNode(y))
+	})
 }
 
 func chainsEqual(a, b []model.ProxyChain) bool {
@@ -517,7 +638,12 @@ func (s *Service) applyPlanSettings(p *applyPlan) (warn, err error) {
 	}
 	if storeChanged && !reloaded && s.running() {
 		s.opMu.Lock()
-		err := s.reloadLocked()
+		var err error
+		if _, hasSub := s.d.store.Current(); !hasSub && len(readyManualNodes(p.next.manualNodes)) == 0 {
+			err = s.stopLocked()
+		} else {
+			err = s.reloadLocked()
+		}
 		s.opMu.Unlock()
 		if err != nil {
 			if settingsChanged {

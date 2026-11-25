@@ -783,7 +783,7 @@ func (s *fakeStore) SetCustomRules(r []model.CustomRule) ([]model.CustomRule, er
 func (s *fakeStore) ManualNodes() []model.ManualNode {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]model.ManualNode(nil), s.manualNodes...)
+	return model.CloneManualNodes(s.manualNodes)
 }
 func (s *fakeStore) ProxyChains() []model.ProxyChain {
 	s.mu.Lock()
@@ -806,7 +806,10 @@ func (s *fakeStore) SetProxyChains(chains []model.ProxyChain) ([]model.ProxyChai
 func (s *fakeStore) SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := append([]model.ManualNode(nil), nodes...)
+	out := model.CloneManualNodes(nodes)
+	if out == nil {
+		out = []model.ManualNode{}
+	}
 	for i := range out {
 		if out[i].ID == "" {
 			s.nextID++
@@ -814,7 +817,7 @@ func (s *fakeStore) SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode
 		}
 	}
 	s.manualNodes = out
-	return append([]model.ManualNode(nil), out...), nil
+	return model.CloneManualNodes(out), nil
 }
 
 // ---- composer ----

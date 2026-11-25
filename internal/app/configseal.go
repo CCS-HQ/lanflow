@@ -220,6 +220,23 @@ func (s *Service) unsealDoc(doc syncfile.Doc) (out syncfile.Doc, webdav string) 
 			out.Subscriptions[i].URL = open(syncfile.SubscriptionPath(sub.ID), sub.URL)
 		}
 	}
+	out.ManualNodes = append([]syncfile.ManualNode(nil), doc.ManualNodes...)
+	for i := range out.ManualNodes {
+		n := &out.ManualNodes[i]
+		for _, f := range syncfile.ManualNodeSecretFields {
+			p := n.SecretFieldPtr(f)
+			if p == nil || !syncfile.IsSealed(*p) {
+				continue
+			}
+			if opened := open(syncfile.ManualNodeSecretPath(n.ID, f), *p); opened != "" {
+				*p = opened
+			} else {
+				// Keep a keychain reference placeholder so planDoc treats this
+				// locked/unreadable secret as missing rather than cleared.
+				*p = syncfile.ManualNodeSecretRef(n.ID, f)
+			}
+		}
+	}
 	if syncfile.IsSealed(doc.WebDAVPassword) {
 		webdav = open(syncfile.WebDAVPasswordPath, doc.WebDAVPassword)
 		out.WebDAVPassword = ""
@@ -243,8 +260,9 @@ func (s *Service) adoptWebDAVPassword(pw string) {
 
 // sealDoc turns the references of a document about to be written into
 // sealed values when the file is encrypted. subs are this machine's
-// subscriptions (for the links), webdav its WebDAV password.
-func (s *Service) sealDoc(doc *syncfile.Doc, subs []model.Subscription, webdav string) {
+// subscriptions, nodes its manual nodes (for credentials), webdav its WebDAV
+// password.
+func (s *Service) sealDoc(doc *syncfile.Doc, subs []model.Subscription, nodes []model.ManualNode, webdav string) {
 	ss := &s.cs.seal
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
@@ -263,6 +281,25 @@ func (s *Service) sealDoc(doc *syncfile.Doc, subs []model.Subscription, webdav s
 	for i, e := range doc.Subscriptions {
 		doc.Subscriptions[i].URL = ss.sealLocked(syncfile.SubscriptionPath(e.ID), links[e.ID], e.URL)
 	}
+	nodeByID := map[string]model.ManualNode{}
+	for _, n := range nodes {
+		nodeByID[n.ID] = n
+	}
+	for i := range doc.ManualNodes {
+		e := &doc.ManualNodes[i]
+		local, hasLocal := nodeByID[e.ID]
+		for _, f := range syncfile.ManualNodeSecretFields {
+			path := syncfile.ManualNodeSecretPath(e.ID, f)
+			plain := ""
+			if hasLocal {
+				if mp := modelSecretPtr(&local, f); mp != nil {
+					plain = *mp
+				}
+			}
+			fp := e.SecretFieldPtr(f)
+			*fp = ss.sealNodeLocked(path, plain, *fp)
+		}
+	}
 	if v := ss.sealLocked(syncfile.WebDAVPasswordPath, webdav, doc.WebDAVPassword); v != "" {
 		doc.WebDAVPassword = v
 	}
@@ -271,11 +308,31 @@ func (s *Service) sealDoc(doc *syncfile.Doc, subs []model.Subscription, webdav s
 	for _, e := range doc.Subscriptions {
 		keep[syncfile.SubscriptionPath(e.ID)] = true
 	}
+	for i := range doc.ManualNodes {
+		e := &doc.ManualNodes[i]
+		for _, f := range syncfile.ManualNodeSecretFields {
+			if fp := e.SecretFieldPtr(f); fp != nil && *fp != "" {
+				keep[syncfile.ManualNodeSecretPath(e.ID, f)] = true
+			}
+		}
+	}
 	for p := range ss.values {
 		if !keep[p] {
 			delete(ss.values, p)
 		}
 	}
+}
+
+// sealNodeLocked seals a manual node credential field; unlike sealLocked, when
+// an unlocked device that previously knew the plaintext sees plain == "" (the
+// user explicitly cleared an optional credential), it returns "" instead of
+// preserving the old ciphertext. ss.mu held.
+func (ss *sealState) sealNodeLocked(path, plain, fallback string) string {
+	if it, had := ss.values[path]; had && plain == "" && ss.key != nil && it.plain != "" {
+		delete(ss.values, path)
+		return ""
+	}
+	return ss.sealLocked(path, plain, fallback)
 }
 
 // sealLocked returns what the file holds for the secret at path:

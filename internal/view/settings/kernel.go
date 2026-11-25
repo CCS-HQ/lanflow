@@ -51,10 +51,10 @@ func (p *Page) exportDialog(c *ui.Context, t *ui.Theme) {
 	ui.Modal(c, &p.export.open, func() {
 		ui.Column(c).Width(env.DialogWidth(c, 420)).Gap(12).Children(func() {
 			ui.Text(c, i18n.T("导出设置")).FontSize(15).Bold()
-			ui.Text(c, i18n.T("导出常规、代理、DNS、嗅探与内核设置，以及覆写和自定义规则。内核文件路径不会导出。")).FontSize(12).TextColor(t.TextMuted)
-			ui.Checkbox(c, &p.export.subs, i18n.T("包含订阅链接"))
+			ui.Text(c, i18n.T("导出常规、代理、DNS、嗅探与内核设置，以及覆写、链式代理和自定义规则。内核文件路径不会导出。")).FontSize(12).TextColor(t.TextMuted)
+			ui.Checkbox(c, &p.export.subs, i18n.T("包含订阅链接与手动节点"))
 			if p.export.subs {
-				ui.Text(c, i18n.T("订阅链接含有你的访问令牌，导出的文件请勿分享给他人。")).FontSize(12).TextColor(t.Warning)
+				ui.Text(c, i18n.T("订阅链接与手动节点含有你的访问令牌或凭据，导出的文件请勿分享给他人。")).FontSize(12).TextColor(t.Warning)
 			}
 			ui.Row(c).Gap(8).Children(func() {
 				ui.Spacer(c)
@@ -94,7 +94,7 @@ func (p *Page) importSettings() {
 	e := p.e
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 		Title:   i18n.T("导入澜流设置"),
-		Message: i18n.T("选择之前用「导出…」保存的 lanflow.yaml（或旧版本导出的 JSON 文件）。导入会应用其中的设置、覆写和自定义规则。"),
+		Message: i18n.T("选择之前用「导出…」保存的 lanflow.yaml（或旧版本导出的 JSON 文件）。导入会应用其中的设置、覆写、手动节点、链式代理和自定义规则。"),
 		Filters: settingsFileFilter(),
 	})
 	if err != nil || len(paths) == 0 {

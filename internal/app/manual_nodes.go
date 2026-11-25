@@ -6,6 +6,7 @@ import (
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/profile"
+	"lanflow/internal/syncfile"
 )
 
 // ManualNodes returns all user-defined proxy nodes in order.
@@ -35,12 +36,15 @@ func (s *Service) SaveManualNode(n model.ManualNode) (model.ManualNode, error) {
 	old := s.d.store.ManualNodes()
 	next := make([]model.ManualNode, 0, len(old)+1)
 	next = append(next, old...)
+	var prev *model.ManualNode
 	if n.ID == "" {
 		next = append(next, n)
 	} else {
 		found := false
 		for i := range next {
 			if next[i].ID == n.ID {
+				p := model.CloneManualNode(next[i])
+				prev = &p
 				next[i] = n
 				found = true
 				break
@@ -98,6 +102,7 @@ func (s *Service) SaveManualNode(n model.ManualNode) (model.ManualNode, error) {
 			s.refreshStore(TopicProxies, TopicStatus)
 			return n, fmt.Errorf(i18n.T("手动节点已撤销：%v"), err)
 		}
+		s.onManualNodeSaved(prev, outNode)
 		return outNode, nil
 	}
 
@@ -105,6 +110,7 @@ func (s *Service) SaveManualNode(n model.ManualNode) (model.ManualNode, error) {
 	if !hasSub && len(old) == 0 && bin != "" {
 		_ = s.startLocked()
 	}
+	s.onManualNodeSaved(prev, outNode)
 	return outNode, nil
 }
 
@@ -131,6 +137,7 @@ func (s *Service) DeleteManualNode(id string) error {
 			return fmt.Errorf(i18n.T("保存手动节点失败：%v"), err)
 		}
 		s.refreshStore(TopicProxies, TopicStatus)
+		s.onManualNodeDeleted(id)
 		if s.running() {
 			return s.stopLocked()
 		}
@@ -154,6 +161,7 @@ func (s *Service) DeleteManualNode(id string) error {
 		return fmt.Errorf(i18n.T("保存手动节点失败：%v"), err)
 	}
 	s.refreshStore(TopicProxies, TopicStatus)
+	s.onManualNodeDeleted(id)
 
 	if s.running() {
 		if p.tmp != "" {
@@ -163,4 +171,25 @@ func (s *Service) DeleteManualNode(id string) error {
 	}
 	p.discard()
 	return nil
+}
+
+func (s *Service) onManualNodeSaved(prev *model.ManualNode, cur model.ManualNode) {
+	s.markSyncDirty()
+	s.clearUnresolvedNodeRefsForNode(cur.ID)
+	if prev == nil || s.Settings().Sync.Mode == model.SyncOff {
+		return
+	}
+	for _, f := range syncfile.ManualNodeSecretFields {
+		if *modelSecretPtr(prev, f) != "" && *modelSecretPtr(&cur, f) == "" {
+			s.forgetManualNodeSecret(cur.ID, f)
+		}
+	}
+}
+
+func (s *Service) onManualNodeDeleted(id string) {
+	s.markSyncDirty()
+	s.clearUnresolvedNodeRefsForNode(id)
+	if s.Settings().Sync.Mode != model.SyncOff {
+		s.forgetManualNodeSecrets(id)
+	}
 }

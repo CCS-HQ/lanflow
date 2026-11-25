@@ -58,6 +58,14 @@ proxyChains:         # 链式代理（docs/chain-proxy.md），只有节点和�
     name: 家宽中转
     hops: [香港自动, 东京 VPS]
     enabled: true
+manualNodes:         # 手动节点；凭据字段（password、uuid、token、authStr、ssOptsPassword、obfsPassword）存钥匙串引用或密文；没有这个键的文件不改动本机节点
+  - id: 7a8b9c0d
+    name: 东京 VPS
+    type: socks5
+    server: 1.2.3.4
+    port: 1080
+    username: alice
+    password: keychain:node-7a8b9c0d-password
 subscriptions:       # 带链接的订阅
   - id: a1b2c3d4     # 各设备相同，覆写选择和 Wi-Fi 规则靠它对应
     name: 机场
@@ -98,7 +106,7 @@ webdavPassword: enc:v1:Zt3m…
 
 ## 同步什么，不同步什么
 
-同步：设置（常规、代理、DNS、嗅探、外部资源、延迟测试、快捷键、Wi-Fi 规则、下载镜像、WebDAV 地址与账号、高级）、覆写列表、自定义规则、带链接的订阅及其名称、User-Agent、经代理更新、自动更新间隔、超时和覆写选择。
+同步：设置（常规、代理、DNS、嗅探、外部资源、延迟测试、快捷键、Wi-Fi 规则、下载镜像、WebDAV 地址与账号、高级）、覆写列表、自定义规则、手动节点、链式代理、带链接的订阅及其名称、User-Agent、经代理更新、自动更新间隔、超时和覆写选择。
 
 不同步（排除清单即 `syncfile.Excluded`，测试保证其中每一项都对应真实字段）：
 
@@ -162,10 +170,11 @@ iCloud 可能只留下占位文件 `.lanflow.yaml.icloud`。此时澜流运行 `
 ## 密钥
 
 - 订阅链接以 `sub-<订阅 ID>` 为键存入系统钥匙串（macOS 登录钥匙串，Windows 凭据管理器，经 MyGo 的 Secrets 模块），文件只写 `keychain:sub-<id>`。本机的 `profiles.json` 仍保留自己的一份链接（与之前一样，权限 0600）。同一次运行中已写入的值不重复写钥匙串。
+- 手动节点的凭据字段（`password`、`uuid`、`token`、`authStr`、`ssOptsPassword`、`obfsPassword`）以 `node-<节点 ID>-<字段名>` 为键存入系统钥匙串，文件写 `keychain:node-<id>-<field>`；本机的 `manual-nodes.json` 仍保留一份（权限 0600）。另一台设备缺少钥匙串条目时，节点照常保留但跳过下发给内核（在 `MissingNodeSecrets` 中提示），待重新填写凭据或解锁同步口令后恢复。
 - WebDAV 密码本来就在钥匙串（键 `webdav-password`）；设置了密码时文件写 `webdavPassword: keychain:webdav-password`。
-- 另一台设备读到本机钥匙串没有的引用时，**不报错**：该订阅照常出现在列表里，标为「需要重新输入链接」（`Subscription.NeedsURL`），更新和自动更新跳过并提示；在「编辑」里填入链接后恢复，链接随后写入本机钥匙串。设置页横幅列出这些订阅；WebDAV 密码缺失也会提示。引用保留在文件里，不会因为本机没有值而被删掉。
-- 文件里也接受明文 `https://` 链接（人或 agent 手写时）；加载后链接存入钥匙串，文件重写为引用。
-- 同步开启时删除订阅会一并删除它的钥匙串条目。
+- 另一台设备读到本机钥匙串没有的引用时，**不报错**：该订阅照常出现在列表里，标为「需要重新输入链接」（`Subscription.NeedsURL`），更新和自动更新跳过并提示；在「编辑」里填入链接后恢复，链接随后写入本机钥匙串。设置页横幅列出这些订阅；手动节点凭据或 WebDAV 密码缺失也会提示。引用保留在文件里，不会因为本机没有值而被删掉。
+- 文件里也接受明文 `https://` 链接和手动节点明文凭据（人或 agent 手写时）；加载后密钥存入钥匙串，文件重写为引用。
+- 同步开启时删除订阅或手动节点会一并删除它对应的钥匙串条目。
 
 ### 为什么不用 iCloud 钥匙串同步（kSecAttrSynchronizable）
 
@@ -184,7 +193,7 @@ iCloud 可能只留下占位文件 `.lanflow.yaml.icloud`。此时澜流运行 `
 **格式**（`internal/syncfile/seal.go`）
 
 - 密钥派生：Argon2id（RFC 9106 推荐的第二组参数：64 MiB、t=3、p=4），32 字节密钥。参数和 16 字节随机盐写在文件头 `encryption` 块。选 Argon2id 而不是 PBKDF2：同步文件放在第三方云盘上，内存困难的 KDF 让离线猜口令每次都要 64 MiB 内存，而不只是 CPU 时间。`golang.org/x/crypto` 原本就在依赖图里（经 `golang.org/x/net`），只是改成直接依赖。
-- 每个密钥单独用 AES-256-GCM 加密，写成 `enc:v1:<base64(12 字节 nonce ‖ 密文)>`。附加数据（AAD）是 `lanflow.yaml/v1/` 加字段路径：订阅链接为 `subscriptions.<订阅 ID>.url`（按 ID 而非位置，调整顺序不影响），WebDAV 密码为 `webdavPassword`。把一段密文挪到别的订阅或别的字段，解密会失败。
+- 每个密钥单独用 AES-256-GCM 加密，写成 `enc:v1:<base64(12 字节 nonce ‖ 密文)>`。附加数据（AAD）是 `lanflow.yaml/v1/` 加字段路径：订阅链接为 `subscriptions.<订阅 ID>.url`（按 ID 而非位置，调整顺序不影响），手动节点凭据为 `manualNodes.<节点 ID>.<字段名>`，WebDAV 密码为 `webdavPassword`。把一段密文挪到别的订阅、节点或别的字段，解密会失败。
 - `check` 是用同一密钥加密的固定文本（路径 `encryption.check`）。用它判断口令对不对，也用它发现口令在另一台设备上改过：本机保存的密钥打不开它，就要重新输入。
 - 读文件时校验 `encryption` 的参数范围（`time` ≤ 16、`memoryKiB` 8 MiB–1 GiB、`threads` ≤ 16、盐至少 16 字节），防止一份恶意文件让本机耗尽内存；有 `enc:` 值却没有 `encryption` 块、base64 无效等都会带行号拒绝。`format` 仍为 1：旧版本把 `encryption` 当未知键忽略，`enc:` 链接当作格式错误拒绝整份文件，不会误读。
 - 写文件时，明文没有变化的密钥沿用原来的密文（nonce 随机，每次重新加密都会得到不同的字节），所以规范形式的比较照常成立，没有改动就不写文件。
@@ -215,9 +224,9 @@ iCloud 可能只留下占位文件 `.lanflow.yaml.icloud`。此时澜流运行 `
 
 ## 导出、导入与 WebDAV 备份
 
-- 「导出…」写出 `lanflow.yaml` 格式（不含本机项）；勾选「包含订阅链接」时链接以明文写出（文件要拿到别的设备导入），否则不含订阅。
-- 「导入…」读 `lanflow.yaml`，也读旧版本导出的 JSON；两者都按原有的合并方式导入（设置覆盖、覆写与规则追加去重、订阅按链接新增），本机项（TUN、内核路径、agent 授权等）保持不变。文件中的 `keychain:` 引用在本机钥匙串中找得到就用，找不到的订阅在导入结果中列出。
-- WebDAV 备份上传 `lanflow-backup-<时间>.yaml`（含订阅链接）；`.json` 的旧备份仍会列出并可恢复。
+- 「导出…」写出 `lanflow.yaml` 格式（不含本机项）；勾选「包含订阅链接与手动节点」时订阅链接与手动节点凭据以明文写出（文件要拿到别的设备导入），否则不含订阅和手动节点。
+- 「导入…」读 `lanflow.yaml`，也读旧版本导出的 JSON；两者都按原有的合并方式导入（设置覆盖、覆写与规则追加去重、手动节点与链式代理按名称跳过已有的、订阅按链接新增），本机项（TUN、内核路径、agent 授权等）保持不变。文件中的 `keychain:` 引用在本机钥匙串中找得到就用，找不到链接的订阅或缺少凭据的手动节点在导入结果中列出。
+- WebDAV 备份上传 `lanflow-backup-<时间>.yaml`（含订阅链接与手动节点）；`.json` 的旧备份仍会列出并可恢复。
 - **WebDAV 地址需在本机确认**（`internal/app/backup.go`）：地址、账号和备份计划随同步文件与导入的文件走，密码留在本机（或以密文带来）。能写同步文件的人因此可以把地址指向自己的服务器并打开自动备份，让本机把密码和带全部订阅链接的备份发过去。所以密码与服务器绑定：本机记下用户最后确认的 `scheme://host[:port]`（`<数据目录>/webdav.origin`）。在本机保存地址、输入密码，或手动执行测试连接、备份、列出、恢复、删除，都算确认。设置里的地址指向另一台服务器（经同步或导入变更）时，自动备份暂停，发一次提醒，`WebDAVInfo.LastError` 说明原因；在「设置 › 备份」确认地址后点一次「测试连接」或「立即备份」即恢复。升级前已有的地址在第一次检查时视为已确认。
 - **公网 `http://` 被拒绝**（`internal/app/webdav.go`）：`http://` 下密码以明文发送，只允许本机或局域网内的服务器——回环、私有、链路本地和 100.64.0.0/10 地址，不带点的主机名，以及 `.local`、`.lan`、`.home`、`.internal`、`.home.arpa`、`.localhost`、`.ts.net` 结尾的名称；其余须用 `https://`。
 

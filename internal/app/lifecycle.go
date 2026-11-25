@@ -57,6 +57,7 @@ func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, 
 	if a.useManualNodes {
 		manualNodes = a.manualNodes
 	}
+	manualNodes = readyManualNodes(manualNodes)
 	var sub model.Subscription
 	var ok bool
 	if a.subID == "" {

@@ -244,6 +244,8 @@ func init() {
 		// internal/app/settingsio.go (chains)
 		"链式代理（%s）": "proxy chains (%s)",
 		"%d 条链式代理": "%d proxy chains",
+		"手动节点（%s）": "manual nodes (%s)",
+		"%d 个手动节点": "%d manual nodes",
 
 		// internal/profile/chain_notes.go (shown by internal/app/chains.go)
 		"链路名称不能以 %s 开头（澜流保留）":                     "A chain name cannot start with %s (reserved by Lanflow)",
@@ -354,6 +356,7 @@ func init() {
 		"文件由更新版本的澜流导出（格式 %d），当前版本无法读取。": "The file was exported by a newer Lanflow (format %d) and cannot be read by this version.",
 		"文件中没有可导入的内容。":                  "The file has nothing to import.",
 		"第 %d 条自定义规则无效：%v":              "Custom rule %d is invalid: %v",
+		"第 %d 个手动节点无效：%v":              "Manual node %d is invalid: %v",
 		"第 %d 个订阅的链接无效。":                "The link of subscription %d is invalid.",
 		"文件过大，不像是澜流的设置文件。":              "The file is too large to be a Lanflow settings file.",
 		"设置（%s）":   "settings (%s)",

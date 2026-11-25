@@ -31,6 +31,35 @@ var supportedProxyTypes = map[string]bool{
 // ValidateManualNode normalizes whitespace/defaults and validates n against
 // Mihomo's supported outbound proxy schemas.
 func ValidateManualNode(n model.ManualNode) (model.ManualNode, error) {
+	return validateManualNode(n, false)
+}
+
+// ValidateManualNodeAllowMissingSecret normalizes and validates n like
+// ValidateManualNode, while allowing missing credentials when a synced node's
+// secrets are still locked or absent from this machine's keychain.
+func ValidateManualNodeAllowMissingSecret(n model.ManualNode) (model.ManualNode, error) {
+	return validateManualNode(n, true)
+}
+
+// ManualNodeMissingSecret reports whether n lacks a credential required by
+// its protocol (e.g. synced from another device without the keychain entry or
+// while sync is locked).
+func ManualNodeMissingSecret(n model.ManualNode) bool {
+	switch strings.ToLower(strings.TrimSpace(n.Type)) {
+	case model.ProxyTypeSS, model.ProxyTypeTrojan, model.ProxyTypeHysteria2, model.ProxyTypeAnyTLS:
+		return strings.TrimSpace(n.Password) == ""
+	case model.ProxyTypeTrojanGo:
+		return strings.TrimSpace(n.Password) == "" || (n.SSOptsEnabled && strings.TrimSpace(n.SSOptsPassword) == "")
+	case model.ProxyTypeVMess, model.ProxyTypeVLESS:
+		return strings.TrimSpace(n.UUID) == ""
+	case model.ProxyTypeTUIC:
+		return strings.TrimSpace(n.Token) == "" && (strings.TrimSpace(n.UUID) == "" || strings.TrimSpace(n.Password) == "")
+	default:
+		return false
+	}
+}
+
+func validateManualNode(n model.ManualNode, allowMissingSecret bool) (model.ManualNode, error) {
 	n.Name = strings.TrimSpace(n.Name)
 	n.Type = strings.ToLower(strings.TrimSpace(n.Type))
 	n.Server = strings.TrimSpace(n.Server)
@@ -90,33 +119,33 @@ func ValidateManualNode(n model.ManualNode) (model.ManualNode, error) {
 		if n.Cipher == "" {
 			return n, fmt.Errorf("Shadowsocks 节点必须填写加密方式（cipher）")
 		}
-		if n.Password == "" {
+		if !allowMissingSecret && n.Password == "" {
 			return n, fmt.Errorf("Shadowsocks 节点必须填写密码")
 		}
 	case model.ProxyTypeVMess:
-		if n.UUID == "" {
+		if !allowMissingSecret && n.UUID == "" {
 			return n, fmt.Errorf("VMess 节点必须填写 UUID")
 		}
 		if n.Cipher == "" {
 			n.Cipher = "auto"
 		}
 	case model.ProxyTypeVLESS:
-		if n.UUID == "" {
+		if !allowMissingSecret && n.UUID == "" {
 			return n, fmt.Errorf("VLESS 节点必须填写 UUID")
 		}
 	case model.ProxyTypeTrojan:
-		if n.Password == "" {
+		if !allowMissingSecret && n.Password == "" {
 			return n, fmt.Errorf("Trojan 节点必须填写密码")
 		}
 	case model.ProxyTypeTrojanGo:
-		if n.Password == "" {
+		if !allowMissingSecret && n.Password == "" {
 			return n, fmt.Errorf("Trojan Go 节点必须填写密码")
 		}
 		if n.SSOptsEnabled {
 			if n.SSOptsMethod == "" {
 				n.SSOptsMethod = "aes-128-gcm"
 			}
-			if n.SSOptsPassword == "" {
+			if !allowMissingSecret && n.SSOptsPassword == "" {
 				return n, fmt.Errorf("开启 Trojan Go Shadowsocks 二次加密时必须填写 SS 密码")
 			}
 		}
@@ -125,15 +154,15 @@ func ValidateManualNode(n model.ManualNode) (model.ManualNode, error) {
 			return n, fmt.Errorf("Hysteria 节点必须填写上行和下行带宽（例如 50 Mbps）")
 		}
 	case model.ProxyTypeHysteria2:
-		if n.Password == "" {
+		if !allowMissingSecret && n.Password == "" {
 			return n, fmt.Errorf("Hysteria2 节点必须填写密码")
 		}
 	case model.ProxyTypeTUIC:
-		if n.Token == "" && (n.UUID == "" || n.Password == "") {
+		if !allowMissingSecret && n.Token == "" && (n.UUID == "" || n.Password == "") {
 			return n, fmt.Errorf("TUIC 节点须填写 UUID 与密码（v5），或填写 Token（v4）")
 		}
 	case model.ProxyTypeAnyTLS:
-		if n.Password == "" {
+		if !allowMissingSecret && n.Password == "" {
 			return n, fmt.Errorf("AnyTLS 节点必须填写密码")
 		}
 	}

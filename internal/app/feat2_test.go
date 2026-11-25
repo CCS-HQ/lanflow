@@ -283,6 +283,50 @@ func TestWebDAVBackupListRestoreDelete(t *testing.T) {
 	}
 }
 
+func TestWebDAVBackupRestoreManualNodesAndChains(t *testing.T) {
+	h, _ := webdavHarness(t)
+	n, err := h.s.SaveManualNode(model.ManualNode{
+		Name: "dav-node", Type: model.ProxyTypeVLESS, Server: "vless.example.com", Port: 443,
+		UUID: "11111111-1111-1111-1111-111111111111", TLS: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.SetProxyChains([]model.ProxyChain{{
+		Name: "备份链路", Hops: []string{"香港 01", n.Name}, Enabled: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.BackupNow(); err != nil {
+		t.Fatalf("BackupNow: %v", err)
+	}
+	if _, err := h.s.SetProxyChains(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DeleteManualNode(n.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, err := h.s.ListBackups()
+	if err != nil || len(list) == 0 {
+		t.Fatalf("ListBackups: %+v %v", list, err)
+	}
+	summary, err := h.s.RestoreBackup(list[0].Name)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if !strings.Contains(summary, "1 个手动节点") || !strings.Contains(summary, "1 条链式代理") {
+		t.Fatalf("summary = %q", summary)
+	}
+	nodes := h.s.ManualNodes()
+	if len(nodes) != 1 || nodes[0].Name != "dav-node" || nodes[0].UUID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("restored manual nodes = %+v", nodes)
+	}
+	chains := h.s.ProxyChains()
+	if len(chains) != 1 || chains[0].Name != "备份链路" {
+		t.Fatalf("restored chains = %+v", chains)
+	}
+}
+
 func TestWebDAVErrors(t *testing.T) {
 	h, _ := webdavHarness(t)
 	// Wrong password → a login error, nothing uploaded.

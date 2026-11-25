@@ -189,11 +189,15 @@ func (s *Server) prepareUndo(method string, args []reflect.Value) undoPrep {
 		// differs between the two reads counts as loaded from it; what
 		// was changed again by the time of the undo is left (restoreSettings).
 		oldSet, oldRules, oldOvs := model.CloneSettings(api.Settings()), api.CustomRules(), api.OverrideList()
+		oldNodes := api.ManualNodes()
 		oldChains := api.ProxyChains()
 		return func([]any) (func() (string, error), string) {
 			wrote := model.CloneSettings(api.Settings())
 			return func() (string, error) {
 				if err := restoreOverrides(api, oldOvs); err != nil {
+					return "", err
+				}
+				if err := restoreManualNodes(api, oldNodes); err != nil {
 					return "", err
 				}
 				if _, err := api.SetProxyChains(oldChains); err != nil {
@@ -203,7 +207,7 @@ func (s *Server) prepareUndo(method string, args []reflect.Value) undoPrep {
 					return "", err
 				}
 				return restoreSettings(api, wrote, oldSet, nil)
-			}, "恢复加载配置文件之前的设置、覆写、链式代理和自定义规则（订阅不恢复）"
+			}, "恢复加载配置文件之前的设置、覆写、手动节点、链式代理和自定义规则（订阅不恢复）"
 		}
 	case method == "SetProxyChains":
 		// a rename rewrites custom rules too: both come back
@@ -422,4 +426,40 @@ func restoreOverrides(api app.API, old []model.Override) error {
 		}
 	}
 	return nil
+}
+
+// restoreManualNodes turns the manual nodes back into old.
+func restoreManualNodes(api app.API, old []model.ManualNode) error {
+	keep := map[string]bool{}
+	for _, n := range old {
+		keep[n.ID] = true
+	}
+	for _, n := range api.ManualNodes() {
+		if !keep[n.ID] {
+			if err := api.DeleteManualNode(n.ID); err != nil {
+				return err
+			}
+		}
+	}
+	byID := map[string]model.ManualNode{}
+	for _, n := range api.ManualNodes() {
+		byID[n.ID] = n
+	}
+	for _, n := range old {
+		c, ok := byID[n.ID]
+		if ok && sameManualNode(c, n) {
+			continue
+		}
+		if !ok {
+			n.ID = ""
+		}
+		if _, err := api.SaveManualNode(n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sameManualNode(a, b model.ManualNode) bool {
+	return reflect.DeepEqual(model.CloneManualNode(a), model.CloneManualNode(b))
 }

@@ -39,6 +39,9 @@ func sampleDoc() Doc {
 		Subscriptions: []Subscription{
 			{ID: "a1b2c3d4", Name: "机场", URL: SubscriptionRef("a1b2c3d4"), AutoUpdateHours: 12, Overrides: []string{"e5f6"}},
 		},
+		ManualNodes: []ManualNode{
+			{ID: "mn01", Name: "自建节点", Type: model.ProxyTypeTrojan, Server: "1.2.3.4", Port: 443, UDP: true, Password: ManualNodeSecretRef("mn01", "password"), ALPN: []string{"h2"}},
+		},
 		WebDAVPassword: WebDAVPasswordRef,
 	}
 }
@@ -57,6 +60,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	doc.Format = Format
 	if !reflect.DeepEqual(got.Overrides, doc.Overrides) || !reflect.DeepEqual(got.Subscriptions, doc.Subscriptions) ||
+		!reflect.DeepEqual(got.ManualNodes, doc.ManualNodes) ||
 		!reflect.DeepEqual(got.CustomRules, doc.CustomRules) || got.WebDAVPassword != doc.WebDAVPassword {
 		t.Fatalf("lists differ:\n%+v\n%+v", got, doc)
 	}
@@ -378,6 +382,54 @@ func TestProxyChains(t *testing.T) {
 		"format: 1\nproxyChains:\n  - {id: a, name: X, hops: [A, B], enabled: true}\n  - {id: a, name: Y, hops: [A, B], enabled: true}\n",
 		"format: 1\nproxyChains:\n  - {id: a, name: X, hops: [A, B], enabled: true}\n  - {id: b, name: X, hops: [A, B], enabled: true}\n",
 		"format: 1\nproxyChains:\n  - {id: a, name: '', hops: [A, B], enabled: true}\n",
+	} {
+		_, err := Decode([]byte(bad), model.Settings{})
+		var e *Error
+		if !errors.As(err, &e) || e.Line == 0 {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+}
+
+func TestManualNodes(t *testing.T) {
+	t.Parallel()
+	doc, err := Decode([]byte("format: 1\n"), model.Settings{})
+	if err != nil || doc.ManualNodes != nil {
+		t.Fatalf("absent: %v %#v", err, doc.ManualNodes)
+	}
+	doc, err = Decode([]byte("format: 1\nmanualNodes: []\n"), model.Settings{})
+	if err != nil || doc.ManualNodes == nil || len(doc.ManualNodes) != 0 {
+		t.Fatalf("empty: %v %#v", err, doc.ManualNodes)
+	}
+	in := Doc{
+		ManualNodes: []ManualNode{
+			{
+				ID: "m1", Name: "trojan-go-1", Type: model.ProxyTypeTrojanGo, Server: "tg.example.com", Port: 443, UDP: true,
+				Password: ManualNodeSecretRef("m1", "password"), SNI: "tg.example.com", ALPN: []string{"h2", "http/1.1"},
+				Network: "ws", WSPath: "/ws", WSHost: "tg.example.com",
+				SSOptsEnabled: true, SSOptsMethod: "aes-128-gcm", SSOptsPassword: ManualNodeSecretRef("m1", "ssOptsPassword"),
+			},
+			{
+				ID: "m2", Name: "hy2-1", Type: model.ProxyTypeHysteria2, Server: "hy2.example.com", Port: 8443,
+				Password: "plain-password", Obfs: "salamander", ObfsPassword: ManualNodeSecretRef("m2", "obfsPassword"),
+				Up: "50 Mbps", Down: "200 Mbps",
+			},
+		},
+	}
+	got, err := Decode(Encode(in), model.Settings{})
+	if err != nil || !reflect.DeepEqual(got.ManualNodes, in.ManualNodes) {
+		t.Fatalf("round trip: err=%v got=%+v want=%+v", err, got.ManualNodes, in.ManualNodes)
+	}
+	for _, bad := range []string{
+		"format: 1\nmanualNodes:\n  - {id: 'a b', name: X, type: socks5, server: 1.2.3.4, port: 1080}\n",
+		"format: 1\nmanualNodes:\n  - {id: a, name: X, type: socks5, server: 1.2.3.4, port: 1080}\n  - {id: a, name: Y, type: socks5, server: 1.2.3.4, port: 1080}\n",
+		"format: 1\nmanualNodes:\n  - {id: a, name: '', type: socks5, server: 1.2.3.4, port: 1080}\n",
+		"format: 1\nmanualNodes:\n  - {id: a, name: X, type: socks5, server: 1.2.3.4, port: 1080}\n  - {id: b, name: X, type: socks5, server: 1.2.3.4, port: 1080}\n",
+		"format: 1\nmanualNodes:\n  - {id: a, name: X, type: wireguard, server: 1.2.3.4, port: 1080}\n",
+		"format: 1\nmanualNodes:\n  - {id: a, name: X, type: socks5, server: '', port: 1080}\n",
+		"format: 1\nmanualNodes:\n  - {id: a, name: X, type: socks5, server: 1.2.3.4, port: 70000}\n",
+		"format: 1\nmanualNodes:\n  - {id: a, name: X, type: ss, server: 1.2.3.4, port: 8388, password: 'keychain:'}\n",
+		"format: 1\nmanualNodes:\n  - {id: a, name: X, type: ss, server: 1.2.3.4, port: 8388, password: 'enc:v2:AAAA'}\n",
 	} {
 		_, err := Decode([]byte(bad), model.Settings{})
 		var e *Error

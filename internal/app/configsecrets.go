@@ -327,3 +327,125 @@ func (s *Service) resolveLink(ref, local string) string {
 	}
 	return local
 }
+
+// ---- manual node credentials ----
+
+// storeManualNodeSecrets stores every non-empty credential field of nodes
+// into the keychain under node-<id>-<field>.
+func (s *Service) storeManualNodeSecrets(nodes []model.ManualNode) error {
+	var items []struct{ key, val string }
+	for i := range nodes {
+		n := &nodes[i]
+		for _, f := range syncfile.ManualNodeSecretFields {
+			p := modelSecretPtr(n, f)
+			if p == nil || *p == "" {
+				continue
+			}
+			items = append(items, struct{ key, val string }{
+				key: syncfile.ManualNodeSecretKey(n.ID, f),
+				val: *p,
+			})
+		}
+	}
+	return s.storeLinkItems(items)
+}
+
+func (s *Service) storeLinkItems(items []struct{ key, val string }) error {
+	ks := s.secretStore()
+	ls := &s.cs.links
+	now := s.d.now()
+	var todo []struct{ key, val string }
+	ls.mu.Lock()
+	if ls.stored == nil {
+		ls.stored = map[string]string{}
+	}
+	if ls.failed == nil {
+		ls.failed = map[string]linkFailed{}
+	}
+	for _, it := range items {
+		if ls.stored[it.key] == it.val {
+			continue
+		}
+		if f, ok := ls.failed[it.key]; ok && f.value == it.val && now.Sub(f.at) < linkRetry {
+			continue
+		}
+		todo = append(todo, it)
+	}
+	ls.mu.Unlock()
+
+	var first error
+	for _, it := range todo {
+		err := errors.ErrUnsupported
+		if ks != nil {
+			err = ks.Set(it.key, []byte(it.val))
+		}
+		ls.mu.Lock()
+		if err != nil {
+			ls.failed[it.key] = linkFailed{value: it.val, at: now}
+			if first == nil {
+				first = err
+			}
+		} else {
+			ls.stored[it.key] = it.val
+			delete(ls.failed, it.key)
+		}
+		ls.mu.Unlock()
+	}
+	return first
+}
+
+// forgetManualNodeSecret removes a manual node credential field from the keychain.
+func (s *Service) forgetManualNodeSecret(id, field string) {
+	s.forgetKeychainKey(syncfile.ManualNodeSecretKey(id, field))
+}
+
+// forgetManualNodeSecrets removes all credential fields of manual node id from the keychain.
+func (s *Service) forgetManualNodeSecrets(id string) {
+	for _, f := range syncfile.ManualNodeSecretFields {
+		s.forgetManualNodeSecret(id, f)
+	}
+}
+
+func (s *Service) forgetKeychainKey(key string) {
+	ks := s.secretStore()
+	if ks == nil {
+		return
+	}
+	ls := &s.cs.links
+	ls.mu.Lock()
+	delete(ls.stored, key)
+	delete(ls.failed, key)
+	ls.mu.Unlock()
+	if err := ks.Delete(key); err != nil && !errors.Is(err, ErrSecretNotFound) {
+		s.alog.Warnf("config sync: keychain delete %s: %v", key, err)
+	}
+}
+
+// resolveManualSecret resolves a manual node credential field from a sync
+// document: "" stays "" (explicitly unset/cleared), a plain value is used
+// directly, and a keychain reference resolves from the keychain or falls back
+// to local. missing is true when ref is a keychain reference that neither the
+// keychain nor local has.
+func (s *Service) resolveManualSecret(ref, local string) (val string, missing bool) {
+	if ref == "" {
+		return "", false
+	}
+	key, ok := syncfile.KeychainKey(ref)
+	if !ok {
+		return ref, false
+	}
+	if v := s.resolveRef(ref); v != "" {
+		ls := &s.cs.links
+		ls.mu.Lock()
+		if ls.stored == nil {
+			ls.stored = map[string]string{}
+		}
+		ls.stored[key] = v
+		ls.mu.Unlock()
+		return v, false
+	}
+	if local != "" {
+		return local, false
+	}
+	return "", true
+}
