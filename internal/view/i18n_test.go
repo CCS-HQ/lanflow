@@ -12,6 +12,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 	"lanflow/internal/view/env"
 )
 
@@ -176,6 +177,24 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	}
 	c.frame("invalid config dialog", tt)
 	click(t, tt, i18n.T("好"))
+
+	// The aggregate subscription editor, every tab and the preview. The
+	// generated group and node names are profile data.
+	c.data = append(c.data, profile.AggGroupSelect, profile.AggGroupAuto, profile.AggGroupFinal)
+	tt.Frame()
+	click(t, tt, i18n.T("导入"))
+	if err := tt.ChooseMenuItem(i18n.T("新建聚合订阅…")); err != nil {
+		t.Fatal(err)
+	}
+	c.frame("aggregate editor", tt)
+	for _, tab := range []string{"节点处理", "分组与规则"} {
+		click(t, tt, i18n.T(tab))
+		c.frame("aggregate editor "+tab, tt)
+	}
+	click(t, tt, i18n.T("预览"))
+	c.frame("aggregate preview (empty source)", tt)
+	click(t, tt, i18n.T("取消"))
+	tt.Frame()
 
 	// Rules: the add form and the test dialog.
 	s.navigate(env.Rules, "")

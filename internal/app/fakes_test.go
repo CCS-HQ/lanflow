@@ -573,11 +573,30 @@ type fakeStore struct {
 	rules       []model.CustomRule
 	manualNodes []model.ManualNode
 	chains      []model.ProxyChain
+	aggs        map[string]model.AggregateSpec
 	nextID      int
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{content: map[string][]byte{}}
+	return &fakeStore{content: map[string][]byte{}, aggs: map[string]model.AggregateSpec{}}
+}
+
+func (s *fakeStore) AggregateSpec(id string) (model.AggregateSpec, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	spec, ok := s.aggs[id]
+	return spec.Clone(), ok
+}
+func (s *fakeStore) SetAggregateSpec(id string, spec model.AggregateSpec) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, x := range s.subs {
+		if x.ID == id {
+			s.aggs[id] = spec.Clone()
+			return nil
+		}
+	}
+	return errors.New("no such subscription")
 }
 
 func (s *fakeStore) List() []model.Subscription {
@@ -643,6 +662,7 @@ func (s *fakeStore) Delete(id string) error {
 		}
 	}
 	delete(s.content, id)
+	delete(s.aggs, id)
 	s.removeOverride(id)
 	return nil
 }
@@ -824,6 +844,9 @@ type fakeProf struct {
 	fetched  profile.Fetched
 	fetchErr error
 	inputs   []profile.Input
+	// raw answers FetchRaw by URL (an aggregate subscription's sources);
+	// a URL not in it fails.
+	raw map[string]profile.Fetched
 }
 
 func (p *fakeProf) Compose(in profile.Input) (profile.Output, error) {
@@ -854,6 +877,15 @@ func (p *fakeProf) Fetch(context.Context, *http.Client, string, string) (profile
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.fetched, p.fetchErr
+}
+func (p *fakeProf) FetchRaw(_ context.Context, _ *http.Client, url, _ string) (profile.Fetched, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f, ok := p.raw[url]
+	if !ok {
+		return profile.Fetched{}, errors.New("HTTP 404")
+	}
+	return f, nil
 }
 func (p *fakeProf) CheckYAML(data []byte) error {
 	if !strings.Contains(string(data), "proxies") {

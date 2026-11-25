@@ -132,6 +132,20 @@ type API interface {
 	DeleteSubscription(id string) error          // refuses the current one
 	SubscriptionRaw(id string) (string, error)
 
+	// ---- aggregate subscriptions (docs/aggregate.md) ----
+	// AggregateSpec returns how an aggregate subscription is built; it
+	// holds the source links (secrets).
+	AggregateSpec(id string) (model.AggregateSpec, error)
+	// PreviewAggregate downloads the sources and builds the profile
+	// without saving it; s gives the download options (User-Agent, via
+	// proxy, timeout). It takes as long as the downloads.
+	PreviewAggregate(s model.Subscription, spec model.AggregateSpec) (model.AggregatePreview, error)
+	// SaveAggregate creates (empty ID) or changes an aggregate
+	// subscription: name, auto update, download options and spec. The
+	// profile is built and checked with the core before anything is
+	// stored; use switches to a new one.
+	SaveAggregate(s model.Subscription, spec model.AggregateSpec, use bool) (model.Subscription, error)
+
 	// ---- manual nodes ----
 	ManualNodes() []model.ManualNode
 	SaveManualNode(n model.ManualNode) (model.ManualNode, error)

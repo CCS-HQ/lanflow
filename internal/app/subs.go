@@ -365,6 +365,14 @@ func (s *Service) updateOne(sub model.Subscription) error {
 		data = d
 		now := s.d.now()
 		merge = func(cur *model.Subscription) { cur.UpdatedAt, cur.LastError = now, "" }
+	case model.SourceAggregate:
+		d, pv, err := s.buildAggregate(sub)
+		if err != nil {
+			return fail(fmt.Errorf(i18n.T("聚合订阅更新失败：%v。仍在使用上次的配置。"), err))
+		}
+		data = d
+		now := s.d.now()
+		merge = func(cur *model.Subscription) { applyAggregateReport(cur, pv, now) }
 	default:
 		return fail(errors.New(i18n.T("未知的订阅来源")))
 	}
@@ -421,13 +429,22 @@ func (s *Service) updateOne(sub model.Subscription) error {
 	return nil
 }
 
-// UpdateAllSubscriptions updates every URL subscription in turn.
+// UpdateAllSubscriptions updates every URL subscription in turn, then
+// the aggregate ones (which may read the others' new content).
 func (s *Service) UpdateAllSubscriptions() error {
 	var failed []string
+	var subs []model.Subscription
 	for _, sub := range s.d.store.List() {
-		if sub.Source != urlSubscriptionK {
-			continue
+		if sub.Source == urlSubscriptionK {
+			subs = append(subs, sub)
 		}
+	}
+	for _, sub := range s.d.store.List() {
+		if sub.Source == model.SourceAggregate {
+			subs = append(subs, sub)
+		}
+	}
+	for _, sub := range subs {
 		if err := s.UpdateSubscription(sub.ID); err != nil {
 			failed = append(failed, sub.Name)
 		}
@@ -484,7 +501,8 @@ func retryAfter(n int, interval time.Duration) time.Duration {
 func (s *Service) runAutoUpdates() {
 	now := s.d.now()
 	for _, sub := range s.d.store.List() {
-		if sub.Source != urlSubscriptionK || sub.AutoUpdateHours <= 0 || sub.URL == "" {
+		auto := sub.Source == urlSubscriptionK && sub.URL != "" || sub.Source == model.SourceAggregate
+		if !auto || sub.AutoUpdateHours <= 0 {
 			continue
 		}
 		interval := time.Duration(sub.AutoUpdateHours) * time.Hour

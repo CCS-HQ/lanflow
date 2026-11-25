@@ -140,6 +140,8 @@ type profileStore interface {
 	SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, error)
 	ProxyChains() []model.ProxyChain
 	SetProxyChains(chains []model.ProxyChain) ([]model.ProxyChain, error)
+	AggregateSpec(id string) (model.AggregateSpec, bool)
+	SetAggregateSpec(id string, spec model.AggregateSpec) error
 }
 
 // composer wraps the package-level functions of package profile.
@@ -147,6 +149,7 @@ type composer interface {
 	Compose(in profile.Input) (profile.Output, error)
 	Diff(a, b []byte) []model.DiffLine
 	Fetch(ctx context.Context, client *http.Client, url, userAgent string) (profile.Fetched, error)
+	FetchRaw(ctx context.Context, client *http.Client, url, userAgent string) (profile.Fetched, error)
 	CheckYAML(data []byte) error
 }
 
@@ -291,6 +294,9 @@ func (realProfile) Compose(in profile.Input) (profile.Output, error) { return pr
 func (realProfile) Diff(a, b []byte) []model.DiffLine                { return profile.Diff(a, b) }
 func (realProfile) Fetch(ctx context.Context, client *http.Client, url, userAgent string) (profile.Fetched, error) {
 	return profile.Fetch(ctx, client, url, userAgent)
+}
+func (realProfile) FetchRaw(ctx context.Context, client *http.Client, url, userAgent string) (profile.Fetched, error) {
+	return profile.FetchRaw(ctx, client, url, userAgent)
 }
 func (realProfile) CheckYAML(data []byte) error { return profile.CheckYAML(data) }
 

@@ -71,6 +71,9 @@ var methodLevels = map[string]Level{
 	"EditSubscription":       LevelWrite,
 	"DeleteSubscription":     LevelDanger,
 	"SubscriptionRaw":        LevelSensitive,
+	"AggregateSpec":          LevelSensitive, // source links
+	"PreviewAggregate":       LevelSensitive, // downloads the sources; the result holds the profile
+	"SaveAggregate":          LevelWrite,
 
 	// ---- manual nodes ----
 	"ManualNodes":      LevelSensitive,

@@ -592,8 +592,11 @@ func (s *Server) callAPI(ss *session, m Method, params json.RawMessage) (any, er
 		}
 		return nil, err
 	}
-	if m.Name == "EditSubscription" {
+	switch m.Name {
+	case "EditSubscription":
 		args[0] = reflect.ValueOf(keepSubscriptionURL(s.o.API, args[0].Interface().(model.Subscription)))
+	case "SaveAggregate", "PreviewAggregate":
+		args[1] = reflect.ValueOf(keepAggregateLinks(s.o.API, args[0].Interface().(model.Subscription), args[1].Interface().(model.AggregateSpec)))
 	}
 	if m.Level == LevelRead || m.Level == LevelSensitive {
 		res, err := s.invoke(m.Name, args)

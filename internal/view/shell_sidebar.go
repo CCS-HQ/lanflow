@@ -310,7 +310,7 @@ func (s *Shell) subCard(c *ui.Context, sub model.Subscription) {
 			if active {
 				name.TextColor(t.AccentText)
 			}
-			if sub.Source == "url" {
+			if sub.Source == "url" || sub.Source == model.SourceAggregate {
 				ref := ui.ButtonBase(c.Key("sb:sub:refresh")).Size(26, 26).Radius(6).
 					AlignItems(ui.Center).Justify(ui.Center).
 					Label(i18n.T("更新当前订阅")).Tooltip(i18n.T("更新当前订阅")).

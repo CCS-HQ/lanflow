@@ -45,6 +45,7 @@ type Fake struct {
 	custom             []model.CustomRule
 	manualNodes        []model.ManualNode
 	chains             []model.ProxyChain
+	aggs               map[string]model.AggregateSpec // aggregate subscriptions' specs (aggregate.go)
 	provs              []model.RuleProvider
 	pprovs             []model.ProxyProvider
 	set                model.Settings
@@ -955,7 +956,7 @@ func (f *Fake) UpdateSubscription(id string) error {
 func (f *Fake) UpdateAllSubscriptions() error {
 	var errs []string
 	for _, s := range f.Subscriptions() {
-		if s.Source == "url" {
+		if s.Source == "url" || s.Source == model.SourceAggregate {
 			if err := f.UpdateSubscription(s.ID); err != nil {
 				errs = append(errs, err.Error())
 			}

@@ -8,6 +8,7 @@
 //
 //	profiles.json            index: []model.Subscription without runtime flags
 //	profiles/<id>.yaml       latest downloaded/imported content (raw)
+//	profiles/<id>.aggregate.json  model.AggregateSpec of an aggregate subscription (aggregate.go)
 //	overrides.json           []model.Override, the ordered override list (overrides.go)
 //	overrides/*.yaml         the former single texts, migrated into overrides.json on first open
 //	custom-rules.json        []model.CustomRule
@@ -70,6 +71,14 @@ func (s *Store) SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, er
 	return s.s.setManualNodes(nodes)
 }
 
+// AggregateSpec returns how the aggregate subscription id is built.
+func (s *Store) AggregateSpec(id string) (model.AggregateSpec, bool) { return s.s.aggregateSpec(id) }
+
+// SetAggregateSpec stores how the aggregate subscription id is built.
+func (s *Store) SetAggregateSpec(id string, spec model.AggregateSpec) error {
+	return s.s.setAggregateSpec(id, spec)
+}
+
 // ProxyChains returns the user-defined proxy chains in order.
 func (s *Store) ProxyChains() []model.ProxyChain { return s.s.proxyChainsList() }
 
@@ -98,6 +107,12 @@ type Fetched struct {
 // Errors are user-facing Chinese: HTTP status, timeout, "不是 Clash/Mihomo 格式的订阅".
 func Fetch(ctx context.Context, client *http.Client, url, userAgent string) (Fetched, error) {
 	return fetch(ctx, client, url, userAgent)
+}
+
+// FetchRaw downloads url like Fetch but accepts any body: the sources
+// of an aggregate subscription may be share links (BuildAggregate).
+func FetchRaw(ctx context.Context, client *http.Client, url, userAgent string) (Fetched, error) {
+	return download(ctx, client, url, userAgent)
 }
 
 // CheckYAML verifies data is a Clash/Mihomo profile (YAML map with proxies or proxy-providers).

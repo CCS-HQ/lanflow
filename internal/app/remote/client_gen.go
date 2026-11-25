@@ -271,6 +271,21 @@ func (cl *Client) SubscriptionRaw(id string) (res0 string, err error) {
 	return
 }
 
+func (cl *Client) AggregateSpec(id string) (res0 model.AggregateSpec, err error) {
+	err = cl.call("AggregateSpec", []any{id}, &res0)
+	return
+}
+
+func (cl *Client) PreviewAggregate(s model.Subscription, spec model.AggregateSpec) (res0 model.AggregatePreview, err error) {
+	err = cl.call("PreviewAggregate", []any{s, spec}, &res0)
+	return
+}
+
+func (cl *Client) SaveAggregate(s model.Subscription, spec model.AggregateSpec, use bool) (res0 model.Subscription, err error) {
+	err = cl.call("SaveAggregate", []any{s, spec, use}, &res0)
+	return
+}
+
 func (cl *Client) ManualNodes() (res0 []model.ManualNode) {
 	_ = cl.call("ManualNodes", nil, &res0)
 	return
