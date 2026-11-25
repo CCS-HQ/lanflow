@@ -83,9 +83,10 @@ const (
 	// graphLevels is how many heights above zero a bar of the graph takes.
 	graphLevels = 10
 	graphW      = 18.0 // the graph's width in points, after a 2.5-point gap
-	// speedW is the 2-line stacked speed block width in points (at 2× = 86px,
-	// matching Clash Party's 18px-font 2-line macOS menu bar layout).
-	speedW = 43.0
+	// speedW is the 2-line stacked speed block width in points (at 2× = 120px;
+	// 36px icon + 120px speed = 156×36px, matching Clash Party's macOS tray
+	// canvas with generous breathing room between the icon and 0.00 B/s).
+	speedW = 60.0
 )
 
 func iconWidth(l Look) float64 {
@@ -227,21 +228,34 @@ func getSpeedFace() font.Face {
 }
 
 // CompactRate formats a rate for the 2-line stacked menu bar icon, matching
-// Clash Party's readable format: "0 B/s", "512 B/s", "9.8 KB/s", "1.3 MB/s".
+// Clash Party's calcTraffic format: "0.00 B/s", "512.0 B/s", "9.75 KB/s",
+// "12.34 KB/s", "100.5 KB/s", "1.32 MB/s".
 func CompactRate(b int64) string {
 	if b < 0 {
 		b = 0
 	}
+	v := float64(b)
 	switch {
-	case b < 1000:
-		return fmt.Sprintf("%d B/s", b)
+	case b < 1024:
+		return formatTrayNum(v) + " B/s"
 	case b < 1<<20:
-		return unit(float64(b)/1024, " KB/s")
+		return formatTrayNum(v/1024) + " KB/s"
 	case b < 1<<30:
-		return unit(float64(b)/(1<<20), " MB/s")
+		return formatTrayNum(v/(1<<20)) + " MB/s"
 	default:
-		return unit(float64(b)/(1<<30), " GB/s")
+		return formatTrayNum(v/(1<<30)) + " GB/s"
 	}
+}
+
+func formatTrayNum(v float64) string {
+	s := fmt.Sprintf("%.2f", v)
+	if len(s) <= 5 {
+		return s
+	}
+	if len(s) == 6 {
+		return fmt.Sprintf("%.1f", v)
+	}
+	return fmt.Sprintf("%.0f", math.Round(v))
 }
 
 // tunColor returns the distinct icon colour used when TUN mode is active,
@@ -305,7 +319,7 @@ func PNG(l Look, ink Ink) []byte {
 				}
 				y := 30
 				if i == 1 {
-					y = 66
+					y = 68
 				}
 				adv := d.MeasureString(line)
 				x := fixed.I(hiW-4) - adv

@@ -462,8 +462,8 @@ func (tr *tray) nodeItems(g model.ProxyGroup, px model.ProxySnapshot) []*mygo.Me
 		if p, ok := px.Proxies[n]; ok && p.Delay != 0 {
 			bg, fg := delayBadgeColors(p.Delay, dark)
 			item.Badge = env.FmtDelay(p.Delay, false)
-			item.BadgeAlign = mygo.BadgeAlignRight
-			item.BadgeShape = mygo.BadgeShapePill
+			item.BadgeAlign = mygo.BadgeAlignCenter
+			item.BadgeShape = mygo.BadgeShapeRounded
 			item.BadgeColor = bg
 			item.BadgeTextColor = fg
 		}

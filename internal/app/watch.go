@@ -494,20 +494,30 @@ func (s *Service) recheckWith(info model.NetInfo, infoErr error, netChanged bool
 		}
 	}
 
-	// 2. The system proxy we set: still ours? The design asks to check,
-	// not to fight another app over it, so a foreign change is reported
-	// and our ownership dropped.
+	// 2. The system proxy we set: still ours?
+	// If another app pointed the system proxy elsewhere (Enabled or PAC set),
+	// respect the foreign change and drop ownership. If the proxy was simply
+	// cleared/absent (e.g. macOS switching Wi-Fi or active network service),
+	// re-apply Lanflow's system proxy while the core is still running.
 	if ours {
 		m, _ := s.readMarker()
 		if cur, err := s.d.sys.Get(); err == nil && !proxyIsOurs(cur, m, port) {
-			s.mu.Lock()
-			s.state.weSetProxy = false
-			s.state.st.SystemProxy = false
-			s.mu.Unlock()
-			s.abandonProxy(m, port)
-			s.em.emit(TopicStatus)
-			s.notify(Notice{Kind: "error", Title: i18n.T("系统代理已被其他程序修改"), Detail: i18n.T("系统代理不再指向澜流。需要时请在「概览」中重新打开系统代理。")})
-			res.warned = append(res.warned, "system proxy changed by another app")
+			if running && !cur.Enabled && cur.PACURL == "" {
+				if err := s.applySystemProxy(); err == nil {
+					res.actions = append(res.actions, "system proxy re-applied after network change")
+				} else {
+					res.failed = append(res.failed, "system proxy re-apply failed: "+err.Error())
+				}
+			} else {
+				s.mu.Lock()
+				s.state.weSetProxy = false
+				s.state.st.SystemProxy = false
+				s.mu.Unlock()
+				s.abandonProxy(m, port)
+				s.em.emit(TopicStatus)
+				s.notify(Notice{Kind: "error", Title: i18n.T("系统代理已被其他程序修改"), Detail: i18n.T("系统代理不再指向澜流。需要时请在「概览」中重新打开系统代理。")})
+				res.warned = append(res.warned, "system proxy changed by another app")
+			}
 		}
 	}
 
