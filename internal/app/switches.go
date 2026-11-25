@@ -107,6 +107,9 @@ func (s *Service) checkOtherTUN() error {
 		}
 	}
 	if name, found := s.d.otherTUN(ctx); found {
+		if msg := s.tailscaleTUNConflict(name); msg != "" {
+			return errors.New(msg)
+		}
 		return fmt.Errorf(i18n.T("检测到其他代理软件的 TUN（%s）正在接管网络。两个 TUN 同时开启会互相冲突，请先在那款软件中关闭 TUN 模式，再开启澜流的 TUN"), name)
 	}
 	return nil

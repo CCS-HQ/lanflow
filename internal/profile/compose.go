@@ -279,6 +279,7 @@ func compose(in Input) (Output, error) {
 	applyCapture(c, in.Capture)
 	applyAdvanced(c, in.Advanced)
 	applyCoexist(c, in.Coexist, m.TUN)
+	applyTailscale(c, in.Tailscale, m.TUN)
 	hoistCaptureRules(c)
 	c.layer = layerChains
 	ownGlobal := excludeChainClones(c)

@@ -383,27 +383,8 @@ func scrubCaptureRefs(c *composer) []string {
 		}
 	}
 
-	// groups that collect proxies by themselves: exclude ours, appending to
-	// any exclude-filter already there (Mihomo separates regexes with `)
-	if gs := deref(mapGet(c.root, "proxy-groups")); gs != nil && gs.Kind == yaml.SequenceNode {
-		for _, it := range gs.Content {
-			m := deref(it)
-			if m == nil || m.Kind != yaml.MappingNode {
-				continue
-			}
-			if !truthy(mapGet(m, "include-all")) && !truthy(mapGet(m, "include-all-proxies")) && deref(mapGet(m, "filter")) == nil {
-				continue
-			}
-			const ex = "^" + CaptureOutboundPrefix
-			if old := deref(mapGet(m, "exclude-filter")); old != nil && old.Kind == yaml.ScalarNode && old.Value != "" {
-				if !strings.Contains(old.Value, ex) {
-					mapSet(m, "exclude-filter", strNode(old.Value+"`"+ex))
-				}
-			} else {
-				mapSet(m, "exclude-filter", strNode(ex))
-			}
-		}
-	}
+	// groups that collect proxies by themselves: exclude ours
+	excludeFromAutoGroups(c, "^"+CaptureOutboundPrefix)
 	return warns
 }
 

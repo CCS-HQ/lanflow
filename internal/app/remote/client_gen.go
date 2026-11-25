@@ -615,6 +615,11 @@ func (cl *Client) ExportATrustConfig(path string) (err error) {
 	return
 }
 
+func (cl *Client) TailscaleReport() (res0 model.TailscaleReport) {
+	_ = cl.call("TailscaleReport", nil, &res0)
+	return
+}
+
 func (cl *Client) TestMirrors() (res0 []model.MirrorTest) {
 	_ = cl.call("TestMirrors", nil, &res0)
 	return

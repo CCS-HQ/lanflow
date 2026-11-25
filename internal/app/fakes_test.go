@@ -19,6 +19,7 @@ import (
 	"lanflow/internal/platform/helper"
 	"lanflow/internal/platform/sysdns"
 	"lanflow/internal/platform/sysproxy"
+	"lanflow/internal/platform/tailscale"
 	"lanflow/internal/profile"
 )
 
@@ -880,6 +881,7 @@ type harness struct {
 	taken  map[int]bool // ports another program listens on
 	tunOf  string       // another client's TUN interface, "" for none
 	vpn    *fakeVPN
+	ts     *fakeTS
 }
 
 // fakeVPN is the aTrust detector.
@@ -894,6 +896,19 @@ func (f *fakeVPN) detect(context.Context, func(string) bool) atrust.Info {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	return f.info
+}
+
+// fakeTS is the Tailscale detector.
+type fakeTS struct {
+	mu   sync.Mutex
+	info tailscale.Info
+}
+
+func (f *fakeTS) set(i tailscale.Info) { f.mu.Lock(); f.info = i; f.mu.Unlock() }
+func (f *fakeTS) detect(context.Context, func(string) bool) tailscale.Info {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.info
 }
 
@@ -930,7 +945,7 @@ func newHarness(t testingT, prepare func(h *harness)) *harness {
 	dir := t.TempDir()
 	h := &harness{
 		ctrl: newFakeCtrl(), mgr: newFakeMgr(), core: &fakeCore{bin: "/fake/mihomo"},
-		sys: &fakeSys{}, dns: &fakeDNS{}, helper: &fakeHelper{}, stray: &fakeStray{}, loc: &fakeLoc{}, store: newFakeStore(), prof: &fakeProf{}, dir: dir, taken: map[int]bool{}, vpn: &fakeVPN{},
+		sys: &fakeSys{}, dns: &fakeDNS{}, helper: &fakeHelper{}, stray: &fakeStray{}, loc: &fakeLoc{}, store: newFakeStore(), prof: &fakeProf{}, dir: dir, taken: map[int]bool{}, vpn: &fakeVPN{}, ts: &fakeTS{},
 	}
 	sub, _ := h.store.Put(model.Subscription{Name: "测试机场", Source: "url", URL: "https://example.com/sub"})
 	_ = h.store.SetContent(sub.ID, []byte("proxies: []\n"))
@@ -948,6 +963,7 @@ func newHarness(t testingT, prepare func(h *harness)) *harness {
 		portInUse:  func(p int, _ bool) bool { return h.taken[p] },
 		otherTUN:   func(context.Context) (string, bool) { return h.tunOf, h.tunOf != "" },
 		vpnDetect:  h.vpn.detect,
+		tsDetect:   h.ts.detect,
 		stray:      h.stray,
 		diagCommands: func(context.Context) map[string]string {
 			return map[string]string{"routes.txt": "default 192.168.1.1 en0\nfetched https://sub.example.com/link/abc?token=zzz9"}

@@ -2008,3 +2008,10 @@ func (f *Fake) ClearSubscriptions() {
 	f.emit(app.TopicSubs)
 	f.emit(app.TopicStatus)
 }
+
+// TailscaleReport implements app.API.
+func (f *Fake) TailscaleReport() model.TailscaleReport {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return model.TailscaleReport{Compat: f.set.TailscaleCompat, Config: f.set.Tailscale.Clone(), State: f.st.Tailscale}
+}

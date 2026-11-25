@@ -18,6 +18,7 @@ import (
 	"lanflow/internal/platform/procicon"
 	"lanflow/internal/platform/sysdns"
 	"lanflow/internal/platform/sysproxy"
+	"lanflow/internal/platform/tailscale"
 	"lanflow/internal/profile"
 )
 
@@ -192,6 +193,8 @@ type deps struct {
 	v6Route func(ctx context.Context) netinfo.V6Route
 	// vpnDetect looks for Sangfor aTrust (coexist.go); nil = never found.
 	vpnDetect func(ctx context.Context, own func(iface string) bool) atrust.Info
+	// tsDetect looks for Tailscale (tailscale.go); nil = never found.
+	tsDetect func(ctx context.Context, own func(iface string) bool) tailscale.Info
 	// diagCommands describes the system network for 导出诊断信息 (diag.go);
 	// nil = systemDiagnostics.
 	diagCommands func(ctx context.Context) map[string]string
@@ -348,6 +351,7 @@ func realDeps(ctrl *controller.Client, mgr *core.Manager, store *profile.Store, 
 		portOwner:     portOwner,
 		v6Route:       netinfo.IPv6Route,
 		vpnDetect:     atrust.Detect,
+		tsDetect:      tailscale.Detect,
 		now:           time.Now,
 		fileIcon:      procicon.Load,
 	}

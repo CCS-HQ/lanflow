@@ -44,7 +44,7 @@ var agentOps = map[string]agentOp{
 		Method: Method{Name: "PatchSettings", Agent: true, Level: LevelWrite, Error: true,
 			Params:  []Param{{Name: "patch", Type: "map[string]any"}, {Name: "dryRun", Type: "bool"}},
 			Results: []string{"rpc.PatchResult"},
-			Doc:     "PatchSettings merges patch (a JSON object of settings fields, nested like Settings and named as Settings returns them, e.g. {\"Mode\":\"rule\",\"Advanced\":{\"ipv6\":true}}) into the settings and applies them; a list is replaced whole; dryRun returns the diff without saving. High-impact settings (TUN, DNS, the ports, LAN access and proxy authentication, PAC, Wi-Fi subscription rules, geo database URLs) are confirmed by the user once per session; the core's source, the download mirror, backup, feedback and sync settings cannot be patched."},
+			Doc:     "PatchSettings merges patch (a JSON object of settings fields, nested like Settings and named as Settings returns them, e.g. {\"Mode\":\"rule\",\"Advanced\":{\"ipv6\":true}}) into the settings and applies them; a list is replaced whole; dryRun returns the diff without saving. High-impact settings (TUN, DNS, the ports, LAN access and proxy authentication, PAC, Wi-Fi subscription rules, geo database URLs) are confirmed by the user once per session; the core's source, the download mirror, backup, feedback and sync settings cannot be patched. Tailscale compatibility: TailscaleCompat switches it, Tailscale.Domains / Tailscale.Routes / Tailscale.DNS add MagicDNS or split DNS domains, subnet routes and IPv4 resolvers to what is detected (invalid entries are refused); TailscaleReport shows the result."},
 		level: func(args []json.RawMessage) Level {
 			var dry bool
 			if len(args) > 1 && json.Unmarshal(args[1], &dry) == nil && dry {
@@ -298,6 +298,13 @@ func applyPatch(cur model.Settings, patch json.RawMessage, agent bool) (model.Se
 			if pathIn(p, patchLocked) {
 				return cur, nil, fmt.Errorf("设置项 %s 不能经 agent 修改", p)
 			}
+		}
+	}
+	// lists the service would silently clean up are refused instead, so
+	// the caller learns which entry is wrong
+	if anyPathIn(touched, []string{"Tailscale"}) {
+		if _, bad := app.CheckTailscaleConfig(next.Tailscale); len(bad) > 0 {
+			return cur, nil, fmt.Errorf("无效的条目（域名、网段或 IPv4 DNS 地址）：%s", strings.Join(bad, ", "))
 		}
 	}
 	var changed []string

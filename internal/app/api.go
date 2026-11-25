@@ -353,6 +353,13 @@ type API interface {
 	// ExportATrustConfig writes Settings().ATrust to path as YAML.
 	ExportATrustConfig(path string) error
 
+	// ---- Tailscale 兼容 (tailscale.go) ----
+	// TailscaleReport is the Tailscale compatibility at a glance: the switch
+	// (Settings.TailscaleCompat), the user's lists (Settings.Tailscale, which
+	// PatchSettings changes), what detection found, what the running config
+	// sends to Tailscale, and notes on what needs attention.
+	TailscaleReport() model.TailscaleReport
+
 	// ---- GitHub download mirror (mirror.go) ----
 	// TestMirrors HEAD-requests a GitHub link through every MirrorPresets
 	// entry, directly, and returns the round trips (Ms = -1: failed). Blocks.

@@ -24,6 +24,7 @@ import (
 	"lanflow/internal/model"
 	"lanflow/internal/platform/atrust"
 	"lanflow/internal/platform/helper"
+	"lanflow/internal/platform/tailscale"
 	"lanflow/internal/profile"
 )
 
@@ -174,15 +175,18 @@ type state struct {
 
 	coreBin       string // resolved binary ("" when missing)
 	probePort     int
-	weSetProxy    bool        // Lanflow pointed the system proxy at itself
-	tunRunner     bool        // the manager currently uses the helper runner
-	rootStoppedAt time.Time   // when a helper-run (root) core last went away; see portwait.go
-	stray         *strayRun   // a core of the previous run found at start (takeover.go)
-	helperOK      bool        // helper.Check passed at last check
-	helperStale   bool        // last Check: installed helper of another version/protocol
-	helperSlow    bool        // last Check timed out: the helper may be there but slow to answer
-	runningTUN    bool        // the running config has TUN enabled
-	coexist       atrust.Info // aTrust found beside Lanflow (coexist.go)
+	weSetProxy    bool           // Lanflow pointed the system proxy at itself
+	tunRunner     bool           // the manager currently uses the helper runner
+	rootStoppedAt time.Time      // when a helper-run (root) core last went away; see portwait.go
+	stray         *strayRun      // a core of the previous run found at start (takeover.go)
+	helperOK      bool           // helper.Check passed at last check
+	helperStale   bool           // last Check: installed helper of another version/protocol
+	helperSlow    bool           // last Check timed out: the helper may be there but slow to answer
+	runningTUN    bool           // the running config has TUN enabled
+	coexist       atrust.Info    // aTrust found beside Lanflow (coexist.go)
+	tailscale     tailscale.Info // Tailscale found beside Lanflow (tailscale.go)
+	tsMisses      int            // detections in a row that missed Tailscale while its layer is on
+	tsNotified    bool           // the 「检测到 Tailscale」 toast was shown in this run
 	lastAutoStart time.Time
 	autoFail      map[string]autoUpdateFailure // subscription ID → failed auto updates (subs.go)
 	youDone       bool                         // You() fetched (or being fetched) for this start
@@ -344,6 +348,7 @@ func (s *Service) run() {
 	s.goBackground(s.watchSystem)
 	s.goBackground(s.configSyncLoop)
 	s.goBackground(s.watchCoexist)
+	s.goBackground(s.watchTailscale)
 	s.goBackground(s.bootstrap)
 	s.goBackground(s.coreUpdateLoop)
 	s.goBackground(func() { s.stats.loop(s.rootCtx) })
@@ -920,6 +925,7 @@ func copySettings(in model.Settings) model.Settings {
 	out.Sniffer.SkipDomain = append([]string(nil), in.Sniffer.SkipDomain...)
 	out.Sniffer.SkipDstAddress = append([]string(nil), in.Sniffer.SkipDstAddress...)
 	out.ATrust = in.ATrust.Clone()
+	out.Tailscale = in.Tailscale.Clone()
 	out.Advanced = in.Advanced.Clone()
 	out.UI = copyUIState(in.UI)
 	out.ConnHiddenColumns = append([]string(nil), in.ConnHiddenColumns...)
