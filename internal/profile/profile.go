@@ -102,7 +102,7 @@ type Managed struct {
 	Mode      model.Mode
 	LogLevel  string
 	TUN       bool
-	TUNStack  string // "mixed" | "system" | "gvisor"
+	TUNStack  string // "mixed" | "system" | "gvisor" | "mips"
 	ProbePort int    // 0 = no probe listener; else adds listener "lanflow-probe" (http, 127.0.0.1) bound to hidden select group "LANFLOW-PROBE" containing every proxy
 	IPv6      bool
 }

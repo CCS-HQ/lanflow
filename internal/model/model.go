@@ -496,7 +496,7 @@ type Settings struct {
 	AllowLAN  bool
 	Bypass    []string // system proxy bypass list
 	TUN       bool     // desired TUN state
-	TUNStack  string   // "mixed" (default), "system", "gvisor"
+	TUNStack  string   // "mixed" (default), "system", "gvisor", "mips"
 	TUNSetDNS bool     // while TUN runs, point the system DNS at a resolver the TUN captures (macOS)
 	// ATrustCompat keeps Sangfor aTrust's intranet out of Lanflow while
 	// aTrust runs (route exclusion, DIRECT rules, proxy bypass); off by default.

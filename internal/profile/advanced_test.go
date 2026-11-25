@@ -19,7 +19,7 @@ var fullAdvanced = model.AdvancedSettings{
 	PACMode: true, PACDirectCN: true, PACPort: 11234,
 	TUNStrictRoute: true, TUNMTU: 1500, TUNEndpointIndependentNAT: true,
 	TUNRouteAddress: []string{"0.0.0.0/1", "128.0.0.0/1"}, TUNRouteExcludeAddress: []string{"10.0.0.0/8"},
-	TUNDNSHijack: []string{"any:53"}, TUNDevice: "utun1800", TUNIncludeInterface: []string{"en0"}, TUNExcludeInterface: []string{"en1"},
+	TUNDNSHijack: []string{"any:53"}, TUNDNSMode: "native", TUNDevice: "utun1800", TUNIncludeInterface: []string{"en0"}, TUNExcludeInterface: []string{"en1"},
 	IPv6: true, UnifiedDelay: true, TCPConcurrent: true, FindProcessMode: "strict", KeepAliveInterval: 15, KeepAliveIdle: 600,
 	DisableKeepAlive: true, InterfaceName: "en0", GeodataLoader: "memconservative", DisableETag: true, StoreFakeIP: true, GlobalUA: "clash.meta",
 	DNSListen: "127.0.0.1:1053", DNSPreferH3: true, DNSCacheAlgorithm: "arc", DNSDefaultNameserver: []string{"223.5.5.5"},
@@ -101,7 +101,7 @@ func TestComposeAdvancedFull(t *testing.T) {
 	wantTun := map[string]any{
 		"strict-route": true, "mtu": 1500, "endpoint-independent-nat": true,
 		"route-address": []any{"0.0.0.0/1", "128.0.0.0/1"}, "route-exclude-address": []any{"10.0.0.0/8"},
-		"dns-hijack": []any{"any:53"}, "device": "utun1800", "include-interface": []any{"en0"}, "exclude-interface": []any{"en1"},
+		"dns-hijack": []any{"any:53"}, "dns-mode": "native", "device": "utun1800", "include-interface": []any{"en0"}, "exclude-interface": []any{"en1"},
 		"enable": true, "auto-route": true,
 	}
 	for k, v := range wantTun {
@@ -238,5 +238,25 @@ func TestComposeAdvancedMihomoCheck(t *testing.T) {
 	// The core logs removed or unknown options at error level; none expected.
 	if strings.Contains(string(res), "level=error") {
 		t.Fatalf("mihomo -t reported an error:\n%s\n--- config ---\n%s", res, out.YAML)
+	}
+}
+
+// A subscription's own tun.dns-mode does not survive: 自动 means the core's default.
+func TestComposeDropsSubscriptionDNSMode(t *testing.T) {
+	t.Parallel()
+	sub := testSub + "\ntun:\n  dns-mode: native\n"
+	out, err := Compose(Input{Subscription: []byte(sub), Managed: Managed{MixedPort: 17890, TUN: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := decode(t, out.YAML)["tun"].(map[string]any)["dns-mode"]; ok {
+		t.Fatalf("tun.dns-mode = %v, want none", v)
+	}
+	out, err = Compose(Input{Subscription: []byte(sub), Managed: Managed{MixedPort: 17890, TUN: true}, Advanced: model.AdvancedSettings{TUNDNSMode: "disabled"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := decode(t, out.YAML)["tun"].(map[string]any)["dns-mode"]; v != "disabled" {
+		t.Fatalf("tun.dns-mode = %v, want disabled", v)
 	}
 }

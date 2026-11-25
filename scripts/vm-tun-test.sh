@@ -12,7 +12,10 @@
 # shell parses again, so every guest command below is passed as ONE string.
 #
 # Usage: scripts/vm-tun-test.sh "<vm name>"
+#        LANFLOW_TUN_TEST=LiveTUNModes scripts/vm-tun-test.sh "<vm name>"
+#        (TUN stacks and 高级 › DNS 模式; see internal/app/live_tun_modes_test.go)
 set -euo pipefail
+TEST="${LANFLOW_TUN_TEST:-LiveTUN}"
 cd "$(dirname "$0")/.."
 VM="${1:?usage: $0 <vm name>}"
 APP="build/darwin-arm64/Lanflow.app"
@@ -64,9 +67,24 @@ echo "== installing the helper as root"
 as_root "'$RES/lanflow-helper' install --core '$RES/mihomo' --core-sha256 \"\$(/usr/bin/shasum -a 256 '$RES/mihomo' | cut -d' ' -f1)\" --data-dir '$T/run/data' --uid $guest_uid"
 as_root "/bin/ls -l /var/run/lanflow-helper.sock /Library/PrivilegedHelperTools/ /Library/LaunchDaemons/ | grep -i lanflow"
 
-echo "== running TestLiveTUN as $guest_user"
+# TestLiveTUNModes asks for the root core to be killed: it writes
+# run/kill-now and waits for run/killed.
+watch_kill() {
+	while :; do
+		if [ "$(as_root "test -e '$T/run/kill-now' && echo yes" | tr -d '\r')" = yes ]; then
+			as_root "/usr/bin/pkill -9 -f '/com.lanflow.mihomo'; sleep 1; echo 'list State:/Network/Service/sing-tun-.*/DNS' | /usr/sbin/scutil > '$T/run/scutil-after-kill.txt'; chmod 644 '$T/run/scutil-after-kill.txt'; rm -f '$T/run/kill-now'; touch '$T/run/killed'; chmod 644 '$T/run/killed'"
+			echo "== killed the core on request"
+		fi
+		sleep 2
+	done
+}
+watcher=""
+if [ "$TEST" = LiveTUNModes ]; then watch_kill & watcher=$!; fi
+
+echo "== running Test$TEST as $guest_user"
 status=0
-as_user "LANFLOW_LIVE_TUN=1 LANFLOW_TUN_DATA='$T/run' LANFLOW_TUN_RES='$RES' '$T/app.test' -test.run LiveTUN -test.v -test.count=1" || status=$?
+as_user "LANFLOW_LIVE_TUN=1 LANFLOW_TUN_DATA='$T/run' LANFLOW_TUN_RES='$RES' '$T/app.test' -test.run '^Test$TEST\$' -test.v -test.count=1 -test.timeout 20m" || status=$?
+[ -n "$watcher" ] && kill "$watcher" 2>/dev/null || true
 
 echo "== uninstalling the helper"
 as_root "'$RES/lanflow-helper' uninstall" || status=$?

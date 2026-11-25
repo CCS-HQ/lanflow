@@ -241,6 +241,7 @@ func compose(in Input) (Output, error) {
 	mapSet(tun, "auto-detect-interface", boolNode(true))
 	mapSet(tun, "dns-hijack", strSeq([]string{"any:53", "tcp://any:53"}))
 	mapSet(tun, "strict-route", boolNode(false))
+	mapDelete(tun, "dns-mode") // only 高级 › DNS 模式 sets it (advanced.go)
 	switch runtime.GOOS {
 	case "darwin":
 		mapSet(tun, "device", strNode(TUNDevice)) // a fixed name tells our utun from aTrust's
