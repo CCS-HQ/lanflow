@@ -19,6 +19,7 @@ import (
 	"lanflow/internal/capture/ca"
 	"lanflow/internal/controller"
 	"lanflow/internal/model"
+	"lanflow/internal/platform/helper"
 )
 
 // The test binary doubles as the capture agent: with
@@ -34,6 +35,16 @@ func TestMain(m *testing.M) {
 	}
 	if dir := os.Getenv("LANFLOW_TEST_CAPTURE_KEYS"); dir != "" {
 		os.Exit(agent.Main(os.Stdin, os.Stdout, ca.SecretKeys{S: fileSecrets(dir)}))
+	}
+	// These tests run the real service in temporary data directories. The
+	// privileged helper of this machine serves the user's own Lanflow:
+	// only the live suites (run in the VM) may reach it.
+	live := false
+	for _, kv := range os.Environ() {
+		live = live || strings.HasPrefix(kv, "LANFLOW_LIVE_")
+	}
+	if !live {
+		helper.Disable()
 	}
 	os.Exit(m.Run())
 }

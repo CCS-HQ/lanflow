@@ -36,6 +36,8 @@ package helper
 
 import (
 	"context"
+	"errors"
+	"net"
 
 	"lanflow/internal/core"
 )
@@ -86,7 +88,21 @@ func Uninstall(ctx context.Context) error { return uninstall(ctx) }
 // of the config, so a reload must stage it first.
 func NewRunner() core.Runner { return newRunner() }
 
-// CoreRunning reports whether the helper runs Mihomo (for this user's
-// Lanflow: the helper only starts cores of the data directory it was
-// installed for).
-func CoreRunning(ctx context.Context) (bool, error) { return coreRunning(ctx, newClient()) }
+// CoreRunning reports whether the helper runs Mihomo for workDir. The
+// helper only starts cores of the data directory it was installed for; a
+// Lanflow of another data directory (a second install, a test) gets false
+// for that core.
+func CoreRunning(ctx context.Context, workDir string) (bool, error) {
+	return coreRunning(ctx, newClient(), workDir)
+}
+
+// Disable makes every call to the helper fail as if none were installed,
+// until the returned function is called. For tests that run the real
+// service on a machine where a helper may be serving the user's Lanflow.
+func Disable() (restore func()) {
+	old := dialHelper
+	dialHelper = func(context.Context) (net.Conn, error) {
+		return nil, &net.OpError{Op: "dial", Net: "unix", Err: errors.New("helper disabled")}
+	}
+	return func() { dialHelper = old }
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +30,7 @@ type fakeHelper struct {
 	version   string                                // ping version; "fake" when empty
 	protocol  int                                   // ping protocol; protocol.Version when zero
 	stage     func(protocol.Spec) protocol.Response // the stage op; nil = a helper from before it existed
+	workDir   string                                // status work dir; empty = a helper from before 0.1.8
 }
 
 func startFakeHelper(t *testing.T) *fakeHelper {
@@ -91,7 +93,7 @@ func (f *fakeHelper) handle(_ context.Context, req protocol.Request) protocol.Re
 		f.running = false
 		return protocol.Response{OK: true}
 	case protocol.OpStatus:
-		return protocol.Response{OK: true, Running: f.running, ExitError: f.exitError, PID: 7}
+		return protocol.Response{OK: true, Running: f.running, ExitError: f.exitError, PID: 7, WorkDir: f.workDir}
 	case protocol.OpStage:
 		if f.stage != nil {
 			return f.stage(*req.Spec)
@@ -481,5 +483,62 @@ func TestRunnerStageConfig(t *testing.T) {
 	f.mu.Unlock()
 	if _, err := st.StageConfig(ctx, spec); err == nil || !strings.Contains(err.Error(), "无法连接权限组件") || errors.Is(err, core.ErrStageUnsupported) {
 		t.Fatalf("unreachable helper: %v", err)
+	}
+}
+
+// A core the helper runs for another data directory is not ours: it is
+// neither reported as running for us nor adopted (a test or a second
+// install must not take the user's TUN core away).
+func TestCoreOfAnotherWorkDirIsNotOurs(t *testing.T) {
+	f := startFakeHelper(t)
+	ours, theirs := t.TempDir(), t.TempDir()
+	resolved := func(dir string) string {
+		r, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	f.mu.Lock()
+	f.running, f.workDir = true, resolved(theirs)
+	f.mu.Unlock()
+	ctx := context.Background()
+	if running, err := CoreRunning(ctx, ours); err != nil || running {
+		t.Fatalf("CoreRunning for another work dir = %v, %v; want false", running, err)
+	}
+	if err := newRunner().(core.Adopter).Adopt(ctx, core.Spec{WorkDir: ours}); !errors.Is(err, core.ErrNothingToAdopt) {
+		t.Fatalf("Adopt of another work dir's core: %v, want ErrNothingToAdopt", err)
+	}
+	// The helper reports the directory with its symlinks resolved.
+	f.mu.Lock()
+	f.workDir = resolved(ours)
+	f.mu.Unlock()
+	if running, err := CoreRunning(ctx, ours); err != nil || !running {
+		t.Fatalf("CoreRunning for our work dir = %v, %v; want true", running, err)
+	}
+	// A helper from before 0.1.8 does not say: as before, the core is ours.
+	f.mu.Lock()
+	f.workDir = ""
+	f.mu.Unlock()
+	if running, err := CoreRunning(ctx, ours); err != nil || !running {
+		t.Fatalf("CoreRunning with an old helper = %v, %v; want true", running, err)
+	}
+}
+
+func TestDisableMakesTheHelperUnreachable(t *testing.T) {
+	f := startFakeHelper(t)
+	f.mu.Lock()
+	f.running = true
+	f.mu.Unlock()
+	restore := Disable()
+	if running, err := CoreRunning(context.Background(), ""); err == nil || running {
+		t.Fatalf("CoreRunning while disabled = %v, %v; want an error", running, err)
+	}
+	if Installed(context.Background()) {
+		t.Fatal("Installed while disabled")
+	}
+	restore()
+	if running, err := CoreRunning(context.Background(), ""); err != nil || !running {
+		t.Fatalf("CoreRunning after restore = %v, %v; want true", running, err)
 	}
 }

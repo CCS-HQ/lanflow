@@ -474,6 +474,77 @@ func TestCrashOfUnknownStateStopsTheCoreFirst(t *testing.T) {
 	}
 }
 
+// While the helper stays silent the core cannot be stopped: no start is
+// tried (it would find the core's ports held and blame another program).
+// The user is told, and the core is started once the helper answers again.
+func TestCrashOfUnknownStateWaitsForASilentHelper(t *testing.T) {
+	old := helperRecoverEvery
+	helperRecoverEvery = 20 * time.Millisecond
+	t.Cleanup(func() { helperRecoverEvery = old })
+	h := newHarness(t, nil)
+	h.s.goBackground(h.s.watchCrashes)
+	if err := h.s.SetSystemProxy(true); err != nil {
+		t.Fatal(err)
+	}
+	h.stray.mu.Lock()
+	h.stray.fail = 3 // the stop in handleCrash and two retries
+	h.stray.mu.Unlock()
+	h.mgr.crash(fmt.Errorf("权限组件无响应，%w: i/o timeout", core.ErrStateUnknown))
+	if !waitFor(func() bool {
+		for _, n := range h.s.TakeNotices() {
+			if n.Kind == "core-crash" && strings.Contains(n.Detail, "自动重新启动内核") {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("expected a notice that the core restarts once the helper answers")
+	}
+	if !waitFor(func() bool { st := h.s.Status(); return st.Core == model.CoreRunning && st.SystemProxy }) {
+		t.Fatalf("after the helper answered: %+v", h.s.Status())
+	}
+	h.mgr.mu.Lock()
+	starts := h.mgr.starts
+	h.mgr.mu.Unlock()
+	h.stray.mu.Lock()
+	stops := h.stray.stops
+	h.stray.mu.Unlock()
+	if starts != 2 || stops != 4 {
+		t.Fatalf("starts = %d, stray stops = %d; want one restart after the fourth stop", starts, stops)
+	}
+}
+
+// The user stopping the core while Lanflow waits for the helper ends the
+// wait: nothing is started behind their back.
+func TestSilentHelperWaitEndsWhenTheUserStops(t *testing.T) {
+	old := helperRecoverEvery
+	helperRecoverEvery = 20 * time.Millisecond
+	t.Cleanup(func() { helperRecoverEvery = old })
+	h := newHarness(t, nil)
+	h.s.goBackground(h.s.watchCrashes)
+	if err := h.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	h.stray.mu.Lock()
+	h.stray.fail = 1 << 20
+	h.stray.mu.Unlock()
+	h.mgr.crash(fmt.Errorf("权限组件无响应，%w: i/o timeout", core.ErrStateUnknown))
+	if !waitFor(func() bool { return h.s.Status().Core == model.CoreError }) {
+		t.Fatalf("status = %+v", h.s.Status())
+	}
+	_ = h.s.StopCore()
+	h.stray.mu.Lock()
+	h.stray.fail = 0
+	h.stray.mu.Unlock()
+	time.Sleep(200 * time.Millisecond)
+	h.mgr.mu.Lock()
+	starts := h.mgr.starts
+	h.mgr.mu.Unlock()
+	if st := h.s.Status(); starts != 1 || st.Core == model.CoreRunning {
+		t.Fatalf("starts = %d, status = %+v; the core must stay stopped", starts, st)
+	}
+}
+
 func TestCrashRestartsOnceAndNotifies(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, nil)

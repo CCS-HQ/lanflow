@@ -216,7 +216,9 @@ func init() {
 		"内核意外退出：%v":          "The core quit unexpectedly: %v",
 		"系统代理已关闭，请在需要时重新打开。": "The system proxy was turned off; turn it on again when needed.",
 		"系统代理已恢复。":           "The system proxy was restored.",
-		"内核意外退出，已自动重新启动":     "The core quit unexpectedly and was restarted",
+		"权限组件没有应答":           "The privileged helper is not answering",
+		"%s。%s澜流会在权限组件恢复应答后自动重新启动内核。":     "%s. %s Lanflow will restart the core once the helper answers again.",
+		"内核意外退出，已自动重新启动":                  "The core quit unexpectedly and was restarted",
 		"%s。系统代理已关闭。可在「日志」中查看原因，或重新启动内核。": "%s. The system proxy was turned off. See Logs for the cause, or start the core again.",
 
 		// internal/app/manual_nodes.go

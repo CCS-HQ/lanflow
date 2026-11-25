@@ -2,17 +2,22 @@ package main
 
 import (
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof" // registers /debug/pprof on the default mux
 	"os"
 	"runtime/debug"
+	"slices"
+	"strconv"
 )
 
 // Profiling and the Go runtime's memory behaviour.
 //
 // LANFLOW_PPROF=127.0.0.1:6060 serves net/http/pprof (CPU, heap, goroutine
 // and execution-trace profiles) on that address for the life of the
-// process; it is never on by default and only meant for local diagnosis:
+// process; it is never on by default and only meant for local diagnosis.
+// The window process and the service it starts both read the variable: the
+// service (--service) listens one port higher, so each can be profiled:
 //
 //	LANFLOW_PPROF=127.0.0.1:6060 LANFLOW_FAKE=1 go run .
 //	go tool pprof -top http://127.0.0.1:6060/debug/pprof/profile?seconds=20
@@ -28,6 +33,11 @@ const softMemoryLimit = 96 << 20
 
 func init() {
 	if addr := os.Getenv("LANFLOW_PPROF"); addr != "" {
+		if host, port, err := net.SplitHostPort(addr); err == nil && slices.Contains(os.Args[1:], "--service") {
+			if n, err := strconv.Atoi(port); err == nil {
+				addr = net.JoinHostPort(host, strconv.Itoa(n+1))
+			}
+		}
 		go func() {
 			if err := http.ListenAndServe(addr, nil); err != nil {
 				log.Printf("lanflow: pprof: %v", err)

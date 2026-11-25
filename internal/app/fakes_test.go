@@ -884,6 +884,7 @@ type fakeStray struct {
 	found bool
 	tun   bool
 	stops int
+	fail  int // this many Stops fail first: the helper is silent
 }
 
 func (f *fakeStray) Find(context.Context, string) (bool, bool) {
@@ -896,6 +897,10 @@ func (f *fakeStray) Stop(context.Context, string, bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stops++
+	if f.fail > 0 {
+		f.fail--
+		return errors.New("无法连接权限组件（context deadline exceeded）")
+	}
 	f.found = false
 	return nil
 }

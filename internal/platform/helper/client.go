@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -275,8 +277,8 @@ const unknownOpText = "未知操作"
 
 // Adopt takes over the Mihomo the helper runs already (started for a
 // Lanflow service that has since crashed): it only begins polling.
-func (r *runner) Adopt(ctx context.Context, _ core.Spec) error {
-	running, err := coreRunning(ctx, r.c)
+func (r *runner) Adopt(ctx context.Context, spec core.Spec) error {
+	running, err := coreRunning(ctx, r.c, spec.WorkDir)
 	if err != nil {
 		return wrapTransport(err)
 	}
@@ -302,8 +304,12 @@ func (r *runner) Release() {
 	r.running = false
 }
 
-// coreRunning asks the helper whether it runs Mihomo.
-func coreRunning(ctx context.Context, c *protocol.Client) (bool, error) {
+// coreRunning asks the helper whether it runs Mihomo for workDir. A core
+// the helper started for another work directory (another data directory:
+// a second install, a test) is not this caller's: taking it over or
+// stopping it would end somebody else's proxy. A helper that does not say
+// (before 0.1.8) or an empty workDir counts as a match.
+func coreRunning(ctx context.Context, c *protocol.Client, workDir string) (bool, error) {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	resp, err := c.Call(cctx, protocol.Request{Op: protocol.OpStatus})
@@ -313,7 +319,23 @@ func coreRunning(ctx context.Context, c *protocol.Client) (bool, error) {
 	if !resp.OK {
 		return false, resp.Err()
 	}
-	return resp.Running, nil
+	return resp.Running && sameWorkDir(resp.WorkDir, workDir), nil
+}
+
+// sameWorkDir compares the work directory the helper reports with ours;
+// the helper's has its symlinks resolved.
+func sameWorkDir(reported, ours string) bool {
+	if reported == "" || ours == "" {
+		return true
+	}
+	if r, err := filepath.EvalSymlinks(ours); err == nil {
+		ours = r
+	}
+	reported, ours = filepath.Clean(reported), filepath.Clean(ours)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(reported, ours)
+	}
+	return reported == ours
 }
 
 // Stop stops polling (so no spurious Exited is delivered) and asks the

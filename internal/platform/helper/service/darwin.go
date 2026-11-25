@@ -304,6 +304,12 @@ func Uninstall(ctx context.Context, logf Logf) error {
 	return firstErr
 }
 
+// plist is the LaunchDaemon. ProcessType is Interactive: Mihomo is the
+// helper's child and inherits its scheduling band, and with TUN on it
+// carries all of the machine's traffic. As a Background daemon both ran at
+// the lowest priority, so a busy machine (a build, a VM) starved them for
+// minutes: the network stopped and the app, getting no answer to status,
+// reported the core gone.
 func plist() string {
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -321,7 +327,7 @@ func plist() string {
 	<key>KeepAlive</key>
 	<true/>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Interactive</string>
 	<key>StandardOutPath</key>
 	<string>` + LogPath + `</string>
 	<key>StandardErrorPath</key>

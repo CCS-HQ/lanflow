@@ -90,6 +90,10 @@ type Response struct {
 	Running   bool   `json:"running"`
 	ExitError string `json:"exitError,omitempty"`
 	PID       int    `json:"pid,omitempty"`
+	// WorkDir is the user's work directory (symlinks resolved) the running
+	// core was started for: what tells a Lanflow of another data directory
+	// that this core is not its own. Empty from helpers before 0.1.8.
+	WorkDir string `json:"workDir,omitempty"`
 	// Stage field: the config's copy in the helper's work directory.
 	ConfigPath string `json:"configPath,omitempty"`
 }

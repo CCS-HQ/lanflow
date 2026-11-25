@@ -110,6 +110,7 @@ func (s *Supervisor) Status() protocol.Response {
 	r := protocol.Response{OK: true, Running: s.proc != nil, ExitError: s.exitErr}
 	if s.proc != nil {
 		r.PID = s.proc.Pid()
+		r.WorkDir = s.spec.WorkDir
 	}
 	return r
 }
