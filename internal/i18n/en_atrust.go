@@ -89,7 +89,7 @@ corp-dns:
 # 适合放：aTrust 的映射地址段（常见 198.18.0.0/16，只排 /16，不要写成 /15）、aTrust 网关的 /32、
 # 只能经 aTrust 到达的内网段。
 # 切勿放入包含任何 DNS 服务器的网段：例如公司 DNS 是 10.1.0.53 时不要排除 10.0.0.0/8。
-# 排除后发往它的 DNS 查询绕开了内核，DNS 劫持失效，被墙网站会全部打不开。这类网段请放到 direct-cidrs。
+# 排除后发往它的 DNS 查询绕开了内核，DNS 劫持失效，需要走代理的网站会全部打不开。这类网段请放到 direct-cidrs。
 # aTrust 运行时它的网关会被自动检测并排除，不必手填；检测到的网段若含 DNS 服务器也会自动改为仅直连。
 exclude-cidrs:
   - 198.18.0.0/16
@@ -137,8 +137,8 @@ corp-dns:
 # Put here: aTrust's mapped range (usually 198.18.0.0/16; exclude the /16 only, never a /15), its gateways as /32,
 # intranet ranges reachable only through aTrust.
 # Never put a range holding any DNS server here: with the company DNS at 10.1.0.53, do not exclude 10.0.0.0/8.
-# DNS queries sent into an excluded range bypass the core, the DNS hijack stops working and every blocked site
-# fails. Such ranges belong in direct-cidrs.
+# DNS queries sent into an excluded range bypass the core, the DNS hijack stops working and every site that
+# needs the proxy fails. Such ranges belong in direct-cidrs.
 # While aTrust runs its gateways are detected and excluded automatically; a detected range holding a DNS server
 # is demoted to direct-only automatically as well.
 exclude-cidrs:
