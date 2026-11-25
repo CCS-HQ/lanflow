@@ -9,7 +9,7 @@ require (
 	github.com/andybalholm/brotli v1.3.0
 	github.com/coder/websocket v1.8.15
 	github.com/egoist/mygo v0.10.0
-	github.com/klauspost/compress v1.18.7
+	github.com/klauspost/compress v1.20.5
 	github.com/oschwald/maxminddb-golang/v2 v2.9.1
 	golang.org/x/crypto v0.59.0
 	golang.org/x/image v0.48.0
