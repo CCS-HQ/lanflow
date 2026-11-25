@@ -146,6 +146,14 @@ type API interface {
 	// profile is built and checked with the core before anything is
 	// stored; use switches to a new one.
 	SaveAggregate(s model.Subscription, spec model.AggregateSpec, use bool) (model.Subscription, error)
+	// AggregateTemplates returns the user's aggregate templates (我的模板):
+	// groups, rules and node processing without sources.
+	AggregateTemplates() ([]model.AggregateTemplate, error)
+	// SaveAggregateTemplate adds (empty ID) or replaces a template of the
+	// user's own; its sources are dropped.
+	SaveAggregateTemplate(t model.AggregateTemplate) (model.AggregateTemplate, error)
+	// DeleteAggregateTemplate removes a template of the user's own.
+	DeleteAggregateTemplate(id string) error
 
 	// ---- manual nodes ----
 	ManualNodes() []model.ManualNode

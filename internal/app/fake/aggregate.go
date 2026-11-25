@@ -40,6 +40,8 @@ func (f *Fake) aggInputs(spec model.AggregateSpec) []profile.AggregateInput {
 			in = fakeAggSource(src.URL)
 		case model.AggSourceLinks:
 			in.Data = []byte(src.Links)
+		case model.AggSourceYAML:
+			in.Data = []byte(src.YAML)
 		case model.AggSourceSub:
 			in = fakeAggSource("https://" + src.SubID + ".example.com")
 		}
@@ -66,7 +68,50 @@ func (f *Fake) AggregateSpec(id string) (model.AggregateSpec, error) {
 	if !ok {
 		return model.AggregateSpec{}, errors.New(i18n.T("这不是聚合订阅。"))
 	}
-	return spec.Clone(), nil
+	return profile.UpgradeAggregateSpec(spec.Clone()), nil
+}
+
+func (f *Fake) AggregateTemplates() ([]model.AggregateTemplate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]model.AggregateTemplate{}, f.aggTpls...), nil
+}
+
+func (f *Fake) SaveAggregateTemplate(t model.AggregateTemplate) (out model.AggregateTemplate, err error) {
+	err = f.do(func() error {
+		t.Name = strings.TrimSpace(t.Name)
+		if t.Name == "" {
+			return errors.New(i18n.T("请填写模板名称。"))
+		}
+		t.Spec = t.Spec.Clone()
+		t.Spec.Sources, t.Spec.Hidden, t.Spec.NodeOrder, t.Spec.Template = nil, nil, nil, ""
+		if t.ID == "" {
+			t.ID, t.Created = fmt.Sprintf("t%d", len(f.aggTpls)+1), time.Now()
+			f.aggTpls = append(f.aggTpls, t)
+		} else {
+			for i := range f.aggTpls {
+				if f.aggTpls[i].ID == t.ID {
+					f.aggTpls[i] = t
+				}
+			}
+		}
+		out = t
+		return nil
+	}, app.TopicSubs)
+	return out, err
+}
+
+func (f *Fake) DeleteAggregateTemplate(id string) error {
+	return f.do(func() error {
+		out := f.aggTpls[:0:0]
+		for _, t := range f.aggTpls {
+			if t.ID != id {
+				out = append(out, t)
+			}
+		}
+		f.aggTpls = out
+		return nil
+	}, app.TopicSubs)
 }
 
 func (f *Fake) PreviewAggregate(_ model.Subscription, spec model.AggregateSpec) (pv model.AggregatePreview, err error) {

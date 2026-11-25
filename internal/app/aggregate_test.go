@@ -76,7 +76,7 @@ func TestSaveAggregateCreatesAndUpdates(t *testing.T) {
 		}
 	}
 	raw, _ := h.s.SubscriptionRaw(sub.ID)
-	if !strings.Contains(raw, "A 香港 01") || !strings.Contains(raw, profile.AggGroupSelect) || strings.Contains(raw, "剩余流量") {
+	if !strings.Contains(raw, "A 香港 01") || !strings.Contains(raw, profile.AggModule(profile.AggModSelect).Name()) || strings.Contains(raw, "剩余流量") {
 		t.Fatalf("content:\n%s", raw)
 	}
 	if cur, _ := h.store.Current(); cur.ID == sub.ID {

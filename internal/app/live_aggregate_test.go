@@ -103,13 +103,15 @@ func TestLiveAggregate(t *testing.T) {
 	if agg.Total != 100<<30 || agg.Upload != 1<<30 || agg.Download != 2<<30 || agg.Expire.Unix() != 1798761600 || agg.LastError != "" {
 		t.Fatalf("record = %+v", agg)
 	}
-	e2eWait(t, 30*time.Second, "aggregate groups loaded", func() bool { return groupNow(s, profile.AggGroupSelect) != "" && groupNow(s, "香港节点") != "" })
-	for _, g := range []string{"自动选择", "谷歌服务", "YouTube", "漏网之鱼", "美国节点", "新加坡节点", "日本节点"} {
+	mod := func(id string) string { return profile.AggModule(id).Name() }
+	sel := mod(profile.AggModSelect)
+	e2eWait(t, 30*time.Second, "aggregate groups loaded", func() bool { return groupNow(s, sel) != "" && groupNow(s, mod("hk")) != "" })
+	for _, g := range []string{mod("auto"), mod("google"), mod("youtube"), mod("final"), mod("us"), mod("sg"), mod("jp")} {
 		if groupNow(s, g) == "" {
 			t.Errorf("group %s missing from the running core", g)
 		}
 	}
-	for host, policy := range map[string]string{"www.youtube.com": "YouTube", "www.google.com": "谷歌服务", "www.baidu.com": "DIRECT", "192.168.1.1": "DIRECT", "example.org": profile.AggGroupFinal} {
+	for host, policy := range map[string]string{"www.youtube.com": mod("youtube"), "www.google.com": mod("google"), "www.baidu.com": mod("cn"), "192.168.1.1": mod("private"), "example.org": mod("final")} {
 		m, err := s.TestRule(host)
 		if err != nil {
 			// TestRule watches the connection list for its request,
@@ -136,7 +138,7 @@ func TestLiveAggregate(t *testing.T) {
 		return resp.StatusCode, nil
 	}
 	for _, node := range []string{"local-a", "L·VM SOCKS 01"} {
-		if err := s.SelectProxy(profile.AggGroupSelect, node); err != nil {
+		if err := s.SelectProxy(sel, node); err != nil {
 			t.Fatal(err)
 		}
 		before := socksLogLen()

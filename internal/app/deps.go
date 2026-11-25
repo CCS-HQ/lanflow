@@ -143,6 +143,8 @@ type profileStore interface {
 	SetProxyChains(chains []model.ProxyChain) ([]model.ProxyChain, error)
 	AggregateSpec(id string) (model.AggregateSpec, bool)
 	SetAggregateSpec(id string, spec model.AggregateSpec) error
+	AggregateTemplates() ([]model.AggregateTemplate, error)
+	SetAggregateTemplates(list []model.AggregateTemplate) error
 }
 
 // composer wraps the package-level functions of package profile.

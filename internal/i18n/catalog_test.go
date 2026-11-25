@@ -70,7 +70,7 @@ var keyTables = map[string]string{
 	// The chain notes, which app/chains.go shows through Tf.
 	"internal/profile/chain_notes.go": "chainFormats",
 	// The aggregate editor's region and module names, shown through T.
-	"internal/profile/aggregate_catalog.go": "AggregateRegions AggregateModules aggFormats",
+	"internal/profile/aggregate_catalog.go": "AggregateCategories AggregateModules AggregateTemplates aggFormats",
 }
 
 // pendingUnwrapped are Chinese literals known to be shown without going

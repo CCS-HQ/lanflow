@@ -134,12 +134,12 @@ func redactSub(s model.Subscription) model.Subscription {
 	return s
 }
 
-// redactAggregate removes the links of an aggregate subscription's
-// sources, which carry access tokens and node credentials.
+// redactAggregate removes the links and pasted YAML of an aggregate
+// subscription's sources, which carry access tokens and node credentials.
 func redactAggregate(spec model.AggregateSpec) model.AggregateSpec {
 	spec = spec.Clone()
 	for i := range spec.Sources {
-		spec.Sources[i].URL, spec.Sources[i].Links = "", ""
+		spec.Sources[i].URL, spec.Sources[i].Links, spec.Sources[i].YAML = "", "", ""
 	}
 	return spec
 }
@@ -222,6 +222,9 @@ func keepAggregateLinks(api app.API, sub model.Subscription, spec model.Aggregat
 		}
 		if src.Links == "" {
 			spec.Sources[i].Links = o.Links
+		}
+		if src.YAML == "" {
+			spec.Sources[i].YAML = o.YAML
 		}
 	}
 	return spec

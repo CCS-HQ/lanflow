@@ -14,6 +14,7 @@
 //	custom-rules.json        []model.CustomRule
 //	manual-nodes.json        []model.ManualNode
 //	proxy-chains.json        []model.ProxyChain (chains.go)
+//	aggregate-templates.json []model.AggregateTemplate, the user's aggregate templates
 package profile
 
 import (
@@ -73,6 +74,16 @@ func (s *Store) SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, er
 
 // AggregateSpec returns how the aggregate subscription id is built.
 func (s *Store) AggregateSpec(id string) (model.AggregateSpec, bool) { return s.s.aggregateSpec(id) }
+
+// AggregateTemplates returns the user's aggregate templates (我的模板).
+func (s *Store) AggregateTemplates() ([]model.AggregateTemplate, error) {
+	return s.s.aggregateTemplates()
+}
+
+// SetAggregateTemplates replaces the user's aggregate templates.
+func (s *Store) SetAggregateTemplates(list []model.AggregateTemplate) error {
+	return s.s.setAggregateTemplates(list)
+}
 
 // SetAggregateSpec stores how the aggregate subscription id is built.
 func (s *Store) SetAggregateSpec(id string, spec model.AggregateSpec) error {

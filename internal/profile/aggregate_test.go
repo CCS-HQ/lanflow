@@ -106,29 +106,41 @@ func TestBuildAggregateMergesSources(t *testing.T) {
 		groups[g.Name] = g.Proxies
 		order = append(order, g.Name)
 	}
-	if order[0] != AggGroupSelect || order[1] != AggGroupAuto {
+	sel, auto, final := AggModule(AggModSelect).Name(), AggModule(AggModAuto).Name(), AggModule(AggModFinal).Name()
+	if order[0] != sel || order[1] != auto {
 		t.Fatalf("group order = %q", order)
 	}
-	if got := groups["香港节点"]; len(got) != 1 || got[0] != "A·🇭🇰 香港 01" {
+	if got := groups["🇭🇰 香港节点"]; len(got) != 1 || got[0] != "A·🇭🇰 香港 01" {
 		t.Fatalf("香港节点 = %q", got)
 	}
-	if got := groups["美国节点"]; len(got) != 1 || got[0] != "US 洛杉矶" {
+	if got := groups["🇺🇸 美国节点"]; len(got) != 1 || got[0] != "US 洛杉矶" {
 		t.Fatalf("美国节点 = %q", got)
 	}
-	if _, ok := groups["韩国节点"]; ok {
+	if _, ok := groups["🇰🇷 韩国节点"]; ok {
 		t.Fatal("a region that was not chosen was generated")
 	}
-	if got := groups["苹果服务"]; got[0] != "DIRECT" {
+	if got := groups["🍏 苹果服务"]; got[0] != "DIRECT" {
 		t.Fatalf("苹果服务 = %q, want DIRECT first", got)
 	}
-	if got := groups["广告拦截"]; got[0] != "REJECT" {
+	if got := groups["🛑 广告拦截"]; got[0] != "REJECT" {
 		t.Fatalf("广告拦截 = %q", got)
 	}
-	if doc.Rules[len(doc.Rules)-1] != "MATCH,"+AggGroupFinal {
+	if got := groups[sel]; got[0] != auto || got[len(got)-1] != "DIRECT" {
+		t.Fatalf("节点选择 = %q", got)
+	}
+	if doc.Rules[len(doc.Rules)-1] != "MATCH,"+final {
 		t.Fatalf("last rule = %q", doc.Rules[len(doc.Rules)-1])
 	}
-	if !contains(doc.Rules, "GEOIP,CN,DIRECT,no-resolve") || !contains(doc.Rules, "GEOSITE,youtube,YouTube") || !contains(doc.Rules, "GEOSITE,geolocation-!cn,"+AggGroupSelect) {
-		t.Fatalf("rules = %q", doc.Rules)
+	for _, r := range []string{"GEOIP,CN,🔒 国内服务,no-resolve", "GEOIP,LAN,🏠 私有网络,no-resolve", "GEOSITE,youtube,📹 YouTube", "GEOSITE,geolocation-!cn,🌍 非中国", "IP-CIDR,91.108.4.0/22,📲 Telegram,no-resolve"} {
+		if !contains(doc.Rules, r) {
+			t.Fatalf("no rule %q in %q", r, doc.Rules)
+		}
+	}
+	if len(pv.GroupViews) != len(doc.Groups) || len(pv.RuleViews) == 0 || pv.RuleSets == 0 {
+		t.Fatalf("views: %d groups, %d rules, %d sets", len(pv.GroupViews), len(pv.RuleViews), pv.RuleSets)
+	}
+	if len(pv.Warnings) != 0 {
+		t.Fatalf("warnings = %q", pv.Warnings)
 	}
 	if pv.Rules != len(doc.Rules) || len(pv.Groups) != len(doc.Groups) {
 		t.Fatalf("preview counts %d/%d, profile %d/%d", pv.Rules, len(pv.Groups), len(doc.Rules), len(doc.Groups))
@@ -145,13 +157,16 @@ func TestBuildAggregateFilterRenameDedupe(t *testing.T) {
   - {name: "HK 01", type: ss, server: a, port: 1, password: p, cipher: aes-128-gcm}
   - {name: "HK 01", type: ss, server: b, port: 1, password: p, cipher: aes-128-gcm}
   - {name: "节点选择", type: ss, server: c, port: 1, password: p, cipher: aes-128-gcm}
+  - {name: "🚀 节点选择", type: ss, server: c2, port: 1, password: p, cipher: aes-128-gcm}
   - {name: "LANFLOW-PROBE", type: ss, server: d, port: 1, password: p, cipher: aes-128-gcm}
   - {name: "JP 01", type: ss, server: e, port: 1, password: p, cipher: aes-128-gcm}
 `
 	spec := model.AggregateSpec{
+		Version: model.AggregateSpecVersion,
 		Sources: []model.AggregateSource{{ID: "a", Kind: model.AggSourceSub, SubID: "s1"}},
-		Exclude: "JP",
+		Exclude: "JP\n\nTW",
 		Renames: []model.RenameRule{{Pattern: `^HK (\d+)$`, Replace: "香港-$1"}},
+		Groups:  []model.AggregateGroup{{ID: AggModSelect}, {ID: AggModFinal}},
 	}
 	pv, data, err := BuildAggregate(spec, aggInputs(spec, src), nil)
 	if err != nil {
@@ -161,15 +176,15 @@ func TestBuildAggregateFilterRenameDedupe(t *testing.T) {
 	for _, n := range pv.Nodes {
 		names = append(names, n.Name)
 	}
-	if got := strings.Join(names, "|"); got != "香港-01|香港-01 2|节点选择 2|PROBE" {
+	if got := strings.Join(names, "|"); got != "香港-01|香港-01 2|节点选择|🚀 节点选择 2|PROBE" {
 		t.Fatalf("names = %q", got)
 	}
 	if strings.Contains(string(data), "自动选择") {
 		t.Fatal("自动选择 generated with AutoGroup off")
 	}
-	spec.Include = "^HK"
+	spec.Include = "^HK\n^LANFLOW"
 	pv, _, _ = BuildAggregate(spec, aggInputs(spec, src), nil)
-	if len(pv.Nodes) != 2 {
+	if len(pv.Nodes) != 3 {
 		t.Fatalf("include kept %d nodes", len(pv.Nodes))
 	}
 	checkAggregateWithCore(t, data)
@@ -222,11 +237,24 @@ func TestValidateAggregateSpec(t *testing.T) {
 		{"no sub", model.AggregateSpec{Sources: []model.AggregateSource{{Kind: model.AggSourceSub}}}, "没有选择订阅"},
 		{"bad kind", model.AggregateSpec{Sources: []model.AggregateSource{{Kind: "x"}}}, "类型无效"},
 		{"dup id", model.AggregateSpec{Sources: []model.AggregateSource{ok, ok}}, "ID 重复"},
-		{"bad regexp", model.AggregateSpec{Sources: []model.AggregateSource{ok}, Exclude: "("}, "「排除」的正则表达式无效"},
+		{"bad regexp", model.AggregateSpec{Sources: []model.AggregateSource{ok}, Exclude: "x\n("}, "「排除」第 2 行的正则表达式无效"},
 		{"bad rename", model.AggregateSpec{Sources: []model.AggregateSource{ok}, Renames: []model.RenameRule{{Pattern: "["}}}, "重命名规则的正则表达式无效"},
 		{"empty rename", model.AggregateSpec{Sources: []model.AggregateSource{ok}, Renames: []model.RenameRule{{Replace: "x"}}}, "缺少要匹配的内容"},
-		{"region", model.AggregateSpec{Sources: []model.AggregateSource{ok}, Regions: []string{"mars"}}, "未知的地区分组"},
-		{"module", model.AggregateSpec{Sources: []model.AggregateSource{ok}, Modules: []string{"x"}}, "未知的分流模块"},
+		{"module", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Groups: []model.AggregateGroup{{ID: "x"}}}), "未知的代理组"},
+		{"dup group", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Groups: []model.AggregateGroup{{ID: "ads"}, {ID: "ads"}}}), "代理组重复"},
+		{"dup name", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Groups: []model.AggregateGroup{{ID: "ads"}, {ID: "c1", Custom: true, Name: "🛑 广告拦截"}}}), "名称重复"},
+		{"custom no name", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Groups: []model.AggregateGroup{{ID: "c1", Custom: true}}}), "没有名称"},
+		{"bad type", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Groups: []model.AggregateGroup{{ID: "ads", Type: "x"}}}), "类型无效"},
+		{"bad set", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Groups: []model.AggregateGroup{{ID: "c1", Custom: true, Name: "C", Rules: []string{"geosite:nope-nope"}}}}), "规则集无效"},
+		{"relay", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Relays: []model.AggregateRelay{{Name: "R", Relay: "x"}}}), "落地节点"},
+		{"rule target", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Rules: []model.AggregateRule{{Type: "DOMAIN", Value: "a.com", Target: "nope"}}}), "目标代理组不存在"},
+		{"rule cidr", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Rules: []model.AggregateRule{{Type: "IP-CIDR", Value: "1.2.3", Target: "DIRECT"}}}), "IP 段"},
+		{"rule set", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Rules: []model.AggregateRule{{Type: "GEOSITE", Value: "nope-nope", Target: "DIRECT"}}}), "规则集不存在"},
+		{"rule source", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, RuleSource: "x"}), "规则来源无效"},
+		{"rule base", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, RuleSource: model.AggRulesRemote, RuleBaseURL: "x"}), "规则集 URL 无效"},
+		{"listen", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, ListenBase: 80}), "监听端口"},
+		{"base", v2(model.AggregateSpec{Sources: []model.AggregateSource{ok}, Base: "- a"}), "基础和 DNS 配置"},
+		{"yaml source", model.AggregateSpec{Sources: []model.AggregateSource{{Kind: model.AggSourceYAML}}}, "没有填写 YAML"},
 		{"ok", model.AggregateSpec{Sources: []model.AggregateSource{ok}}, ""},
 	} {
 		err := ValidateAggregateSpec(tc.spec, nil)
@@ -234,23 +262,34 @@ func TestValidateAggregateSpec(t *testing.T) {
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
 		}
 	}
-	// the catalogs compile and have unique IDs and group names
+	// the catalog: unique IDs and names, filters compile, rule sets exist
 	seen := map[string]bool{}
-	for _, r := range AggregateRegions {
-		if seen[r.ID] || seen[r.Group] {
-			t.Errorf("region %s duplicated", r.ID)
-		}
-		seen[r.ID], seen[r.Group] = true, true
-		if _, err := regexp.Compile(aggRegionMatch[r.ID]); err != nil || aggRegionMatch[r.ID] == "" {
-			t.Errorf("region %s: match %q: %v", r.ID, aggRegionMatch[r.ID], err)
-		}
-	}
 	for _, m := range AggregateModules {
-		if seen["m:"+m.ID] || seen[m.Group] {
+		if seen["m:"+m.ID] || seen[m.Name()] {
 			t.Errorf("module %s duplicated", m.ID)
 		}
-		seen["m:"+m.ID], seen[m.Group] = true, true
+		seen["m:"+m.ID], seen[m.Name()] = true, true
+		if _, err := regexp.Compile(m.Filter); err != nil {
+			t.Errorf("module %s: filter: %v", m.ID, err)
+		}
+		for _, r := range m.Rules {
+			if !validRuleSetRef(r) {
+				t.Errorf("module %s: rule set %q not in the library", m.ID, r)
+			}
+		}
 	}
+	for _, tp := range AggregateTemplates {
+		for _, id := range tp.Modules {
+			if AggModule(id) == nil {
+				t.Errorf("template %s: unknown module %s", tp.ID, id)
+			}
+		}
+	}
+}
+
+func v2(s model.AggregateSpec) model.AggregateSpec {
+	s.Version = model.AggregateSpecVersion
+	return s
 }
 
 func TestStoreAggregateSpec(t *testing.T) {

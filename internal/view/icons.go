@@ -41,6 +41,18 @@ var icons = map[string]*ui.SVG{
 	"capture":  svg(`<rect x="3.5" y="7" width="9" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/><path d="M8 9.6v1.8"/>`),
 	"locate":   svg(`<circle cx="8" cy="8" r="4.5"/><circle cx="8" cy="8" r="1" fill="currentColor"/><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"/>`),
 	"sidebar":  svg(`<rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M6 2.5v11"/>`),
+	// The aggregate subscription editor (subs/aggregate*.go).
+	"edit":    svg(`<path d="M10.5 2.5l3 3-8 8H2.5v-3z"/><path d="M9 4l3 3"/>`),
+	"trash":   svg(`<path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/>`),
+	"expand":  svg(`<path d="M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9"/>`),
+	"server":  svg(`<rect x="2.5" y="2.5" width="11" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="11" height="4.5" rx="1.2"/><path d="M5 4.75h.01M5 11.25h.01"/>`),
+	"eye":     svg(`<path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>`),
+	"eye-off": svg(`<path d="M2.5 2.5l11 11M6.6 4.3A6.4 6.4 0 0 1 8 3.5c4.1 0 6.5 4.5 6.5 4.5a11 11 0 0 1-1.9 2.4M11 11.6A6.3 6.3 0 0 1 8 12.5C3.9 12.5 1.5 8 1.5 8a11.3 11.3 0 0 1 2.7-3.1M6.6 6.6a2 2 0 0 0 2.8 2.8"/>`),
+	"layers":  svg(`<path d="M8 2l6 3.2-6 3.2-6-3.2z"/><path d="M2 8.2l6 3.2 6-3.2M2 11l6 3.2 6-3.2"/>`),
+	"sliders": svg(`<path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6"/><circle cx="10" cy="4.5" r="1.5"/><circle cx="6" cy="11.5" r="1.5"/>`),
+	"upload":  svg(`<path d="M8 10.5V2.5M5 5.5l3-3 3 3M2.5 10.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2"/>`),
+	"graph":   svg(`<rect x="6" y="1.5" width="4" height="3.5" rx=".8"/><rect x="1.5" y="11" width="4" height="3.5" rx=".8"/><rect x="10.5" y="11" width="4" height="3.5" rx=".8"/><path d="M8 5v3M3.5 11V8h9v3"/>`),
+	"grip":    svg(`<circle cx="6" cy="4" r=".7" fill="currentColor"/><circle cx="10" cy="4" r=".7" fill="currentColor"/><circle cx="6" cy="8" r=".7" fill="currentColor"/><circle cx="10" cy="8" r=".7" fill="currentColor"/><circle cx="6" cy="12" r=".7" fill="currentColor"/><circle cx="10" cy="12" r=".7" fill="currentColor"/>`),
 }
 
 // pageIcons maps sidebar pages to their icon names.
