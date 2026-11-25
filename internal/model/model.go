@@ -520,6 +520,10 @@ type Settings struct {
 	// on by default.
 	TailscaleCompat bool
 	Tailscale       TailscaleConfig // the user's lists for Tailscale 兼容 (model/tailscale.go)
+	// TailscaleBuiltin makes the core itself a node of a tailnet (内置
+	// Tailscale, model/tailscale.go); off by default. Its auth key is in
+	// the keychain (API.SetTailscaleAuthKey), never here.
+	TailscaleBuiltin TailscaleBuiltin
 	// CaptureEnabled shows the 抓包 page and its entry points (sidebar,
 	// connection menu, tray) and allows HTTPS decryption; off by default.
 	// Turning it off also turns decryption off.

@@ -44,7 +44,7 @@ func (s *Service) startStreams() {
 	s.streamCtx, s.streamCancel = ctx, cancel
 	s.logsCancel, s.logsDone = logCancel, logsDone
 	level := s.state.settings.LogLevel
-	s.streamWG.Add(4)
+	s.streamWG.Add(5)
 	s.mu.Unlock()
 
 	run := func(fn func(context.Context)) {
@@ -56,6 +56,7 @@ func (s *Service) startStreams() {
 	run(func(ctx context.Context) { _ = s.d.ctrl.StreamTraffic(ctx, s.onTraffic) })
 	run(func(ctx context.Context) { _ = s.d.ctrl.StreamMemory(ctx, s.onMemory) })
 	run(s.refreshLoop)
+	run(s.runTailscaleLogs) // tailscale_builtin.go
 	go func() {
 		defer s.streamWG.Done()
 		defer close(logsDone)

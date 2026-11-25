@@ -37,3 +37,35 @@ func TestTailscaleRowDesc(t *testing.T) {
 		t.Fatalf("desc = %q", d)
 	}
 }
+
+func TestTSBuiltinForm(t *testing.T) {
+	f := tsBuiltinForm{hostname: "Work Mac", controlURL: "https://hs.example.com/", exitNode: "auto:any", acceptRoutes: true}
+	b, errs := f.apply(model.TailscaleBuiltin{Enabled: true, StateGen: 2})
+	if len(errs) != 0 || b.Hostname != "work-mac" || b.ControlURL != "https://hs.example.com" || !b.AcceptRoutes || !b.Enabled || b.StateGen != 2 {
+		t.Fatalf("%+v %v", b, errs)
+	}
+	if _, errs := (tsBuiltinForm{controlURL: "hs.example.com", exitNode: "a b"}).apply(model.TailscaleBuiltin{}); errs["control"] == "" || errs["exit"] == "" {
+		t.Fatalf("errs = %v", errs)
+	}
+	if got := tsBuiltinFormFrom(b); got.hostname != "work-mac" || !got.acceptRoutes {
+		t.Fatalf("form = %+v", got)
+	}
+}
+
+func TestTSBuiltinRowDesc(t *testing.T) {
+	on := model.TailscaleBuiltin{Enabled: true}
+	st := model.TailscaleState{Builtin: model.TailscaleBuiltinState{State: model.TSStateRunning, Hostname: "mac-lanflow", Addresses: []string{"100.101.1.2"}, LoginName: "u@example.com"}}
+	if d := tsBuiltinRowDesc(on, st, true); !strings.Contains(d, "mac-lanflow") || !strings.Contains(d, "100.101.1.2") || !strings.Contains(d, "u@example.com") {
+		t.Fatalf("desc = %q", d)
+	}
+	if d := tsBuiltinRowDesc(on, st, false); !strings.Contains(d, "内核未运行") {
+		t.Fatalf("stopped desc = %q", d)
+	}
+	st.Builtin = model.TailscaleBuiltinState{State: model.TSStatePausedForApp}
+	if d := tsBuiltinRowDesc(on, st, true); !strings.Contains(d, "暂停") {
+		t.Fatalf("paused desc = %q", d)
+	}
+	if d := tsBuiltinRowDesc(model.TailscaleBuiltin{}, st, true); !strings.Contains(d, "无需运行 Tailscale App") {
+		t.Fatalf("off desc = %q", d)
+	}
+}

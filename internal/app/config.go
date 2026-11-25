@@ -114,7 +114,8 @@ func (s *Service) saveSettingsWith(edit func(cur model.Settings) model.Settings,
 		// captureOffLocked reloads the core, which takes opMu: not here.
 		s.goBackground(func() { _ = s.SetCapture(false) })
 	}
-	tsChanged := (in.TailscaleCompat != old.TailscaleCompat && s.detectTailscale()) || s.tailscaleSettingsChanged(old, in)
+	tsToggled := in.TailscaleCompat != old.TailscaleCompat || in.TailscaleBuiltin.Enabled != old.TailscaleBuiltin.Enabled
+	tsChanged := (tsToggled && s.detectTailscale()) || s.tailscaleSettingsChanged(old, in)
 	coexistChanged := (in.ATrustCompat != old.ATrustCompat && s.detectCoexist()) || s.coexistSettingsChanged(old, in) || tsChanged
 	if !running {
 		return nil // a stopped core picks the new settings up at its next start

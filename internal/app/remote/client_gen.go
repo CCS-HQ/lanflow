@@ -635,6 +635,21 @@ func (cl *Client) TailscaleReport() (res0 model.TailscaleReport) {
 	return
 }
 
+func (cl *Client) SetTailscaleAuthKey(key string) (err error) {
+	err = cl.call("SetTailscaleAuthKey", []any{key})
+	return
+}
+
+func (cl *Client) TailscaleAuthKeySet() (res0 bool) {
+	_ = cl.call("TailscaleAuthKeySet", nil, &res0)
+	return
+}
+
+func (cl *Client) LogoutTailscale() (err error) {
+	err = cl.call("LogoutTailscale", nil)
+	return
+}
+
 func (cl *Client) TestMirrors() (res0 []model.MirrorTest) {
 	_ = cl.call("TestMirrors", nil, &res0)
 	return

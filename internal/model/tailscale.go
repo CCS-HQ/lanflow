@@ -37,12 +37,65 @@ func (c TailscaleConfig) Clone() TailscaleConfig {
 	return TailscaleConfig{Domains: cp(c.Domains), Routes: cp(c.Routes), DNS: cp(c.DNS)}
 }
 
+// TailscaleBuiltin is 内置 Tailscale (Settings.TailscaleBuiltin): the
+// core joins a tailnet itself (Mihomo's tailscale outbound, built on
+// tsnet), so the Tailscale app need not run. Only traffic that passes
+// through Lanflow (TUN, system proxy, apps set to use the proxy) reaches
+// the tailnet; the machine is not a tailnet node of its own, so other
+// devices cannot reach its services, and Taildrop and Tailscale SSH are
+// not available. It is machine-local (never synced) and gives way to the
+// Tailscale app: while that runs, the built-in node is not started.
+type TailscaleBuiltin struct {
+	Enabled bool
+	// Hostname is the device name in the tailnet; "" = "<this computer's
+	// name>-lanflow".
+	Hostname string `json:",omitempty"`
+	// ControlURL is the coordination server (Headscale); "" = Tailscale's.
+	ControlURL string `json:",omitempty"`
+	// AcceptRoutes uses the subnet routes other nodes advertise. The
+	// ranges themselves go in Settings.Tailscale.Routes, so that rules send
+	// them to the node.
+	AcceptRoutes bool `json:",omitempty"`
+	// ExitNode is an exit node's tailnet IP or name, or "auto:any". Only
+	// what custom rules send to the node (TailscaleOutbound) uses it.
+	ExitNode string `json:",omitempty"`
+	// StateGen names the node's state directory (tailscale, tailscale-N);
+	// 退出登录 moves to the next one, which starts without a login.
+	StateGen int `json:",omitempty"`
+}
+
+// Tailscale built-in node states (TailscaleBuiltinState.State), as the
+// core's tailnet client reports them.
+const (
+	TSStateOff          = ""                   // not in the running config
+	TSStateStarting     = "starting"           // configured, waiting for the core's client
+	TSStateNeedsLogin   = "needs-login"        // LoginURL is set (or comes soon)
+	TSStateMachineAuth  = "needs-machine-auth" // logged in, the tailnet admin must approve the device
+	TSStateRunning      = "running"            // connected to the tailnet
+	TSStateStopped      = "stopped"
+	TSStatePausedForApp = "paused" // the Tailscale app runs: the built-in node is left out
+)
+
+// TailscaleBuiltinState is what the built-in node is doing
+// (TailscaleState.Builtin). Zero = not configured.
+type TailscaleBuiltinState struct {
+	State     string   // TSState*
+	LoginURL  string   // State == TSStateNeedsLogin: open it to add the device
+	Hostname  string   // the device name asked for
+	Addresses []string // the node's tailnet addresses, once known
+	LoginName string   // the account logged in, once known
+	Error     string   // the last problem the core's client reported
+}
+
 // TailscaleReport is API.TailscaleReport.
 type TailscaleReport struct {
-	Compat bool            // Settings.TailscaleCompat
-	Config TailscaleConfig // Settings.Tailscale
-	State  TailscaleState  // detection and what the running config does
-	Notes  []string        // what needs attention, in the UI language
+	Compat  bool             // Settings.TailscaleCompat
+	Config  TailscaleConfig  // Settings.Tailscale
+	Builtin TailscaleBuiltin // Settings.TailscaleBuiltin
+	// AuthKey: an auth key for the built-in node is in the keychain.
+	AuthKey bool
+	State   TailscaleState // detection and what the running config does
+	Notes   []string       // what needs attention, in the UI language
 }
 
 // TailscaleState is a running Tailscale client found beside Lanflow and
@@ -64,4 +117,6 @@ type TailscaleState struct {
 	Outbound string
 	// Applied: the Tailscale layer is in the running config.
 	Applied bool
+	// Builtin is the built-in node (Settings.TailscaleBuiltin).
+	Builtin TailscaleBuiltinState
 }

@@ -373,6 +373,16 @@ type API interface {
 	// PatchSettings changes), what detection found, what the running config
 	// sends to Tailscale, and notes on what needs attention.
 	TailscaleReport() model.TailscaleReport
+	// ---- 内置 Tailscale (tailscale_builtin.go) ----
+	// SetTailscaleAuthKey keeps the built-in node's auth key in the
+	// keychain ("" removes it) and reloads the core when the node is in its
+	// config. A node already logged in ignores it.
+	SetTailscaleAuthKey(key string) error
+	// TailscaleAuthKeySet reports whether an auth key is stored (cheap).
+	TailscaleAuthKeySet() bool
+	// LogoutTailscale moves the built-in node to a fresh state directory:
+	// it starts again without a login.
+	LogoutTailscale() error
 
 	// ---- GitHub download mirror (mirror.go) ----
 	// TestMirrors HEAD-requests a GitHub link through every MirrorPresets
