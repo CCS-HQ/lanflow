@@ -50,6 +50,9 @@ type Status struct {
 	TotalUp, TotalDown int64 // since core start, bytes
 	Memory             int64 // core memory, bytes
 	Connections        int   // active connections
+	GroupCount         int   // visible proxy groups (excluding hidden and GLOBAL)
+	RuleCount          int   // active runtime rules
+	OverrideCount      int   // configured overrides
 
 	CurrentSubscription string // subscription ID in use, "" if none
 	HasSubscriptions    bool

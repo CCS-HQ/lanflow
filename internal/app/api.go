@@ -12,8 +12,9 @@ import "lanflow/internal/model"
 type Topic string
 
 const (
-	TopicStatus   Topic = "status"   // Status() changed (core state, switches, mode, speeds)
-	TopicTraffic  Topic = "traffic"  // TrafficHistory() got a new sample (every second while running)
+	TopicStatus   Topic = "status"   // Status() structural state changed (core state, switches, mode, ports, subscriptions, helper, counts)
+	TopicTraffic  Topic = "traffic"  // TrafficHistory() and live Up/Down speeds got a new sample (every second while running)
+	TopicMetrics  Topic = "metrics"  // live runtime metrics in Status() changed (Memory, Connections, TotalUp/TotalDown)
 	TopicProxies  Topic = "proxies"  // Proxies() changed (selection, delays, testing flags)
 	TopicSubs     Topic = "subs"     // Subscriptions() changed
 	TopicConns    Topic = "conns"    // Connections()/ClosedConnections() changed (≈ every second)

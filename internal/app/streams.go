@@ -212,7 +212,7 @@ func (s *Service) onTraffic(t controller.Traffic) {
 	s.state.down = appendRing(s.state.down, down, trafficHistory)
 	s.state.st.Up, s.state.st.Down = up, down
 	s.mu.Unlock()
-	s.em.emit(TopicTraffic, TopicStatus)
+	s.em.emit(TopicTraffic)
 }
 
 func appendRing(h []int64, v int64, n int) []int64 {
@@ -229,7 +229,7 @@ func (s *Service) onMemory(m controller.Memory) {
 	s.state.st.Memory = m.InUse
 	s.mu.Unlock()
 	if changed {
-		s.em.emit(TopicStatus)
+		s.em.emit(TopicMetrics)
 	}
 }
 
@@ -290,14 +290,20 @@ func (s *Service) onConnections(c controller.Connections) {
 		}
 	}
 	s.state.innerUp, s.state.innerDown = inUp, inDown
+	prevConns, prevUp, prevDown, prevMem := s.state.st.Connections, s.state.st.TotalUp, s.state.st.TotalDown, s.state.st.Memory
 	s.state.st.Connections = activeCount
 	s.state.st.TotalUp = max(0, c.UploadTotal-inTotUp-s.state.innerClosedUp)
 	s.state.st.TotalDown = max(0, c.DownloadTotal-inTotDown-s.state.innerClosedDown)
 	if c.Memory > 0 {
 		s.state.st.Memory = c.Memory
 	}
+	metricsChanged := s.state.st.Connections != prevConns || s.state.st.TotalUp != prevUp || s.state.st.TotalDown != prevDown || s.state.st.Memory != prevMem
 	s.mu.Unlock()
-	s.em.emit(TopicConns, TopicStatus)
+	if metricsChanged {
+		s.em.emit(TopicConns, TopicMetrics)
+	} else {
+		s.em.emit(TopicConns)
+	}
 	if s.stats.record(active, now) {
 		s.em.emit(TopicStats)
 	}
