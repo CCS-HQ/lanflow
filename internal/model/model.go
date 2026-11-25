@@ -172,6 +172,14 @@ type Connection struct {
 	CaptureLeg bool `json:",omitempty"`
 }
 
+// InnerType is the inbound type of the connection the core opens for a
+// dialer-proxy hop (Mihomo's INNER metadata type): the front hop of a
+// chain, carrying another connection's traffic.
+const InnerType = "Inner"
+
+// IsInner reports whether c is the front hop of a chain (InnerType).
+func (c Connection) IsInner() bool { return c.Type == InnerType }
+
 // LogEntry is one core log line.
 type LogEntry struct {
 	Time    time.Time

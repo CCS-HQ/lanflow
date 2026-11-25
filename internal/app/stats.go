@@ -112,6 +112,9 @@ func (s *statsStore) record(conns []model.Connection, now time.Time) bool {
 	var day *statsDay
 	hour := now.Hour()
 	for _, c := range conns {
+		if c.IsInner() {
+			continue // a chain's front hop: its bytes are the outer connection's
+		}
 		p, seen := s.prev[c.ID]
 		next[c.ID] = statsSample{up: c.Upload, down: c.Download}
 		du, dd := c.Upload-p.up, c.Download-p.down

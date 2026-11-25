@@ -230,6 +230,7 @@ func (s *Service) commit(p prepared) error {
 	s.state.runtimeDNS = rd
 	s.state.runtimeLines = nil // annotated on demand (RuntimeConfig): one entry per line adds up
 	s.state.groupIcons = icons
+	s.state.dialers = dialersOf(p.out.YAML)
 	s.mu.Unlock()
 	s.noteChainWarnings(p.out.Warnings)
 	return nil
@@ -655,6 +656,7 @@ func (s *Service) reloadPrepared(p prepared) (err error) {
 		s.mu.Lock()
 		s.state.runtimeYAML, s.state.runtimeLines = prevYAML, nil
 		s.state.runtimeDNS, s.state.groupIcons = rd, icons
+		s.state.dialers = dialersOf(prevYAML)
 		s.mu.Unlock()
 		return fmt.Errorf(i18n.T("内核重新加载配置失败：%v。仍在使用之前的配置。"), err)
 	}

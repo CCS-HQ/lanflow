@@ -131,3 +131,58 @@ func TestSetProxyChainsValidation(t *testing.T) {
 		t.Fatal("chain kept after a failed reload")
 	}
 }
+
+func TestChainHopsFromDialerProxy(t *testing.T) {
+	y := []byte(`proxies:
+  - {name: A, type: socks5, server: 1.1.1.1, port: 1}
+  - {name: LANFLOW-CHAIN-x-2, type: socks5, server: 1.1.1.2, port: 1, dialer-proxy: 香港}
+  - {name: LANFLOW-CHAIN-x-3, type: socks5, server: 1.1.1.3, port: 1, dialer-proxy: LANFLOW-CHAIN-x-2}
+  - {name: Loop, type: socks5, server: 1.1.1.4, port: 1, dialer-proxy: Loop}
+proxy-providers:
+  sub: {type: http, url: https://e.com, path: ./p.yaml, override: {dialer-proxy: A}}
+`)
+	d := dialersOf(y)
+	snap := model.ProxySnapshot{
+		Groups: []model.ProxyGroup{
+			{Name: "节点选择", Now: "中转"},
+			{Name: "中转", Now: "LANFLOW-CHAIN-x-3", All: []string{"LANFLOW-CHAIN-x-3"}},
+			{Name: "香港", Now: "HK 1"},
+		},
+		Proxies: map[string]model.Proxy{"HK 1": {Name: "HK 1", Provider: "sub"}, "A": {Name: "A"}},
+	}
+	for _, tc := range []struct {
+		chain []string
+		want  int
+	}{
+		{[]string{"节点选择", "中转", "LANFLOW-CHAIN-x-3"}, 4}, // x-3 → x-2 → 香港 (HK 1) → A (provider override)
+		{[]string{"节点选择", "A"}, 1},
+		{[]string{"Loop"}, 1},
+		{nil, 0},
+	} {
+		if got := chainHops(tc.chain, snap, d); got != tc.want {
+			t.Errorf("chainHops(%v) = %d, want %d", tc.chain, got, tc.want)
+		}
+	}
+}
+
+// The core counts a chain's bytes on the outer connection and again on
+// its INNER front hop; Lanflow counts them once.
+func TestInnerConnectionsCountOnce(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	h.s.onConnections(controller.Connections{UploadTotal: 3000, DownloadTotal: 6000, Connections: []controller.Connection{
+		{ID: "o", Upload: 1000, Download: 2000, Chains: []string{"LANFLOW-CHAIN-x-2", "中转"}, Metadata: controller.Metadata{Type: "Tun", Network: "tcp"}},
+		{ID: "i", Upload: 1000, Download: 2000, Chains: []string{"香港 01"}, Metadata: controller.Metadata{Type: model.InnerType, Network: "tcp"}},
+	}})
+	st := h.s.Status()
+	if st.TotalUp != 2000 || st.TotalDown != 4000 {
+		t.Fatalf("totals %d/%d, want the INNER bytes taken out", st.TotalUp, st.TotalDown)
+	}
+	for _, r := range h.s.ExitRoutes() {
+		if r.Group == "香港 01" {
+			t.Fatal("INNER connection made a route")
+		}
+	}
+}

@@ -5,10 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 )
 
 const (
@@ -45,8 +49,8 @@ func buildRoutes(conns []model.Connection, snap model.ProxySnapshot, mode model.
 	order := []string{main}
 	stats := map[string]*routeStat{main: {}}
 	for _, c := range conns {
-		if len(c.Chains) == 0 {
-			continue
+		if len(c.Chains) == 0 || c.IsInner() {
+			continue // an INNER connection is the front hop of another one
 		}
 		g := c.Chains[0]
 		if g == "DIRECT" || g == "REJECT" || g == probeGroup {
@@ -84,8 +88,74 @@ func buildRoutes(conns []model.Connection, snap model.ProxySnapshot, mode model.
 	return routes
 }
 
-// chainHops counts the nodes (non-group entries) of a chain.
-func chainHops(chain []string, snap model.ProxySnapshot) int {
+// dialerMap is the dialer-proxy settings of the runtime config: by node
+// of the configuration's proxies, and by proxy provider (its own
+// dialer-proxy or override.dialer-proxy, for all of its nodes).
+type dialerMap struct {
+	nodes     map[string]string
+	providers map[string]string
+}
+
+// dialersOf reads the dialer-proxy settings of a runtime config.
+func dialersOf(yamlText []byte) dialerMap {
+	var doc struct {
+		Proxies []struct {
+			Name   string `yaml:"name"`
+			Dialer string `yaml:"dialer-proxy"`
+		} `yaml:"proxies"`
+		Providers map[string]struct {
+			Dialer   string `yaml:"dialer-proxy"`
+			Override struct {
+				Dialer string `yaml:"dialer-proxy"`
+			} `yaml:"override"`
+		} `yaml:"proxy-providers"`
+	}
+	var out dialerMap
+	if err := yaml.Unmarshal(yamlText, &doc); err != nil {
+		return out
+	}
+	for _, p := range doc.Proxies {
+		if d := strings.TrimSpace(p.Dialer); d != "" && p.Name != "" {
+			if out.nodes == nil {
+				out.nodes = map[string]string{}
+			}
+			out.nodes[p.Name] = d
+		}
+	}
+	for name, pv := range doc.Providers {
+		d := strings.TrimSpace(pv.Override.Dialer)
+		if d == "" {
+			d = strings.TrimSpace(pv.Dialer)
+		}
+		if d != "" {
+			if out.providers == nil {
+				out.providers = map[string]string{}
+			}
+			out.providers[name] = d
+		}
+	}
+	return out
+}
+
+// dialerOf is the dialer-proxy node dials through ("" = none).
+func (d dialerMap) dialerOf(node string, snap model.ProxySnapshot) string {
+	if v := d.nodes[node]; v != "" {
+		return v
+	}
+	if p, ok := snap.Proxies[node]; ok && p.Provider != "" {
+		return d.providers[p.Provider]
+	}
+	return ""
+}
+
+// chainHops counts the hops of a connection: the nodes (non-group
+// entries) of its chain, plus the hops its final node reaches through
+// dialer-proxy, followed in the runtime config (a group resolves to the
+// node it selects). The core lists a dialer-proxy hop not in the chain
+// but as a separate INNER connection, so the chain alone says 1. This
+// covers the chains Lanflow generates (their clones carry dialer-proxy)
+// and those a subscription or override writes.
+func chainHops(chain []string, snap model.ProxySnapshot, dialers dialerMap) int {
 	isGroup := map[string]bool{}
 	for _, g := range snap.Groups {
 		isGroup[g.Name] = true
@@ -95,6 +165,24 @@ func chainHops(chain []string, snap model.ProxySnapshot) int {
 		if !isGroup[c] {
 			n++
 		}
+	}
+	if len(chain) == 0 {
+		return n
+	}
+	seen := map[string]bool{}
+	cur := chain[len(chain)-1]
+	for i := 0; i < 16; i++ {
+		seen[cur] = true
+		d := dialers.dialerOf(cur, snap)
+		if d == "" {
+			break
+		}
+		d = resolveNode(snap, d)
+		if seen[d] || d == "DIRECT" || d == "REJECT" {
+			break
+		}
+		n++
+		cur = d
 	}
 	return n
 }
@@ -182,7 +270,7 @@ func (s *Service) routeFillsLocked(routes []model.ExitRoute, conns []model.Conne
 	}
 	byGroup := map[string]model.Connection{}
 	for _, c := range conns {
-		if len(c.Chains) == 0 {
+		if len(c.Chains) == 0 || c.IsInner() {
 			continue
 		}
 		if prev, ok := byGroup[c.Chains[0]]; !ok || c.Start.After(prev.Start) {
@@ -194,7 +282,7 @@ func (s *Service) routeFillsLocked(routes []model.ExitRoute, conns []model.Conne
 		_, known := s.state.exits[r.Node]
 		entry, hops := "", 1
 		if c, ok := byGroup[r.Group]; ok {
-			entry, hops = c.RemoteDestination, chainHops(c.Chains, snap)
+			entry, hops = c.RemoteDestination, chainHops(c.Chains, snap, s.state.dialers)
 		}
 		if !known || (entry != "" && s.state.exitEntry[r.Node] != entry) {
 			fills = append(fills, routeFill{r.Node, entry, hops})
@@ -295,8 +383,8 @@ func (s *Service) probeNodeLocked(ctx context.Context, node string) error {
 	var entry string
 	var hops int
 	for _, c := range s.state.conns {
-		if len(c.Chains) > 0 && c.Chains[len(c.Chains)-1] == node && c.RemoteDestination != "" {
-			entry, hops = c.RemoteDestination, chainHops(c.Chains, s.state.proxies)
+		if len(c.Chains) > 0 && c.Chains[len(c.Chains)-1] == node && c.RemoteDestination != "" && !c.IsInner() {
+			entry, hops = c.RemoteDestination, chainHops(c.Chains, s.state.proxies, s.state.dialers)
 		}
 	}
 	s.mu.Unlock()
@@ -306,7 +394,9 @@ func (s *Service) probeNodeLocked(ctx context.Context, node string) error {
 	if port == 0 {
 		return errors.New(i18n.T("探测端口不可用"))
 	}
-	sel := func(ctx context.Context, n string) error { return s.d.ctrl.SelectProxy(ctx, probeGroup, n) }
+	sel := func(ctx context.Context, n string) error {
+		return s.d.ctrl.SelectProxy(ctx, probeGroup, s.probeMember(n))
+	}
 	info, err := s.d.loc.Probe(ctx, sel, port, node)
 	if err != nil {
 		return err
@@ -320,6 +410,23 @@ func (s *Service) probeNodeLocked(ctx context.Context, node string) error {
 	s.mu.Unlock()
 	s.storeExit(info)
 	return nil
+}
+
+// probeMember is what the probe group selects to go out through node: the
+// node itself, or for a chain's last clone (not a member: the clones are
+// kept out of the probe group, profile/chains.go) the chain's group.
+func (s *Service) probeMember(node string) string {
+	if !profile.IsChainClone(node) {
+		return node
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, g := range s.state.proxies.Groups {
+		if len(g.All) == 1 && g.All[0] == node {
+			return g.Name
+		}
+	}
+	return node
 }
 
 // ProbeExits measures every current route's exit via Cloudflare trace.

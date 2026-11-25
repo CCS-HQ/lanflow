@@ -125,6 +125,11 @@ type state struct {
 
 	logs ring[model.LogEntry] // the newest logRing core log lines
 
+	// INNER connections (dialer-proxy hops): their speed now and the
+	// bytes of those closed, taken out of the core's counts (streams.go).
+	innerUp, innerDown             int64
+	innerClosedUp, innerClosedDown int64
+
 	rules        []model.Rule
 	rulesAt      time.Time // when rules were fetched (refreshed on demand, rules.go)
 	rulesBusy    bool      // a refreshRules runs
@@ -161,6 +166,7 @@ type state struct {
 	runtimeDNS   runtimeDNS // the dns keys of runtimeYAML, parsed once per commit (network.go)
 	runtimeLines []model.RuntimeLine
 	groupIcons   map[string]string // proxy-group name → icon reference of the runtime config (icons.go)
+	dialers      dialerMap         // the dialer-proxy settings of the runtime config (exits.go)
 	icons        *iconCache        // decoded / downloaded icons (icons.go), allocated lazily
 	procIcons    *procIconCache    // application icons by process path (procicon.go), allocated lazily
 
@@ -824,6 +830,9 @@ func (s *Service) LogsSince(since uint64, limit int) model.LogPage {
 // setConnsLocked replaces the active connections and records what changed
 // for ConnectionsSince.
 func (s *Service) setConnsLocked(c []model.Connection) {
+	if c == nil { // the core stopped: its counts start over
+		s.state.innerUp, s.state.innerDown, s.state.innerClosedUp, s.state.innerClosedDown = 0, 0, 0, 0
+	}
 	s.state.conns = c
 	if s.state.connVer == nil {
 		s.state.connVer = newConnVersions()
