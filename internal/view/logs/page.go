@@ -227,9 +227,19 @@ func (p *Page) View(c *ui.Context) {
 			p.list.Key = func(i int) any { return base + uint64(vis[i]) }
 			p.list.Label = func(i int) string { return all[vis[i]].Payload }
 			levelW := levelWidth(c)
-			ui.List(c.Key("list"), &p.list, len(vis), func(i int) {
-				p.line(c, t, all[vis[i]], levelW)
-			}).Fill().Font("monospace").FontSize(12).Selectable().KeepScrollbars(true).Label(i18n.T("日志"))
+			if p.wrap {
+				ui.List(c.Key("list"), &p.list, len(vis), func(i int) {
+					p.line(c, t, all[vis[i]], levelW)
+				}).Fill().Font("monospace").FontSize(12).Selectable().KeepScrollbars(true).Label(i18n.T("日志"))
+			} else {
+				hs := ui.ScrollHorizontal(c.Key("hscroll")).Fill().KeepScrollbars(true)
+				listW := max(hs.Bounds().W, p.contentWidth(c, all, vis, levelW))
+				hs.Children(func() {
+					ui.List(c.Key("list"), &p.list, len(vis), func(i int) {
+						p.line(c, t, all[vis[i]], levelW)
+					}).Width(listW).FillHeight().Font("monospace").FontSize(12).Selectable().KeepScrollbars(true).Label(i18n.T("日志"))
+				})
+			}
 			atEnd := p.list.AtEnd() || len(vis) == 0
 			end := base + uint64(len(all))
 			if atEnd {
@@ -425,16 +435,31 @@ func (p *Page) line(c *ui.Context, t *ui.Theme, l model.LogEntry, levelW float32
 	row.Children(func() {
 		ui.Text(c, l.Time.Format("15:04:05")).TextColor(timeColor).FontFeatures("tnum").Unselectable().Shrink(0)
 		ui.Text(c, levelName(l.Level)).Width(levelW).TextColor(color).Unselectable().Shrink(0).SingleLine()
-		msg := env.Highlight(c, l.Payload, strings.TrimSpace(p.query), color).Grow(1).Shrink(1).MinWidth(0)
-		if !p.wrap {
-			msg.SingleLine()
-			if len(l.Payload) > 80 {
-				// The line may be cut at the window's edge: the whole of it
-				// on hover (or ⋯ 自动换行).
-				msg.Tooltip(l.Payload)
-			}
+		msg := env.Highlight(c, l.Payload, strings.TrimSpace(p.query), color)
+		if p.wrap {
+			msg.Grow(1).Shrink(1).MinWidth(0)
+		} else {
+			msg.SingleLine().Shrink(0)
 		}
 	})
+}
+
+// contentWidth returns the DIP width needed so the widest visible log line
+// renders without truncation inside the horizontal scroll container.
+func (p *Page) contentWidth(c *ui.Context, all []model.LogEntry, vis []int, levelW float32) float32 {
+	var longest string
+	longestBytes := 0
+	for _, idx := range vis {
+		s := all[idx].Payload
+		if len(s) > longestBytes {
+			longestBytes = len(s)
+			longest = s
+		}
+	}
+	timeW := colwidth.Text(c, "monospace", 12, 0, "00:00:00")
+	msgW := colwidth.Text(c, "monospace", 12, 0, longest)
+	// paddingX(16*2) + 2*gap(10) + scrollbar room(16)
+	return timeW + levelW + msgW + 68
 }
 
 // Topics are the service topics this page's view reads; the shell

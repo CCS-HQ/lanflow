@@ -313,7 +313,7 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, active, closed []model.Connectio
 	p.cols = p.visibleColumns(c)
 	ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
 		ui.Table(c.Key("table"), &p.list, p.cols, len(rows), func(row, col int) {
-			p.cell(c, t, rows[row], row, p.cols[col].ID)
+			p.cell(c, t, rows[row], row, p.cols[col])
 		}).Grow(1).FillHeight().Label(i18n.T("连接"))
 		if p.selected >= 0 && p.selected < len(rows) {
 			p.sel = rows[p.selected].ID
@@ -328,8 +328,8 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, active, closed []model.Connectio
 	})
 }
 
-// cell builds one cell; col is the column's ID.
-func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, col string) {
+// cell builds one cell for column col.
+func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, col ui.TableColumn) {
 	q := strings.TrimSpace(p.query)
 	muted := t.TextMuted
 	if row == p.selected {
@@ -337,11 +337,14 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, co
 		muted = t.AccentText
 	}
 	box := ui.Row(c).FillWidth()
+	if col.Align == ui.End {
+		box.Justify(ui.End)
+	}
 	if box.Hovered() {
 		p.hoverRow = row
 	}
 	box.Children(func() {
-		switch col {
+		switch col.ID {
 		case "host":
 			env.Highlight(c, cn.Host, q, t.Text).SingleLine().Tooltip(cn.Host)
 		case "process":
