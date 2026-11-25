@@ -20,7 +20,7 @@ func TestNormalizeAdvancedDropsInvalid(t *testing.T) {
 		LANAllowedIPs:    []string{"192.168.0.0/16", "not-a-cidr", " 10.0.0.1 ", ""},
 		Authentication:   []string{"user:pass", "nocolon", ":x", " a:b "},
 		SkipAuthPrefixes: []string{"127.0.0.1/32", "bad"},
-		TUNMTU:           100, FindProcessMode: "sometimes", GeodataLoader: "fast", DNSCacheAlgorithm: "fifo",
+		TUNMTU:           100, FindProcessMode: "sometimes", GeodataLoader: "fast", DNSCacheAlgorithm: "fifo", TUNDNSMode: "auto",
 		KeepAliveInterval: -5, DNSListen: "not an address", InterfaceName: " en0 ",
 		DNSFallbackFilter: model.DNSFallbackFilter{GeoIPCode: " cn ", IPCIDR: []string{"240.0.0.0/4", "x"}},
 	}
@@ -36,7 +36,7 @@ func TestNormalizeAdvancedDropsInvalid(t *testing.T) {
 		t.Fatalf("normalised:\n got %+v\nwant %+v", got, want)
 	}
 	// Valid values survive; a socks port equal to the HTTP port is dropped.
-	ok := model.AdvancedSettings{HTTPPort: 7891, SocksPort: 7891, TUNMTU: 1500, FindProcessMode: "strict", GeodataLoader: "standard", DNSCacheAlgorithm: "arc", DNSListen: "127.0.0.1:1053", KeepAliveIdle: 600}
+	ok := model.AdvancedSettings{HTTPPort: 7891, SocksPort: 7891, TUNMTU: 1500, TUNDNSMode: "hijack", FindProcessMode: "strict", GeodataLoader: "standard", DNSCacheAlgorithm: "arc", DNSListen: "127.0.0.1:1053", KeepAliveIdle: 600}
 	got = normalizeAdvanced(ok, 7890)
 	ok.SocksPort = 0
 	if !reflect.DeepEqual(got, ok) {

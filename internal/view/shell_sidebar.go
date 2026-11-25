@@ -176,12 +176,14 @@ func (s *Shell) sidebar(c *ui.Context, st model.Status) {
 
 			// 8. 2-column bento cards: 日志 + 抓包
 			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
-				cb := ""
-				if s.api.CaptureStatus().Enabled {
-					cb = i18n.T("解密中")
-				}
 				s.bentoNavCard(c, env.Logs, "", t, k)
-				s.bentoNavCard(c, env.Capture, cb, t, k)
+				if cs := s.api.CaptureStatus(); cs.Enabled || s.api.Settings().CaptureEnabled {
+					cb := ""
+					if cs.Enabled {
+						cb = i18n.T("解密中")
+					}
+					s.bentoNavCard(c, env.Capture, cb, t, k)
+				}
 			})
 
 			// 9. Capture active warning banner (if decrypting)

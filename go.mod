@@ -10,7 +10,7 @@ require (
 	github.com/egoist/mygo v0.10.0
 	github.com/oschwald/maxminddb-golang/v2 v2.9.1
 	golang.org/x/crypto v0.59.0
-	golang.org/x/image v0.46.0
+	golang.org/x/image v0.48.0
 	golang.org/x/net v0.63.0
 	golang.org/x/sys v0.50.0
 	gopkg.in/yaml.v3 v3.0.1

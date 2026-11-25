@@ -196,6 +196,19 @@ func StatusText(st model.CaptureStatus) string {
 func (p *Page) View(c *ui.Context) {
 	e, t := p.e, c.Theme()
 	st := e.API.CaptureStatus()
+	if !st.Enabled && !e.API.Settings().CaptureEnabled {
+		ui.Column(c).Fill().Children(func() {
+			e.Kit.Header(c, i18n.T("抓包"), "", nil)
+			e.Kit.Empty(c, "conns", i18n.T("抓包未启用"), i18n.T("开启后可按域名或程序解密 HTTPS 请求，查看请求与响应的完整内容。"), func() {
+				ui.PrimaryButton(c, i18n.T("启用抓包")).OnClick(func() {
+					set := e.API.Settings()
+					set.CaptureEnabled = true
+					e.Run(func() error { return e.API.SaveSettings(set) }, i18n.T("已启用抓包"))
+				})
+			})
+		})
+		return
+	}
 	if a := e.Arg(env.Capture); a != "" {
 		p.handleArg(a, st)
 		st = e.API.CaptureStatus()

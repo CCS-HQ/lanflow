@@ -174,9 +174,13 @@ type deps struct {
 	httpVia    func(port int, timeout time.Duration) *http.Client
 	freePort   func() (int, error)
 	portInUse  func(port int, lan bool) bool
-	// waitPortFree waits out closed TCP sockets that still prevent binding
-	// after a privileged core exits. nil = report a busy port immediately.
-	waitPortFree func(ctx context.Context, port int, lan bool) error
+	// waitPortFree waits up to timeout for closed TCP sockets that still
+	// prevent binding after a privileged core exits. nil = report a busy
+	// port immediately.
+	waitPortFree func(ctx context.Context, port int, lan bool, timeout time.Duration) error
+	// portListening reports whether a program accepts connections on the
+	// port on 127.0.0.1 (nil = assume not).
+	portListening func(port int) bool
 	// portOwner names the program that listens on a port, for the user
 	// ("" = unknown; nil = never known).
 	portOwner func(port int) string
@@ -323,27 +327,28 @@ func freeTCPPort() (int, error) {
 // client.
 func realDeps(ctrl *controller.Client, mgr *core.Manager, store *profile.Store, loc *locate.Locator) deps {
 	return deps{
-		ctrl:         ctrl,
-		mgr:          mgr,
-		core:         realCore{},
-		sys:          realSysProxy{},
-		dns:          realSysDNS{},
-		helper:       realHelper{},
-		loc:          loc,
-		store:        store,
-		prof:         realProfile{},
-		netinfo:      netinfo.Get,
-		httpDirect:   netx.Direct,
-		httpVia:      netx.ViaPort,
-		freePort:     freeTCPPort,
-		portInUse:    tcpPortInUse,
-		waitPortFree: waitTCPPortFree,
-		otherTUN:     netinfo.OtherTUN,
-		stray:        realStray{},
-		portOwner:    portOwner,
-		v6Route:      netinfo.IPv6Route,
-		vpnDetect:    atrust.Detect,
-		now:          time.Now,
-		fileIcon:     procicon.Load,
+		ctrl:          ctrl,
+		mgr:           mgr,
+		core:          realCore{},
+		sys:           realSysProxy{},
+		dns:           realSysDNS{},
+		helper:        realHelper{},
+		loc:           loc,
+		store:         store,
+		prof:          realProfile{},
+		netinfo:       netinfo.Get,
+		httpDirect:    netx.Direct,
+		httpVia:       netx.ViaPort,
+		freePort:      freeTCPPort,
+		portInUse:     tcpPortInUse,
+		waitPortFree:  waitTCPPortFree,
+		portListening: tcpPortListening,
+		otherTUN:      netinfo.OtherTUN,
+		stray:         realStray{},
+		portOwner:     portOwner,
+		v6Route:       netinfo.IPv6Route,
+		vpnDetect:     atrust.Detect,
+		now:           time.Now,
+		fileIcon:      procicon.Load,
 	}
 }

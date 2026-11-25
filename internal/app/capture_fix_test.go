@@ -55,6 +55,7 @@ func TestCaptureTrustLeafLifetime(t *testing.T) {
 	ft := &fakeTrust{installed: map[string]bool{}}
 	defer ft.hooks()()
 	h := newHarness(t, nil)
+	enableCapture(t, h)
 	s := h.s
 	if err := s.StartCore(); err != nil {
 		t.Fatal(err)
@@ -133,6 +134,7 @@ func TestCaptureReplacedRootIsRemoved(t *testing.T) {
 			ft := &fakeTrust{installed: map[string]bool{}}
 			defer ft.hooks()()
 			h := newHarness(t, nil)
+			enableCapture(t, h)
 			s := h.s
 			if err := s.StartCore(); err != nil {
 				t.Fatal(err)

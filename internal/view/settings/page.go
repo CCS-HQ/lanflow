@@ -471,6 +471,12 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 				p.save(s, "", nil)
 			})
 		})
+		e.Kit.Section(c, i18n.T("功能"), "", func() {
+			p.switchRow(c, i18n.T("抓包（HTTPS 解密）"), i18n.T("显示「抓包」页，可按域名或程序解密 HTTPS 请求；关闭时同时停止解密"), s.CaptureEnabled, func(on bool) {
+				s.CaptureEnabled = on
+				p.save(s, "", nil)
+			})
+		})
 		if e.Mac {
 			p.menuBarSection(c, t, s)
 		}
@@ -594,12 +600,12 @@ func (p *Page) tunTab(c *ui.Context, t *ui.Theme, s model.Settings, st model.Sta
 			})
 		}
 		if st.TUNAvailable || st.TUN {
-			stackOpts := []string{"mixed", "system", "gvisor"}
+			stackOpts := []string{"mixed", "system", "gvisor", "mips"}
 			stack := s.TUNStack
 			if stack == "" {
 				stack = "mixed"
 			}
-			p.selectRow(c, i18n.T("TUN 协议栈"), i18n.T("一般保持 mixed；兼容性问题时可改为 system 或 gvisor"), stack, stackOpts, func(v string) {
+			p.selectRow(c, i18n.T("TUN 协议栈"), i18n.T("一般保持 mixed；兼容性问题时可改为 system 或 gvisor；mips 是内核新的用户态协议栈，内核低于 v1.19.31 时按 mixed 运行"), stack, stackOpts, func(v string) {
 				s.TUNStack = v
 				p.save(s, "", nil)
 			})

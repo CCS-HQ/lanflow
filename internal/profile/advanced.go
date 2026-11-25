@@ -85,6 +85,9 @@ func applyAdvanced(c *composer, a model.AdvancedSettings) {
 		if len(a.TUNDNSHijack) > 0 {
 			mapSet(tun, "dns-hijack", strSeq(a.TUNDNSHijack))
 		}
+		if a.TUNDNSMode != "" {
+			mapSet(tun, "dns-mode", strNode(a.TUNDNSMode))
+		}
 		if a.TUNDevice != "" {
 			mapSet(tun, "device", strNode(a.TUNDevice))
 		}

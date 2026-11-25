@@ -176,6 +176,7 @@ type state struct {
 	probePort     int
 	weSetProxy    bool        // Lanflow pointed the system proxy at itself
 	tunRunner     bool        // the manager currently uses the helper runner
+	rootStoppedAt time.Time   // when a helper-run (root) core last went away; see portwait.go
 	stray         *strayRun   // a core of the previous run found at start (takeover.go)
 	helperOK      bool        // helper.Check passed at last check
 	helperStale   bool        // last Check: installed helper of another version/protocol

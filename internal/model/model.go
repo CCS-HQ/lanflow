@@ -507,14 +507,18 @@ type Settings struct {
 	AllowLAN  bool
 	Bypass    []string // system proxy bypass list
 	TUN       bool     // desired TUN state
-	TUNStack  string   // "mixed" (default), "system", "gvisor"
+	TUNStack  string   // "mixed" (default), "system", "gvisor", "mips"
 	TUNSetDNS bool     // while TUN runs, point the system DNS at a resolver the TUN captures (macOS)
 	// ATrustCompat keeps Sangfor aTrust's intranet out of Lanflow while
-	// aTrust runs (route exclusion, DIRECT rules, proxy bypass); on by default.
+	// aTrust runs (route exclusion, DIRECT rules, proxy bypass); off by default.
 	ATrustCompat bool
 	ATrust       ATrustConfig // the user's lists for aTrust 兼容 (model/atrust.go)
-	ProbeExits   bool         // allow Cloudflare trace probes
-	Mode         Mode
+	// CaptureEnabled shows the 抓包 page and its entry points (sidebar,
+	// connection menu, tray) and allows HTTPS decryption; off by default.
+	// Turning it off also turns decryption off.
+	CaptureEnabled bool
+	ProbeExits     bool // allow Cloudflare trace probes
+	Mode           Mode
 	// HideTraySpeed turns off the live up/down speed shown beside the
 	// menu bar icon (macOS, docs/design.md §7); shown by default. Kept in
 	// step with TraySpeed ("off") for older versions.

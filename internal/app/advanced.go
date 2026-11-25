@@ -57,6 +57,9 @@ func normalizeAdvanced(a model.AdvancedSettings, mixedPort int) model.AdvancedSe
 	if !slices.Contains(model.DNSCacheAlgorithms, a.DNSCacheAlgorithm) {
 		a.DNSCacheAlgorithm = ""
 	}
+	if !slices.Contains(model.TUNDNSModes, a.TUNDNSMode) {
+		a.TUNDNSMode = ""
+	}
 	if a.KeepAliveInterval < 0 {
 		a.KeepAliveInterval = 0
 	}

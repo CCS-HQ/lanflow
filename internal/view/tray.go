@@ -337,8 +337,11 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 				h.setTUN(it.Checked)
 			}},
 		{Label: i18n.T("模式"), Submenu: tr.modeItems(st)},
-		tr.captureItem(),
 	}...)
+	// HTTPS 解密 only while 抓包 is enabled (or still decrypting).
+	if api.Settings().CaptureEnabled || api.CaptureStatus().Enabled {
+		items = append(items, tr.captureItem())
+	}
 	if hasGroup {
 		items = append(items,
 			&mygo.MenuItem{Label: i18n.Tf("%s：%s", g.Name, g.Now), Disabled: !run, Icon: tr.menuIcon(g.Icon), Submenu: tr.nodeItems(g, px)},

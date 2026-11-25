@@ -40,6 +40,7 @@ type AdvancedSettings struct {
 	TUNRouteAddress           []string `json:"tunRouteAddress,omitempty"`           // `route-address`: only these ranges enter the TUN
 	TUNRouteExcludeAddress    []string `json:"tunRouteExcludeAddress,omitempty"`    // `route-exclude-address`, merged with the aTrust layer
 	TUNDNSHijack              []string `json:"tunDnsHijack,omitempty"`              // `dns-hijack`; empty = Lanflow's default (any:53, tcp://any:53)
+	TUNDNSMode                string   `json:"tunDnsMode,omitempty"`                // `dns-mode`: "" (core default) / disabled / native / hijack
 	TUNDevice                 string   `json:"tunDevice,omitempty"`                 // `device`; empty = Lanflow's fixed name (utun1700 on macOS)
 	TUNIncludeInterface       []string `json:"tunIncludeInterface,omitempty"`       // `include-interface`
 	TUNExcludeInterface       []string `json:"tunExcludeInterface,omitempty"`       // `exclude-interface`
@@ -95,6 +96,7 @@ var (
 	FindProcessModes   = []string{"off", "strict", "always"}
 	GeodataLoaders     = []string{"memconservative", "standard"}
 	DNSCacheAlgorithms = []string{"lru", "arc"}
+	TUNDNSModes        = []string{"disabled", "native", "hijack"}
 )
 
 // Clone returns a deep copy, so settings snapshots never share slices.

@@ -393,6 +393,10 @@ func TestMainProbeYieldsToRunningProbe(t *testing.T) {
 // for a running operation (review item 5).
 func TestCoexistPollDoesNotWaitForOperations(t *testing.T) {
 	h := newHarness(t, nil)
+	enableATrust(t, h)
+	h.vpn.mu.Lock()
+	before := h.vpn.calls
+	h.vpn.mu.Unlock()
 	h.s.opMu.Lock()
 	done := make(chan struct{})
 	go func() { h.s.recheckCoexist(); close(done) }()
@@ -404,7 +408,7 @@ func TestCoexistPollDoesNotWaitForOperations(t *testing.T) {
 	}
 	h.s.opMu.Unlock()
 	h.vpn.mu.Lock()
-	calls := h.vpn.calls
+	calls := h.vpn.calls - before
 	h.vpn.mu.Unlock()
 	if calls != 1 {
 		t.Fatalf("detector calls = %d, want 1", calls)

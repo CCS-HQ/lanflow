@@ -28,9 +28,20 @@ func lastCoexist(h *harness) profile.Coexist {
 	return h.prof.inputs[len(h.prof.inputs)-1].Coexist
 }
 
+// enableATrust turns aTrust 兼容 on (it is off by default).
+func enableATrust(t testingT, h *harness) {
+	t.Helper()
+	set := h.s.Settings()
+	set.ATrustCompat = true
+	if err := h.s.SaveSettings(set); err != nil {
+		t.Fatalf("enable aTrust compat: %v", err)
+	}
+}
+
 func TestATrustCoexist(t *testing.T) {
 	t.Parallel()
 	h := tunHarness(t, []string{"192.168.1.1"})
+	enableATrust(t, h)
 	if err := h.s.SetSystemProxy(true); err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +123,13 @@ func TestATrustCompatSetting(t *testing.T) {
 	h := tunHarness(t, nil)
 	h.vpn.set(sampleATrust)
 	h.s.recheckCoexist()
+	if h.s.Status().ATrust.Running {
+		t.Fatal("detected although the setting is off by default")
+	}
+	enableATrust(t, h)
+	h.s.recheckCoexist()
 	if !h.s.Status().ATrust.Running {
-		t.Fatal("not detected with the default setting")
+		t.Fatal("not detected after turning the setting on")
 	}
 	h.s.TakeNotices()
 
@@ -155,6 +171,7 @@ var sampleConfig = model.ATrustConfig{
 func TestATrustConfigMerged(t *testing.T) {
 	t.Parallel()
 	h := tunHarness(t, nil)
+	enableATrust(t, h)
 	if err := h.s.SetSystemProxy(true); err != nil {
 		t.Fatal(err)
 	}
@@ -205,6 +222,7 @@ func TestATrustConfigMerged(t *testing.T) {
 func TestATrustAlways(t *testing.T) {
 	t.Parallel()
 	h := tunHarness(t, nil)
+	enableATrust(t, h)
 	set := h.s.Settings()
 	set.ATrust = sampleConfig
 	if err := h.s.SaveSettings(set); err != nil {
@@ -291,6 +309,7 @@ func TestCoexistDNSRanges(t *testing.T) {
 func TestCoexistDetectedBeforeStart(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, func(h *harness) { h.vpn.set(sampleATrust) })
+	enableATrust(t, h)
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
 	}

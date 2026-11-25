@@ -159,7 +159,7 @@ func build() *Fake {
 	f.provs = []model.RuleProvider{{Name: "anti-ad", Behavior: "domain", Format: "mrs", Count: 82341, VehicleType: "HTTP", UpdatedAt: now.Add(-26 * time.Hour)},
 		{Name: "telegram-cidr", Behavior: "ipcidr", Format: "yaml", Count: 18, VehicleType: "HTTP", UpdatedAt: now.Add(-72 * time.Hour)}}
 	f.set = model.Settings{CloseToTray: true, Appearance: "system", Language: "zh", MixedPort: 7890, Bypass: []string{"localhost", "127.0.0.1", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "*.local"},
-		TUNStack: "mixed", ProbeExits: true, Mode: model.ModeRule, GlobalShortcut: "CmdOrCtrl+Shift+S", LogLevel: "info",
+		TUNStack: "mixed", ProbeExits: true, CaptureEnabled: true, Mode: model.ModeRule, GlobalShortcut: "CmdOrCtrl+Shift+S", LogLevel: "info",
 		DNS: model.DNSSettings{EnhancedMode: "fake-ip", Nameserver: []string{"https://doh.pub/dns-query", "https://dns.alidns.com/dns-query"}, ProxyServerNameserver: []string{"https://doh.pub/dns-query"}, DirectNameserver: []string{"system"},
 			Policy: []model.KV{{Key: "geosite:geolocation-!cn", Value: "https://1.1.1.1/dns-query"}}, FakeIPFilter: []string{"*.lan", "*.local", "+.msftconnecttest.com"}, UseSystemHosts: true},
 		Sniffer: model.SnifferSettings{Enable: true, HTTP: true, TLS: true, HTTPPorts: "80, 8080-8880", TLSPorts: "443, 8443", QUICPorts: "443, 8443", OverrideDestination: true},

@@ -83,10 +83,10 @@ const (
 	// graphLevels is how many heights above zero a bar of the graph takes.
 	graphLevels = 10
 	graphW      = 18.0 // the graph's width in points, after a 2.5-point gap
-	// speedW is the 2-line stacked speed block width in points (at 2× = 120px;
-	// 36px icon + 120px speed = 156×36px, matching Clash Party's macOS tray
-	// canvas with generous breathing room between the icon and 0.00 B/s).
-	speedW = 60.0
+	// speedW is the 2-line stacked speed block width in points (at 2× = 100px):
+	// wide enough for "999.9 KB/s" while keeping a tight, balanced gap beside
+	// the waves mark and neighboring macOS menu bar icons.
+	speedW = 50.0
 )
 
 func iconWidth(l Look) float64 {
@@ -298,10 +298,15 @@ func PNG(l Look, ink Ink) []byte {
 
 	var out image.Image = img
 	if l.hasSpeed() {
+		// Trim 2pt (4px) of internal left inset from the 18pt wave frame so
+		// the combined status item aligns cleanly with neighboring macOS menu
+		// bar icons without double left padding.
+		const trimLeft = 4
+		effIconPx := iconPx - trimLeft
 		speedPx := int(math.Round(speedW * 2))
-		totalW := iconPx + speedPx
+		totalW := effIconPx + speedPx
 		dst := image.NewNRGBA(image.Rect(0, 0, totalW, 36))
-		draw.Draw(dst, img.Bounds(), img, image.Point{}, draw.Src)
+		draw.Draw(dst, image.Rect(0, 0, effIconPx, 36), img, image.Point{X: trimLeft, Y: 0}, draw.Src)
 		if face := getSpeedFace(); face != nil {
 			// Draw text into a 2× supersampled buffer (speedPx*2 × 72) and
 			// box-downsample 2×2 into dst for crisp, even anti-aliased stems.
@@ -322,9 +327,9 @@ func PNG(l Look, ink Ink) []byte {
 					y = 68
 				}
 				adv := d.MeasureString(line)
-				x := fixed.I(hiW-4) - adv
-				if x < fixed.I(4) {
-					x = fixed.I(4)
+				x := fixed.I(hiW-1) - adv
+				if x < fixed.I(2) {
+					x = fixed.I(2)
 				}
 				d.Dot = fixed.Point26_6{X: x, Y: fixed.I(y)}
 				d.DrawString(line)
@@ -339,7 +344,7 @@ func PNG(l Look, ink Ink) []byte {
 					if a > 0 {
 						c := col
 						c.A = uint8((int(col.A) * a) / 255)
-						dst.SetNRGBA(iconPx+x, y, c)
+						dst.SetNRGBA(effIconPx+x, y, c)
 					}
 				}
 			}

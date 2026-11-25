@@ -5,6 +5,8 @@ package i18n
 func init() {
 	for k, v := range map[string]string{
 		// internal/app/lifecycle.go
+		"正在等待系统释放代理端口": "Waiting for the system to release the proxy port",
+		"TUN 模式下的连接刚关闭，系统要再占用端口 %d 最多约 %d 秒。": "Connections from TUN mode just closed; the system holds port %d for up to about %d more seconds.",
 		"等待代理端口 %d 释放失败：%v。请稍后重试。":       "Waiting for proxy port %d to become available failed: %v. Try again shortly.",
 		"%w。关闭系统代理失败（%v），请在系统设置中手动关闭代理。": "%w. Turning the system proxy off failed (%v); turn the proxy off by hand in System Settings.",
 		"%w。系统代理已关闭，内核恢复后请重新打开。":         "%w. The system proxy was turned off; turn it on again once the core runs.",

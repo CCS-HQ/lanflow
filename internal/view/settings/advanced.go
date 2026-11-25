@@ -32,6 +32,7 @@ type advForm struct {
 	tunStrict, tunEIN                         bool
 	tunMTU, tunRoute, tunExclude, tunHijack   string
 	tunDevice, tunInclude, tunExclIf          string
+	tunDNSMode                                string
 	ipv6, unifiedDelay, tcpConcurrent         bool
 	findProcess                               string
 	keepAliveInterval, keepAliveIdle          string
@@ -61,7 +62,7 @@ func advFormFrom(a model.AdvancedSettings) advForm {
 		auth: joinLines(a.Authentication), skipAuth: joinLines(a.SkipAuthPrefixes),
 		pacMode: a.PACMode, pacDirectCN: a.PACDirectCN, pacPort: optInt(a.PACPort),
 		tunStrict: a.TUNStrictRoute, tunEIN: a.TUNEndpointIndependentNAT, tunMTU: optInt(a.TUNMTU),
-		tunRoute: joinLines(a.TUNRouteAddress), tunExclude: joinLines(a.TUNRouteExcludeAddress), tunHijack: joinLines(a.TUNDNSHijack),
+		tunRoute: joinLines(a.TUNRouteAddress), tunExclude: joinLines(a.TUNRouteExcludeAddress), tunHijack: joinLines(a.TUNDNSHijack), tunDNSMode: a.TUNDNSMode,
 		tunDevice: a.TUNDevice, tunInclude: joinLines(a.TUNIncludeInterface), tunExclIf: joinLines(a.TUNExcludeInterface),
 		ipv6: a.IPv6, unifiedDelay: a.UnifiedDelay, tcpConcurrent: a.TCPConcurrent, findProcess: a.FindProcessMode,
 		keepAliveInterval: optInt(a.KeepAliveInterval), keepAliveIdle: optInt(a.KeepAliveIdle), disableKeepAlive: a.DisableKeepAlive,
@@ -151,6 +152,7 @@ func (f advForm) toSettings(mixedPort int) (model.AdvancedSettings, error) {
 	a.TUNRouteAddress = cidrList(i18n.T("只接管这些网段"), f.tunRoute)
 	a.TUNRouteExcludeAddress = cidrList(i18n.T("不接管的网段"), f.tunExclude)
 	a.TUNDNSHijack = lines(f.tunHijack)
+	a.TUNDNSMode = f.tunDNSMode
 	a.TUNDevice = strings.TrimSpace(f.tunDevice)
 	a.TUNIncludeInterface, a.TUNExcludeInterface = lines(f.tunInclude), lines(f.tunExclIf)
 	a.IPv6, a.UnifiedDelay, a.TCPConcurrent = f.ipv6, f.unifiedDelay, f.tcpConcurrent
@@ -252,6 +254,23 @@ func (p *Page) advancedTab(c *ui.Context, t *ui.Theme, s model.Settings, st mode
 				p.textRow(c, t, i18n.T("只接管这些网段"), i18n.T("设置后只有这些网段进入 TUN，每行一个（route-address）"), "adv-tun-route", &f.tunRoute, 1, false)
 				p.textRow(c, t, i18n.T("不接管的网段"), i18n.T("这些网段绕过 TUN，每行一个；与 aTrust 兼容加入的网段合并（route-exclude-address）"), "adv-tun-exclude", &f.tunExclude, 1, false)
 				p.textRow(c, t, i18n.T("DNS 劫持"), i18n.T("截获到这些地址的 DNS 查询，每行一个；留空为 any:53 和 tcp://any:53（dns-hijack）"), "adv-tun-hijack", &f.tunHijack, 1, false)
+				dmOpts := []string{i18n.T("自动"), i18n.T("不接管|DNS 模式"), "Native", "Hijack"}
+				dmVals := []string{"", "disabled", "native", "hijack"}
+				dmDesc := i18n.T("自动：Windows 同 hijack，macOS 同不接管；native 由内核把系统 DNS 指向 TUN；hijack 在此基础上，开启严格路由时还会拦截发往其他 DNS 的查询（仅 Windows）（dns-mode）")
+				p.selectRow(c, i18n.T("DNS 模式"), dmDesc, mapName(f.tunDNSMode, dmVals, dmOpts), dmOpts, func(v string) {
+					f.tunDNSMode = mapValue(v, dmOpts, dmVals)
+				})
+				switch {
+				case f.tunDNSMode == "hijack" && !e.Mac && !f.tunStrict:
+					e.Kit.Banner(c, "info", i18n.T("未开启严格路由时，hijack 与 native 效果相同。"), nil)
+				case f.tunDNSMode == "disabled" && !e.Mac:
+					e.Kit.Banner(c, "warn", i18n.T("不接管时 TUN 网卡没有 DNS，系统可能直接使用局域网里的 DNS，绕过澜流。"), nil)
+				case f.tunDNSMode == "hijack" && e.Mac:
+					e.Kit.Banner(c, "info", i18n.T("macOS 上 hijack 与 native 效果相同。"), nil)
+				}
+				if e.Mac && s.TUNSetDNS && (f.tunDNSMode == "native" || f.tunDNSMode == "hijack") {
+					e.Kit.Banner(c, "info", i18n.T("「自动设置系统 DNS」也已开启，两者都会把系统 DNS 引到澜流，保留一个即可。"), nil)
+				}
 				tunDevicePH := "utun1700"
 				if !e.Mac {
 					tunDevicePH = "Lanflow"

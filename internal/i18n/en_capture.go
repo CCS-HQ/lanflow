@@ -4,6 +4,15 @@ package i18n
 // internal/view/capture, the 连接 menu, the tray and the sidebar).
 func init() {
 	for k, v := range map[string]string{
+		// 抓包 switch (settings 常规, the page while it is off)
+		"功能":           "Features",
+		"抓包（HTTPS 解密）": "Capture (HTTPS decryption)",
+		"显示「抓包」页，可按域名或程序解密 HTTPS 请求；关闭时同时停止解密": "Shows the Capture page, which decrypts HTTPS requests by domain or program; turning it off also stops decryption",
+		"抓包未启用": "Capture is off",
+		"开启后可按域名或程序解密 HTTPS 请求，查看请求与响应的完整内容。": "Turn it on to decrypt HTTPS requests by domain or program and see the full requests and responses.",
+		"启用抓包":  "Turn on Capture",
+		"已启用抓包": "Capture turned on",
+		"抓包未启用，请先在「设置 › 常规」中开启抓包。": "Capture is off; turn it on in Settings › General first.",
 		// internal/app/capture.go
 		"(%d 项，已隐藏)": "(%d items, hidden)",
 		"「%s」不是有效的域名（写法：example.com、*.example.com、+.example.com）": "“%s” is not a valid domain (write example.com, *.example.com or +.example.com)",

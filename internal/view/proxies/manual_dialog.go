@@ -1,6 +1,7 @@
 package proxies
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -8,6 +9,7 @@ import (
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 	"lanflow/internal/view/env"
 )
 
@@ -132,13 +134,65 @@ func protoOptionForLabel(label string) protoOption {
 	return protoOptions[0]
 }
 
-func (p *Page) openAddManualNode() {
-	p.openManualNode(model.ManualNode{
-		Type: model.ProxyTypeVLESS,
-		Port: 443,
-		UDP:  true,
-		TLS:  true,
-	})
+func defaultManualNodeForType(typ string) model.ManualNode {
+	opt := protoOptionForType(typ)
+	port, _ := strconv.Atoi(opt.defaultPort)
+	n := model.ManualNode{
+		Type: opt.typ,
+		Port: port,
+	}
+	switch opt.typ {
+	case model.ProxyTypeSOCKS5:
+		n.UDP = true
+	case model.ProxyTypeSS:
+		n.Cipher = "aes-128-gcm"
+		n.UDP = true
+	case model.ProxyTypeVMess:
+		n.Cipher = "auto"
+		n.UDP = true
+	case model.ProxyTypeVLESS:
+		n.TLS = true
+		n.UDP = true
+	case model.ProxyTypeTrojan, model.ProxyTypeTrojanGo:
+		n.TLS = true
+		n.UDP = true
+	case model.ProxyTypeAnyTLS:
+		n.TLS = true
+		n.UDP = true
+	}
+	return n
+}
+
+func (p *Page) openAddManualNodeOfType(typ string) {
+	p.openManualNode(defaultManualNodeForType(typ))
+}
+
+func (p *Page) importManualNodeFromClipboard(c *ui.Context) {
+	node, err := profile.ParseManualNodeClipboard(c.ReadClipboard())
+	if err != nil {
+		switch {
+		case errors.Is(err, profile.ErrClipboardEmpty):
+			p.e.Toast(i18n.T("剪贴板为空"), true)
+		case errors.Is(err, profile.ErrUnsupportedNodeFormat):
+			p.e.Toast(i18n.T("剪贴板中没有可识别的节点信息"), true)
+		default:
+			p.e.Toast(i18n.Tf("无法解析剪贴板中的节点信息：%s", err.Error()), true)
+		}
+		return
+	}
+	p.openManualNode(node)
+}
+
+func (p *Page) addNodeMenu(c *ui.Context, m *ui.Menu) {
+	if m.Item(i18n.T("导入剪贴板")).Chosen() {
+		p.importManualNodeFromClipboard(c)
+	}
+	m.Separator()
+	for _, opt := range protoOptions {
+		if m.Item(opt.label).Chosen() {
+			p.openAddManualNodeOfType(opt.typ)
+		}
+	}
 }
 
 func (p *Page) openManualNode(n model.ManualNode) {
@@ -197,6 +251,17 @@ func (p *Page) openManualNode(n model.ManualNode) {
 	if n.AlterID > 0 {
 		alterID = strconv.Itoa(n.AlterID)
 	}
+	advanced := false
+	switch opt.typ {
+	case model.ProxyTypeSS:
+		advanced = n.Plugin != ""
+	case model.ProxyTypeVLESS:
+		advanced = n.RealityPublicKey != "" || n.RealityShortID != ""
+	case model.ProxyTypeHysteria2:
+		advanced = n.Up != "" || n.Down != "" || n.Obfs != "" || n.ObfsPassword != "" || len(n.ALPN) > 0
+	case model.ProxyTypeAnyTLS:
+		advanced = len(n.ALPN) > 0 || n.IdleSessionCheckInterval > 0 || n.IdleSessionTimeout > 0 || n.MinIdleSession > 0
+	}
 	p.manual = manualNodeDialog{
 		open:              true,
 		session:           p.manual.session + 1,
@@ -230,7 +295,7 @@ func (p *Page) openManualNode(n model.ManualNode) {
 		plugin:            n.Plugin,
 		pluginMode:        n.PluginMode,
 		pluginHost:        n.PluginHost,
-		ssOptsEnabled:     n.SSOptsEnabled || n.Type == model.ProxyTypeTrojanGo,
+		ssOptsEnabled:     n.SSOptsEnabled,
 		ssOptsMethod:      ssMethod,
 		ssOptsPassword:    n.SSOptsPassword,
 		hyProtocol:        hyProto,
@@ -246,6 +311,7 @@ func (p *Page) openManualNode(n model.ManualNode) {
 		idleCheck:         idleCheck,
 		idleTimeout:       idleTimeout,
 		minIdle:           minIdle,
+		advanced:          advanced,
 	}
 }
 

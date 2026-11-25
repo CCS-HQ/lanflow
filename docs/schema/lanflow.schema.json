@@ -451,6 +451,18 @@
                 "null"
               ]
             },
+            "tunDnsMode": {
+              "enum": [
+                "",
+                "disabled",
+                "native",
+                "hijack"
+              ],
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "tunEndpointIndependentNat": {
               "type": "boolean"
             },
@@ -518,6 +530,9 @@
             "array",
             "null"
           ]
+        },
+        "captureEnabled": {
+          "type": "boolean"
         },
         "closeToTray": {
           "type": "boolean"
@@ -977,7 +992,8 @@
           "enum": [
             "mixed",
             "system",
-            "gvisor"
+            "gvisor",
+            "mips"
           ],
           "type": [
             "string",
