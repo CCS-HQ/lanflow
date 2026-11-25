@@ -170,12 +170,12 @@ func TestStatusCountsWithoutRefreshingRules(t *testing.T) {
 	if _, err := h.s.SaveOverrideEntry(model.Override{Name: "ov1", Enabled: true, Global: true, Text: "log-level: info\n"}); err != nil {
 		t.Fatal(err)
 	}
+	cc := &countRulesCtrl{ctrlClient: h.ctrl}
+	h.s.d.ctrl = cc
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
 	}
-
-	cc := &countRulesCtrl{ctrlClient: h.ctrl}
-	h.s.d.ctrl = cc
+	cc.calls.Store(0)
 	h.s.mu.Lock()
 	h.s.state.rulesAt = time.Now().Add(-time.Minute)
 	h.s.mu.Unlock()

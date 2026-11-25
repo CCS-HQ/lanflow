@@ -219,7 +219,7 @@ func (tr *tray) refresh(force bool) {
 		tr.mu.Lock()
 		tr.menu = menu
 		tr.mu.Unlock()
-		if runtime.GOOS != "windows" {
+		if tr.t != nil && runtime.GOOS != "windows" {
 			tr.t.SetMenu(menu)
 		}
 		tr.setToolTip(st, capOn, true)
