@@ -155,6 +155,15 @@ func (p *Page) syncBanners(c *ui.Context, st model.ConfigSyncStatus, busy bool) 
 			ui.Button(c, i18n.T("前往订阅")).OnClick(func() { e.Navigate(env.Subs, "") })
 		})
 	}
+	if n := len(st.MissingNodeSecrets); n > 0 && !st.Locked {
+		msg := i18n.Tf("%d 个手动节点的凭据不在本机钥匙串中（%s），请在「代理」页编辑并重新填写凭据。", n, strings.Join(st.MissingNodeSecrets, i18n.T("、")))
+		if !e.Mac {
+			msg = i18n.Tf("%d 个手动节点的凭据不在本机凭据管理器中（%s），请在「代理」页编辑并重新填写凭据。", n, strings.Join(st.MissingNodeSecrets, i18n.T("、")))
+		}
+		e.Kit.Banner(c, "info", msg, func() {
+			ui.Button(c, i18n.T("前往代理")).OnClick(func() { e.Navigate(env.Proxies, "") })
+		})
+	}
 	if st.Locked {
 		msg := i18n.Tf("输入同步口令以解锁订阅链接（同步文件中有 %d 项加密的链接或密码，本机还不能读取）。", st.LockedSecrets)
 		if st.PassphraseChanged {

@@ -10,6 +10,7 @@ import (
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 	"lanflow/internal/syncfile"
 )
 
@@ -38,13 +39,20 @@ func parseExport(data []byte) (model.SettingsExport, error) {
 	if ex.Format > exportFormat {
 		return ex, fmt.Errorf(i18n.T("文件由更新版本的澜流导出（格式 %d），当前版本无法读取。"), ex.Format)
 	}
-	if ex.Settings == nil && ex.Overrides == nil && len(ex.CustomRules) == 0 && len(ex.Subscriptions) == 0 {
+	if ex.Settings == nil && ex.Overrides == nil && len(ex.CustomRules) == 0 && len(ex.ManualNodes) == 0 && len(ex.ProxyChains) == 0 && len(ex.Subscriptions) == 0 {
 		return ex, errors.New(i18n.T("文件中没有可导入的内容。"))
 	}
 	for i, r := range ex.CustomRules {
 		if _, err := validateCustomRule(r); err != nil {
 			return ex, fmt.Errorf(i18n.T("第 %d 条自定义规则无效：%v"), i+1, err)
 		}
+	}
+	for i, n := range ex.ManualNodes {
+		v, err := profile.ValidateManualNode(n)
+		if err != nil {
+			return ex, fmt.Errorf(i18n.T("第 %d 个手动节点无效：%v"), i+1, err)
+		}
+		ex.ManualNodes[i] = v
 	}
 	for i, s := range ex.Subscriptions {
 		if !strings.HasPrefix(s.URL, "http://") && !strings.HasPrefix(s.URL, "https://") {
@@ -153,6 +161,17 @@ func (s *Service) ImportSettings(path string) (summary string, err error) {
 			done = append(done, fmt.Sprintf(i18n.T("%d 条覆写"), n))
 		}
 		skipped = append(skipped, errs...)
+	}
+
+	// manual nodes before proxy chains and rules, which may target them
+	if len(ex.ManualNodes) > 0 {
+		n, err := s.mergeManualNodes(ex.ManualNodes)
+		switch {
+		case err != nil:
+			skipped = append(skipped, i18n.Tf("手动节点（%s）", err.Error()))
+		case n > 0:
+			done = append(done, fmt.Sprintf(i18n.T("%d 个手动节点"), n))
+		}
 	}
 
 	// chains before the rules, which may target them
@@ -312,4 +331,76 @@ func (s *Service) mergeProxyChains(in []model.ProxyChain) (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// mergeManualNodes adds the imported manual nodes whose names this machine
+// does not have yet, keeping their IDs where free.
+func (s *Service) mergeManualNodes(in []model.ManualNode) (int, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
+	old := s.d.store.ManualNodes()
+	names, ids := map[string]bool{}, map[string]bool{}
+	for _, n := range old {
+		names[n.Name], ids[n.ID] = true, true
+	}
+	next := model.CloneManualNodes(old)
+	added := 0
+	for _, n := range model.CloneManualNodes(in) {
+		v, err := profile.ValidateManualNode(n)
+		if err != nil {
+			return 0, err
+		}
+		if names[v.Name] {
+			continue
+		}
+		if ids[v.ID] {
+			v.ID = ""
+		}
+		names[v.Name], ids[v.ID] = true, true
+		next = append(next, v)
+		added++
+	}
+	if added == 0 {
+		return 0, nil
+	}
+
+	s.mu.Lock()
+	bin := s.state.coreBin
+	s.mu.Unlock()
+
+	var p prepared
+	if bin != "" {
+		var err error
+		if p, err = s.prepare(composeArgs{manualNodes: next, useManualNodes: true}); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := s.d.store.SetManualNodes(next); err != nil {
+		p.discard()
+		return 0, fmt.Errorf(i18n.T("保存手动节点失败：%v"), err)
+	}
+	s.refreshStore(TopicProxies, TopicStatus)
+	s.markSyncDirty()
+
+	_, hasSub := s.d.store.Current()
+	if s.running() {
+		var err error
+		if p.tmp != "" {
+			err = s.reloadPrepared(p)
+		} else {
+			err = s.reloadLocked()
+		}
+		if err != nil {
+			_, _ = s.d.store.SetManualNodes(old)
+			s.refreshStore(TopicProxies, TopicStatus)
+			return 0, err
+		}
+		return added, nil
+	}
+	p.discard()
+	if !hasSub && len(old) == 0 && bin != "" {
+		_ = s.startLocked()
+	}
+	return added, nil
 }

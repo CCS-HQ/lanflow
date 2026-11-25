@@ -281,13 +281,13 @@ func init() {
 		"已安装权限组件：更新后需要重新登记新内核，期间会请求一次管理员权限；内核会在更新完成后重新启动。": "The helper is installed: the new core must be registered after the update, which asks for administrator rights once; the core restarts when the update finishes.",
 		"澜流设置": "Lanflow Settings",
 		"导出设置": "Export Settings",
-		"导出常规、代理、DNS、嗅探与内核设置，以及覆写和自定义规则。内核文件路径不会导出。": "Exports the General, Proxy, DNS, Sniffing and Core settings, plus overrides and custom rules. The core file path is not exported.",
-		"包含订阅链接": "Include subscription links",
-		"订阅链接含有你的访问令牌，导出的文件请勿分享给他人。": "Subscription links carry your access tokens; do not share the exported file.",
+		"导出常规、代理、DNS、嗅探与内核设置，以及覆写、链式代理和自定义规则。内核文件路径不会导出。": "Exports the General, Proxy, DNS, Sniffing and Core settings, plus overrides, proxy chains and custom rules. The core file path is not exported.",
+		"包含订阅链接与手动节点": "Include subscription links and manual nodes",
+		"订阅链接与手动节点含有你的访问令牌或凭据，导出的文件请勿分享给他人。": "Subscription links and manual nodes carry your access tokens or credentials; do not share the exported file.",
 		"选择位置并导出…": "Choose Location and Export…",
 		"导出澜流设置":   "Export Lanflow Settings",
 		"导入澜流设置":   "Import Lanflow Settings",
-		"选择之前用「导出…」保存的 lanflow.yaml（或旧版本导出的 JSON 文件）。导入会应用其中的设置、覆写和自定义规则。": "Choose a lanflow.yaml saved earlier with “Export…” (or a JSON file exported by an earlier version). Its settings, overrides and custom rules are applied.",
+		"选择之前用「导出…」保存的 lanflow.yaml（或旧版本导出的 JSON 文件）。导入会应用其中的设置、覆写、手动节点、链式代理和自定义规则。": "Choose a lanflow.yaml saved earlier with “Export…” (or a JSON file exported by an earlier version). Its settings, overrides, manual nodes, proxy chains and custom rules are applied.",
 
 		// internal/view/settings/mirror.go
 		"下载镜像": "Download Mirror",

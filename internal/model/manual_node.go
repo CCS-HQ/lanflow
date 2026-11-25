@@ -86,3 +86,25 @@ type ManualNode struct {
 	IdleSessionTimeout       int `json:"idleSessionTimeout,omitempty"`
 	MinIdleSession           int `json:"minIdleSession,omitempty"`
 }
+
+// CloneManualNode returns a deep copy of n.
+func CloneManualNode(n ManualNode) ManualNode {
+	if len(n.ALPN) == 0 {
+		n.ALPN = nil
+	} else {
+		n.ALPN = append([]string(nil), n.ALPN...)
+	}
+	return n
+}
+
+// CloneManualNodes returns a deep copy of nodes, preserving nil vs empty.
+func CloneManualNodes(nodes []ManualNode) []ManualNode {
+	if nodes == nil {
+		return nil
+	}
+	out := make([]ManualNode, len(nodes))
+	for i, n := range nodes {
+		out[i] = CloneManualNode(n)
+	}
+	return out
+}

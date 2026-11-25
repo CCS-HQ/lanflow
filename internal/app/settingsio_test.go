@@ -204,3 +204,112 @@ func TestImportSettingsReportsPartialFailure(t *testing.T) {
 		t.Fatal("taken port must not be applied")
 	}
 }
+
+func TestExportImportManualNodesAndChains(t *testing.T) {
+	src := newHarness(t, nil)
+	if err := src.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	tg, err := src.s.SaveManualNode(model.ManualNode{
+		Name: "tg-node", Type: model.ProxyTypeTrojanGo, Server: "tg.example.com", Port: 443,
+		Password: "tg-secret-password", SNI: "tg.example.com", ALPN: []string{"h2"},
+		Network: "ws", WSPath: "/ws", SSOptsEnabled: true, SSOptsMethod: "aes-128-gcm", SSOptsPassword: "tg-ss-password", UDP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.s.SaveManualNode(model.ManualNode{
+		Name: "hy2-node", Type: model.ProxyTypeHysteria2, Server: "hy2.example.com", Port: 8443,
+		Password: "hy2-secret-password", Obfs: "salamander", ObfsPassword: "hy2-obfs-password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.s.SetProxyChains([]model.ProxyChain{{
+		Name: "中转链路", Hops: []string{"香港 01", tg.Name}, Enabled: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "lanflow.yaml")
+	if err := src.s.ExportSettings(path, false); err != nil {
+		t.Fatal(err)
+	}
+	rawNoSubs, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"tg-secret-password", "tg-ss-password", "hy2-secret-password", "hy2-obfs-password"} {
+		if strings.Contains(string(rawNoSubs), secret) {
+			t.Fatalf("secret %q exported when includeSubs=false", secret)
+		}
+	}
+	ex := readDoc(t, path)
+	if len(ex.ManualNodes) != 0 {
+		t.Fatalf("manual nodes exported when includeSubs=false: %+v", ex.ManualNodes)
+	}
+
+	if err := src.s.ExportSettings(path, true); err != nil {
+		t.Fatal(err)
+	}
+	ex = readDoc(t, path)
+	if len(ex.ManualNodes) != 2 || ex.ManualNodes[0].Password != "tg-secret-password" || ex.ManualNodes[1].ObfsPassword != "hy2-obfs-password" {
+		t.Fatalf("manual nodes not exported with plaintext secrets: %+v", ex.ManualNodes)
+	}
+
+	dst := newHarness(t, nil)
+	if err := dst.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := dst.s.ImportSettings(path)
+	if err != nil {
+		t.Fatalf("ImportSettings: %v", err)
+	}
+	if !strings.Contains(summary, "2 个手动节点") || !strings.Contains(summary, "1 条链式代理") {
+		t.Fatalf("summary = %q", summary)
+	}
+	gotNodes := dst.s.ManualNodes()
+	if len(gotNodes) != 2 || gotNodes[0].Password != "tg-secret-password" || gotNodes[0].SSOptsPassword != "tg-ss-password" ||
+		gotNodes[1].Password != "hy2-secret-password" || gotNodes[1].ObfsPassword != "hy2-obfs-password" {
+		t.Fatalf("imported nodes = %+v", gotNodes)
+	}
+	if gotChains := dst.s.ProxyChains(); len(gotChains) != 1 || gotChains[0].Hops[1] != "tg-node" {
+		t.Fatalf("imported chains = %+v", gotChains)
+	}
+	// Importing again does not duplicate manual nodes or chains.
+	summary, err = dst.s.ImportSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(summary, "手动节点") || len(dst.s.ManualNodes()) != 2 {
+		t.Fatalf("second import duplicated nodes: summary=%q nodes=%+v", summary, dst.s.ManualNodes())
+	}
+}
+
+func TestImportSyncFileWithMissingManualNodeSecrets(t *testing.T) {
+	src, _, dir := syncHarness(t)
+	if _, err := src.s.SaveManualNode(model.ManualNode{
+		Name: "synced-ss", Type: model.ProxyTypeSS, Server: "1.2.3.4", Port: 8388,
+		Cipher: "aes-128-gcm", Password: "ss-secret-password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.s.SetConfigSync(model.SyncFolder, dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.s.SetSyncPassphrase(sealPass); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := newHarness(t, nil)
+	dst.s.cs.secrets = newFakeSecrets()
+	summary, err := dst.s.ImportSettings(filepath.Join(dir, syncfile.FileName))
+	if err != nil {
+		t.Fatalf("ImportSettings: %v", err)
+	}
+	if !strings.Contains(summary, "synced-ss") {
+		t.Fatalf("expected missing manual node note in summary, got %q", summary)
+	}
+	if len(dst.s.ManualNodes()) != 0 {
+		t.Fatalf("must not import node with unresolved/sealed secret: %+v", dst.s.ManualNodes())
+	}
+}

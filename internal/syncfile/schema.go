@@ -27,6 +27,7 @@ var enums = map[string][]string{
 	"settings.advanced.geodataLoader":     {"", "memconservative", "standard"},
 	"settings.advanced.dnsCacheAlgorithm": {"", "lru", "arc"},
 	"settings.advanced.tunDnsMode":        {"", "disabled", "native", "hijack"},
+	"manualNodes[].type":                  {"socks5", "http", "ss", "vmess", "vless", "trojan", "trojan-go", "hysteria", "hysteria2", "tuic", "anytls"},
 }
 
 // patterns constrain some strings further.
@@ -35,6 +36,7 @@ var patterns = map[string]string{
 	"subscriptions[].id":  `^[A-Za-z0-9_-]{1,64}$`,
 	"overrides[].id":      `^[A-Za-z0-9_-]{1,64}$`,
 	"overrides[].url":     `^https?://`,
+	"manualNodes[].id":    `^[A-Za-z0-9_-]{1,64}$`,
 	"proxyChains[].id":    `^[A-Za-z0-9_-]{1,64}$`,
 	"webdavPassword":      `^keychain:.+$|^enc:v1:[A-Za-z0-9+/=]+$`,
 	"encryption.kdf":      `^argon2id$`,
@@ -50,6 +52,7 @@ var descriptions = map[string]string{
 	"overrides":      "The override list, in the order the overrides apply",
 	"customRules":    "Custom rules, in matching order, before the subscription's rules",
 	"subscriptions":  "Subscriptions with a link; the link is a keychain:<id> reference, or an enc:v1: value sealed with the sync passphrase (a plain http(s) link is accepted too)",
+	"manualNodes":    "User-defined proxy nodes; credential fields (password, uuid, token, authStr, ssOptsPassword, obfsPassword) are keychain:<id> references or enc:v1: values sealed with the sync passphrase. A file without this key leaves each machine's manual nodes as they are",
 	"proxyChains":    "Proxy chains (docs/chain-proxy.md): hops by node or group name, entry first. A file without this key leaves the chains of each machine as they are",
 	"webdavPassword": "keychain:webdav-password when a WebDAV password is set (the password stays in the keychain), or the password sealed with the sync passphrase (enc:v1:)",
 	"encryption":     "Present when secrets are sealed with the sync passphrase: Argon2id parameters, the salt and a check value; each secret is AES-256-GCM bound to its field path",

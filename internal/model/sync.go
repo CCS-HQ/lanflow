@@ -60,6 +60,10 @@ type ConfigSyncStatus struct {
 	// reference this machine's keychain does not have: they wait for the
 	// user to enter the link again (Subscription.NeedsURL).
 	MissingSecrets []string
+	// MissingNodeSecrets names the manual nodes whose credentials are
+	// keychain references this machine's keychain does not have: they wait
+	// for the user to enter their credentials again (or unlock sync).
+	MissingNodeSecrets []string
 	// WebDAVPasswordMissing: the file says a WebDAV password is set, and
 	// this machine's keychain has none.
 	WebDAVPasswordMissing bool
@@ -86,7 +90,7 @@ const (
 // would do.
 type ConfigApplyResult struct {
 	Applied bool       // false for a dry run or when nothing changed
-	Changed []string   // the parts that change: "settings", "overrides", "customRules", "subscriptions"
+	Changed []string   // the parts that change: "settings", "overrides", "customRules", "manualNodes", "proxyChains", "subscriptions"
 	Diff    []DiffLine // this machine's configuration → the file, as lanflow.yaml text
 	Summary string     // one sentence for people
 }

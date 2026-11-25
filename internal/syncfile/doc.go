@@ -47,6 +47,12 @@ type Doc struct {
 	Overrides     []Override     `sync:"overrides"`
 	CustomRules   []Rule         `sync:"customRules"`
 	Subscriptions []Subscription `sync:"subscriptions"`
+	// ManualNodes are the user's manually added outbound proxy nodes
+	// (model.ManualNode). Credential fields (password, uuid, token,
+	// authStr, ssOptsPassword, obfsPassword) are stored as keychain:<id>
+	// references or enc:v1: sealed values. A file without the key leaves
+	// this machine's manual nodes as they are; `manualNodes: []` removes them.
+	ManualNodes []ManualNode `sync:"manualNodes"`
 	// ProxyChains are the user's proxy chains (docs/chain-proxy.md): node
 	// and group names only, no secrets. A file without the key (written
 	// by a version without chains) leaves this machine's chains as they
@@ -84,6 +90,102 @@ type Chain struct {
 	Name    string   `sync:"name"`
 	Hops    []string `sync:"hops"`
 	Enabled bool     `sync:"enabled"`
+}
+
+// ManualNode is a user-defined outbound proxy node (model.ManualNode).
+// Credential fields hold "keychain:node-<id>-<field>" references, or
+// enc:v1: sealed values when Encryption is set; plain strings are also
+// accepted (when edited by a person or an agent) and moved into the
+// keychain on the next write.
+type ManualNode struct {
+	ID     string `sync:"id"`
+	Name   string `sync:"name"`
+	Type   string `sync:"type"`
+	Server string `sync:"server"`
+	Port   int    `sync:"port"`
+	UDP    bool   `sync:"udp,omitempty"`
+
+	Username string `sync:"username,omitempty"`
+	Password string `sync:"password,omitempty"`
+	UUID     string `sync:"uuid,omitempty"`
+	Token    string `sync:"token,omitempty"`
+	AuthStr  string `sync:"authStr,omitempty"`
+
+	Cipher  string `sync:"cipher,omitempty"`
+	AlterID int    `sync:"alterId,omitempty"`
+
+	Flow           string `sync:"flow,omitempty"`
+	PacketEncoding string `sync:"packetEncoding,omitempty"`
+
+	TLS               bool     `sync:"tls,omitempty"`
+	SNI               string   `sync:"sni,omitempty"`
+	SkipCertVerify    bool     `sync:"skipCertVerify,omitempty"`
+	ClientFingerprint string   `sync:"clientFingerprint,omitempty"`
+	ALPN              []string `sync:"alpn,omitempty"`
+	RealityPublicKey  string   `sync:"realityPublicKey,omitempty"`
+	RealityShortID    string   `sync:"realityShortId,omitempty"`
+
+	Network         string `sync:"network,omitempty"`
+	WSPath          string `sync:"wsPath,omitempty"`
+	WSHost          string `sync:"wsHost,omitempty"`
+	GRPCServiceName string `sync:"grpcServiceName,omitempty"`
+
+	Plugin     string `sync:"plugin,omitempty"`
+	PluginMode string `sync:"pluginMode,omitempty"`
+	PluginHost string `sync:"pluginHost,omitempty"`
+
+	SSOptsEnabled  bool   `sync:"ssOptsEnabled,omitempty"`
+	SSOptsMethod   string `sync:"ssOptsMethod,omitempty"`
+	SSOptsPassword string `sync:"ssOptsPassword,omitempty"`
+
+	Protocol     string `sync:"protocol,omitempty"`
+	Ports        string `sync:"ports,omitempty"`
+	Up           string `sync:"up,omitempty"`
+	Down         string `sync:"down,omitempty"`
+	Obfs         string `sync:"obfs,omitempty"`
+	ObfsPassword string `sync:"obfsPassword,omitempty"`
+
+	CongestionController string `sync:"congestionController,omitempty"`
+	UDPRelayMode         string `sync:"udpRelayMode,omitempty"`
+	ReduceRTT            bool   `sync:"reduceRtt,omitempty"`
+	DisableSNI           bool   `sync:"disableSni,omitempty"`
+
+	IdleSessionCheckInterval int `sync:"idleSessionCheckInterval,omitempty"`
+	IdleSessionTimeout       int `sync:"idleSessionTimeout,omitempty"`
+	MinIdleSession           int `sync:"minIdleSession,omitempty"`
+}
+
+// ManualNodeSecretFields lists the YAML field names of ManualNode that
+// carry credentials and are stored in the keychain or sealed with the
+// sync passphrase.
+var ManualNodeSecretFields = []string{"password", "uuid", "token", "authStr", "ssOptsPassword", "obfsPassword"}
+
+// ManualNodeSecretKey is the keychain key of manual node id's field.
+func ManualNodeSecretKey(id, field string) string { return "node-" + id + "-" + field }
+
+// ManualNodeSecretRef is the keychain reference of manual node id's field.
+func ManualNodeSecretRef(id, field string) string {
+	return KeychainPrefix + ManualNodeSecretKey(id, field)
+}
+
+// SecretFieldPtr returns a pointer to the named credential field on n.
+func (n *ManualNode) SecretFieldPtr(field string) *string {
+	switch field {
+	case "password":
+		return &n.Password
+	case "uuid":
+		return &n.UUID
+	case "token":
+		return &n.Token
+	case "authStr":
+		return &n.AuthStr
+	case "ssOptsPassword":
+		return &n.SSOptsPassword
+	case "obfsPassword":
+		return &n.ObfsPassword
+	default:
+		return nil
+	}
 }
 
 // Subscription is a subscription with a link (model.Subscription with
@@ -302,6 +404,15 @@ func Foreign(data []byte) bool {
 			}
 		}
 	}
+	if nodes := mapValue(top, "manualNodes"); nodes != nil && nodes.Kind == yaml.SequenceNode {
+		for _, node := range nodes.Content {
+			for _, f := range ManualNodeSecretFields {
+				if other(mapValue(node, f)) {
+					return true
+				}
+			}
+		}
+	}
 	return false
 }
 
@@ -325,6 +436,20 @@ func yamlErr(err error) error {
 }
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+var manualNodeTypes = map[string]bool{
+	model.ProxyTypeSOCKS5:    true,
+	model.ProxyTypeHTTP:      true,
+	model.ProxyTypeSS:        true,
+	model.ProxyTypeVMess:     true,
+	model.ProxyTypeVLESS:     true,
+	model.ProxyTypeTrojan:    true,
+	model.ProxyTypeTrojanGo:  true,
+	model.ProxyTypeHysteria:  true,
+	model.ProxyTypeHysteria2: true,
+	model.ProxyTypeTUIC:      true,
+	model.ProxyTypeAnyTLS:    true,
+}
 
 // validate checks what the types cannot: IDs, references and links.
 func validate(doc Doc, top *yaml.Node) error {
@@ -398,6 +523,57 @@ func validate(doc Doc, top *yaml.Node) error {
 		p := "customRules[" + strconv.Itoa(i) + "]"
 		if strings.TrimSpace(r.Type) == "" || strings.TrimSpace(r.Payload) == "" || strings.TrimSpace(r.Target) == "" {
 			return errAt(NodeAt(top, p), p, i18n.T("自定义规则需要 type、payload 和 target"))
+		}
+	}
+	nodeIDs, nodeNames := map[string]bool{}, map[string]bool{}
+	for i := range doc.ManualNodes {
+		n := &doc.ManualNodes[i]
+		p := "manualNodes[" + strconv.Itoa(i) + "]"
+		if !idPattern.MatchString(n.ID) {
+			return errAt(NodeAt(top, p+".id"), p+".id", i18n.T("手动节点 ID 只能由字母、数字、- 和 _ 组成（最多 64 个字符）"))
+		}
+		if nodeIDs[n.ID] {
+			return errAt(NodeAt(top, p+".id"), p+".id", i18n.T("手动节点 ID 重复"))
+		}
+		nodeIDs[n.ID] = true
+		name := strings.TrimSpace(n.Name)
+		if name == "" {
+			return errAt(NodeAt(top, p), p+".name", i18n.T("手动节点名称不能为空"))
+		}
+		if nodeNames[name] {
+			return errAt(NodeAt(top, p+".name"), p+".name", i18n.T("手动节点名称重复"))
+		}
+		nodeNames[name] = true
+		typ := strings.ToLower(strings.TrimSpace(n.Type))
+		if !manualNodeTypes[typ] {
+			return errAt(NodeAt(top, p+".type"), p+".type", i18n.Tf("不支持的代理协议「%s」", n.Type))
+		}
+		if strings.TrimSpace(n.Server) == "" {
+			return errAt(NodeAt(top, p), p+".server", i18n.T("服务器地址不能为空"))
+		}
+		if n.Port < 1 || n.Port > 65535 {
+			return errAt(NodeAt(top, p+".port"), p+".port", i18n.T("端口须为 1–65535 之间的数字"))
+		}
+		if n.AlterID < 0 || n.IdleSessionCheckInterval < 0 || n.IdleSessionTimeout < 0 || n.MinIdleSession < 0 {
+			return errAt(NodeAt(top, p), p, i18n.T("手动节点的数值选项不能为负数"))
+		}
+		for _, f := range ManualNodeSecretFields {
+			v := *n.SecretFieldPtr(f)
+			if v == "" {
+				continue
+			}
+			fp := p + "." + f
+			if strings.HasPrefix(v, sealedScheme) && !IsSealed(v) {
+				return errAt(NodeAt(top, fp), fp, i18n.T("不支持的加密值版本，请更新澜流"))
+			}
+			if err := validateSealed(doc, top, fp, v); err != nil {
+				return err
+			}
+			if strings.HasPrefix(v, KeychainPrefix) {
+				if _, ok := KeychainKey(v); !ok {
+					return errAt(NodeAt(top, fp), fp, i18n.T("keychain: 后面缺少名称"))
+				}
+			}
 		}
 	}
 	chainIDs, chainNames := map[string]bool{}, map[string]bool{}

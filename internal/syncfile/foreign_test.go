@@ -38,6 +38,7 @@ func TestForeign(t *testing.T) {
 		{"encryption without kdf", "format: 1\nencryption:\n  salt: AAAA\n", true},
 		{"encryption of another shape", "format: 1\nencryption: v2\n", true},
 		{"sealed link of another version", strings.Replace(ownSealed, "url: "+sealed, "url: enc:v2:AAAA", 1), true},
+		{"sealed node secret of another version", strings.Replace(own, "manualNodes: []", "manualNodes:\n  - {id: m1, name: n1, type: ss, server: 1.2.3.4, port: 8388, password: enc:v2:AAAA}", 1), true},
 		{"sealed password of another version", own + "webdavPassword: enc:v9:AAAA\n", true},
 		{"check value of another version", strings.Replace(ownSealed, "check: "+enc.Check, "check: enc:v2:AAAA", 1), true},
 	} {

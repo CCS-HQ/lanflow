@@ -75,6 +75,276 @@
       "const": 1,
       "description": "File format version; this version writes and reads 1"
     },
+    "manualNodes": {
+      "description": "User-defined proxy nodes; credential fields (password, uuid, token, authStr, ssOptsPassword, obfsPassword) are keychain:\u003cid\u003e references or enc:v1: values sealed with the sync passphrase. A file without this key leaves each machine's manual nodes as they are",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "alpn": {
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "alterId": {
+            "type": "integer"
+          },
+          "authStr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cipher": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "clientFingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "congestionController": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disableSni": {
+            "type": "boolean"
+          },
+          "down": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "flow": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grpcServiceName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "idleSessionCheckInterval": {
+            "type": "integer"
+          },
+          "idleSessionTimeout": {
+            "type": "integer"
+          },
+          "minIdleSession": {
+            "type": "integer"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "network": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "obfs": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "obfsPassword": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "packetEncoding": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plugin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pluginHost": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pluginMode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "port": {
+            "type": "integer"
+          },
+          "ports": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "realityPublicKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "realityShortId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reduceRtt": {
+            "type": "boolean"
+          },
+          "server": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "skipCertVerify": {
+            "type": "boolean"
+          },
+          "sni": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ssOptsEnabled": {
+            "type": "boolean"
+          },
+          "ssOptsMethod": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ssOptsPassword": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tls": {
+            "type": "boolean"
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "enum": [
+              "socks5",
+              "http",
+              "ss",
+              "vmess",
+              "vless",
+              "trojan",
+              "trojan-go",
+              "hysteria",
+              "hysteria2",
+              "tuic",
+              "anytls"
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "udp": {
+            "type": "boolean"
+          },
+          "udpRelayMode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "up": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "uuid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wsHost": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wsPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "overrides": {
       "description": "The override list, in the order the overrides apply",
       "items": {

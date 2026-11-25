@@ -61,6 +61,7 @@ func TestSealRoundTrip(t *testing.T) {
 	doc := sampleDoc()
 	doc.Encryption = &enc
 	doc.Subscriptions[0].URL = v
+	doc.ManualNodes[0].Password, _ = Seal(key, ManualNodeSecretPath("mn01", "password"), "nodepw")
 	doc.WebDAVPassword, _ = Seal(key, WebDAVPasswordPath, "davpw")
 	data := Encode(doc)
 	back, err := Decode(data, model.Settings{})
@@ -74,11 +75,14 @@ func TestSealRoundTrip(t *testing.T) {
 		t.Fatalf("encryption block should follow format:\n%s", data)
 	}
 	vals := SealedValues(back)
-	if len(vals) != 2 {
+	if len(vals) != 3 {
 		t.Fatalf("SealedValues = %v", vals)
 	}
 	if pw, err := Open(key, WebDAVPasswordPath, vals[WebDAVPasswordPath]); err != nil || pw != "davpw" {
 		t.Fatalf("webdav: %q %v", pw, err)
+	}
+	if npw, err := Open(key, ManualNodeSecretPath("mn01", "password"), vals[ManualNodeSecretPath("mn01", "password")]); err != nil || npw != "nodepw" {
+		t.Fatalf("manual node password: %q %v", npw, err)
 	}
 }
 
@@ -86,9 +90,15 @@ func TestSealAADBindsField(t *testing.T) {
 	t.Parallel()
 	key := testSharedEnc().key
 	v, _ := Seal(key, SubscriptionPath("a1"), "https://a.example/")
-	for _, path := range []string{SubscriptionPath("b2"), WebDAVPasswordPath, checkPath} {
+	for _, path := range []string{SubscriptionPath("b2"), ManualNodeSecretPath("mn01", "password"), WebDAVPasswordPath, checkPath} {
 		if _, err := Open(key, path, v); !errors.Is(err, ErrSealedDamaged) {
 			t.Fatalf("value of a1 opened as %s: %v", path, err)
+		}
+	}
+	nv, _ := Seal(key, ManualNodeSecretPath("mn01", "password"), "s3cret")
+	for _, path := range []string{ManualNodeSecretPath("mn02", "password"), ManualNodeSecretPath("mn01", "uuid"), SubscriptionPath("mn01")} {
+		if _, err := Open(key, path, nv); !errors.Is(err, ErrSealedDamaged) {
+			t.Fatalf("node password opened as %s: %v", path, err)
 		}
 	}
 	// a flipped byte is caught too
@@ -148,14 +158,17 @@ func TestSealedDecodeErrors(t *testing.T) {
 	se := testSharedEnc()
 	enc, key := se.enc, se.key
 	v, _ := Seal(key, SubscriptionPath("a1b2c3d4"), "https://x.example/")
+	nv, _ := Seal(key, ManualNodeSecretPath("mn01", "password"), "pw")
 	for name, tc := range map[string]struct {
 		mut  func(*Doc)
 		want string
 	}{
-		"no header":  {func(d *Doc) { d.Subscriptions[0].URL = v }, "subscriptions[0].url"},
-		"bad base64": {func(d *Doc) { d.Encryption = &enc; d.Subscriptions[0].URL = "enc:v1:!!" }, "subscriptions[0].url"},
-		"bad params": {func(d *Doc) { e := enc; e.MemoryKiB = 1; d.Encryption = &e }, "encryption"},
-		"webdav":     {func(d *Doc) { d.WebDAVPassword = "hunter2" }, "webdavPassword"},
+		"no header":          {func(d *Doc) { d.Subscriptions[0].URL = v }, "subscriptions[0].url"},
+		"node no header":     {func(d *Doc) { d.ManualNodes[0].Password = nv }, "manualNodes[0].password"},
+		"node bad base64":    {func(d *Doc) { d.Encryption = &enc; d.ManualNodes[0].Password = "enc:v1:!!" }, "manualNodes[0].password"},
+		"bad base64":         {func(d *Doc) { d.Encryption = &enc; d.Subscriptions[0].URL = "enc:v1:!!" }, "subscriptions[0].url"},
+		"bad params":         {func(d *Doc) { e := enc; e.MemoryKiB = 1; d.Encryption = &e }, "encryption"},
+		"webdav":             {func(d *Doc) { d.WebDAVPassword = "hunter2" }, "webdavPassword"},
 	} {
 		d := sampleDoc()
 		tc.mut(&d)

@@ -90,6 +90,10 @@ var (
 // not by position, so reordering the list keeps the values valid.
 func SubscriptionPath(id string) string { return "subscriptions." + id + ".url" }
 
+// ManualNodeSecretPath is the field path of manual node id's credential
+// field, the additional data of its sealed value.
+func ManualNodeSecretPath(id, field string) string { return "manualNodes." + id + "." + field }
+
 // IsSealed reports whether v is a sealed value.
 func IsSealed(v string) bool { return strings.HasPrefix(v, SealedPrefix) }
 
@@ -235,6 +239,14 @@ func SealedValues(doc Doc) map[string]string {
 	for _, s := range doc.Subscriptions {
 		if IsSealed(s.URL) {
 			out[SubscriptionPath(s.ID)] = s.URL
+		}
+	}
+	for i := range doc.ManualNodes {
+		n := &doc.ManualNodes[i]
+		for _, f := range ManualNodeSecretFields {
+			if p := n.SecretFieldPtr(f); p != nil && IsSealed(*p) {
+				out[ManualNodeSecretPath(n.ID, f)] = *p
+			}
 		}
 	}
 	if IsSealed(doc.WebDAVPassword) {

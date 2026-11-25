@@ -584,3 +584,123 @@ func TestSyncPlainLinkMovesToKeychain(t *testing.T) {
 		t.Fatal("own rewrite loaded as an external change")
 	}
 }
+
+func TestSyncManualNodesKeychainAndExternalChanges(t *testing.T) {
+	h, ks, dir := syncHarness(t)
+	if err := h.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := h.s.SaveManualNode(model.ManualNode{
+		Name: "node-a", Type: model.ProxyTypeTrojanGo, Server: "a.example.com", Port: 443,
+		Password: "pw-1", SSOptsEnabled: true, SSOptsMethod: "aes-128-gcm", SSOptsPassword: "ss-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.SetConfigSync(model.SyncFolder, dir, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	raw := syncBytes(t, dir)
+	if strings.Contains(raw, "pw-1") || strings.Contains(raw, "ss-1") {
+		t.Fatalf("manual node secrets leaked into sync file:\n%s", raw)
+	}
+	if !strings.Contains(raw, syncfile.ManualNodeSecretRef(saved.ID, "password")) ||
+		ks.get(syncfile.ManualNodeSecretKey(saved.ID, "password")) != "pw-1" ||
+		ks.get(syncfile.ManualNodeSecretKey(saved.ID, "ssOptsPassword")) != "ss-1" {
+		t.Fatalf("keychain refs/values missing:\n%s", raw)
+	}
+
+	// Password-only external edit (plain secret in YAML) is detected, applied, and moved to keychain.
+	writeExternal(t, dir, func(d *syncfile.Doc) {
+		d.ManualNodes[0].Password = "pw-2"
+	})
+	step(h)
+	step(h)
+	if got := h.s.ManualNodes(); len(got) != 1 || got[0].Password != "pw-2" {
+		t.Fatalf("password-only external change not applied: %+v", got)
+	}
+	if ks.get(syncfile.ManualNodeSecretKey(saved.ID, "password")) != "pw-2" {
+		t.Fatal("updated manual node secret not saved to keychain")
+	}
+	if raw = syncBytes(t, dir); strings.Contains(raw, "pw-2") || !strings.Contains(raw, syncfile.ManualNodeSecretRef(saved.ID, "password")) {
+		t.Fatalf("plain secret not rewritten to keychain ref:\n%s", raw)
+	}
+
+	// External change adding a second manual node and a proxy chain referencing it.
+	writeExternal(t, dir, func(d *syncfile.Doc) {
+		d.ManualNodes = append(d.ManualNodes, syncfile.ManualNode{
+			ID: "extnode", Name: "node-b", Type: model.ProxyTypeAnyTLS, Server: "b.example.com", Port: 443, Password: "pw-b",
+		})
+		d.ProxyChains = []syncfile.Chain{{ID: "c1", Name: "手动中转", Hops: []string{"香港 01", "node-b"}, Enabled: true}}
+	})
+	step(h)
+	if len(h.s.ManualNodes()) != 2 || len(h.s.ProxyChains()) != 1 {
+		t.Fatalf("external manual node or chain not loaded: nodes=%+v chains=%+v", h.s.ManualNodes(), h.s.ProxyChains())
+	}
+
+	// ApplyConfigFile dry-run diff never reveals manual node secrets.
+	plainPath := filepath.Join(t.TempDir(), "plain.yaml")
+	plainDoc := buildDoc(h.s.snapshotLocal(), linksPlain)
+	plainDoc.ManualNodes[0].Password = "pw-dryrun-secret"
+	os.WriteFile(plainPath, syncfile.Encode(plainDoc), 0o600)
+	res, err := h.s.ApplyConfigFile(plainPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range res.Diff {
+		if strings.Contains(l.Text, "pw-dryrun-secret") {
+			t.Fatal("dry-run diff revealed manual node secret")
+		}
+	}
+
+	// Deleting local node marks sync dirty and removes its keychain entries.
+	if err := h.s.DeleteManualNode(saved.ID); err != nil {
+		t.Fatal(err)
+	}
+	step(h)
+	if ks.get(syncfile.ManualNodeSecretKey(saved.ID, "password")) != "" || ks.get(syncfile.ManualNodeSecretKey(saved.ID, "ssOptsPassword")) != "" {
+		t.Fatal("deleted manual node secrets left in keychain")
+	}
+	if doc := readSync(t, dir); len(doc.ManualNodes) != 1 || doc.ManualNodes[0].ID != "extnode" {
+		t.Fatalf("deleted node still in sync file: %+v", doc.ManualNodes)
+	}
+}
+
+func TestSyncMissingManualNodeKeychainRef(t *testing.T) {
+	h, _, dir := syncHarness(t)
+	if err := h.s.SetConfigSync(model.SyncFolder, dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	writeExternal(t, dir, func(d *syncfile.Doc) {
+		d.ManualNodes = []syncfile.ManualNode{{
+			ID: "x1", Name: "另一台的节点", Type: model.ProxyTypeSS, Server: "1.2.3.4", Port: 8388,
+			Cipher: "aes-128-gcm", Password: syncfile.ManualNodeSecretRef("x1", "password"),
+		}}
+	})
+	step(h)
+	st := h.s.ConfigSyncStatus()
+	if st.State != model.SyncStateOK || len(st.MissingNodeSecrets) != 1 || st.MissingNodeSecrets[0] != "另一台的节点" {
+		t.Fatalf("status = %+v", st)
+	}
+	nodes := h.s.ManualNodes()
+	if len(nodes) != 1 || nodes[0].Password != "" {
+		t.Fatalf("nodes = %+v", nodes)
+	}
+	// Incomplete node is omitted from composition input.
+	in, _, err := h.s.buildInput(composeArgs{})
+	if err != nil || len(in.ManualNodes) != 0 {
+		t.Fatalf("buildInput = %+v %v", in.ManualNodes, err)
+	}
+	// Another local change rewrites lanflow.yaml without dropping the unresolved keychain ref.
+	set := h.s.Settings()
+	set.LogLevel = "warning"
+	if err := h.s.SaveSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	markDirty(h)
+	step(h)
+	if doc := readSync(t, dir); len(doc.ManualNodes) != 1 || doc.ManualNodes[0].Password != syncfile.ManualNodeSecretRef("x1", "password") {
+		t.Fatalf("unresolved keychain ref dropped on rewrite: %+v", doc.ManualNodes)
+	}
+}

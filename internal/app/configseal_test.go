@@ -381,3 +381,141 @@ func TestSealSecretsStayOutOfLogs(t *testing.T) {
 		}
 	}
 }
+
+func TestSealManualNodesRoundTripAndLockedDevice(t *testing.T) {
+	t.Parallel()
+	a, aks, dir := syncHarness(t)
+	n1, err := a.s.SaveManualNode(model.ManualNode{
+		Name: "seal-tg", Type: model.ProxyTypeTrojanGo, Server: "tg.example.com", Port: 443,
+		Password: "node-pw-secret", SSOptsEnabled: true, SSOptsMethod: "aes-128-gcm", SSOptsPassword: "node-ss-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n2, err := a.s.SaveManualNode(model.ManualNode{
+		Name: "seal-hy2", Type: model.ProxyTypeHysteria2, Server: "hy2.example.com", Port: 8443,
+		Password: "hy2-pw-secret", Obfs: "salamander", ObfsPassword: "hy2-obfs-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.s.SetProxyChains([]model.ProxyChain{{
+		Name: "加密链路", Hops: []string{"香港 01", n1.Name}, Enabled: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.s.SetConfigSync(model.SyncFolder, dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.s.SetSyncPassphrase(sealPass); err != nil {
+		t.Fatal(err)
+	}
+
+	text := syncBytes(t, dir)
+	for _, secret := range []string{"node-pw-secret", "node-ss-secret", "hy2-pw-secret", "hy2-obfs-secret", ": keychain:"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("secret or keychain ref %q leaked into sealed file:\n%s", secret, text)
+		}
+	}
+	vals := syncfile.SealedValues(readSync(t, dir))
+	if len(vals) != 5 { // 1 default subscription + 4 manual node secrets
+		t.Fatalf("sealed values = %v", vals)
+	}
+
+	// Unchanged sync step does not rewrite ciphertexts.
+	markDirty(a)
+	step(a)
+	if syncBytes(t, dir) != text {
+		t.Fatal("unchanged sealed manual nodes rewritten")
+	}
+
+	// Device B enables sync while locked: loads cleanly, skips incomplete nodes in compose, preserves sealed values on rewrite.
+	b, bks := secondDevice(t, dir)
+	st := b.s.ConfigSyncStatus()
+	if !st.Encrypted || !st.Locked || st.LockedSecrets != 5 {
+		t.Fatalf("locked device status = %+v", st)
+	}
+	if bNodes := b.s.ManualNodes(); len(bNodes) != 2 || bNodes[0].Password != "" || bNodes[1].ObfsPassword != "" {
+		t.Fatalf("locked device must not have plaintext node secrets: %+v", bNodes)
+	}
+	if in, _, err := b.s.buildInput(composeArgs{}); err != nil || len(in.ManualNodes) != 0 {
+		t.Fatalf("locked device must omit incomplete manual nodes from composition: %+v %v", in.ManualNodes, err)
+	}
+
+	// Locked write on device B preserves sealed manual node values.
+	before := syncfile.SealedValues(readSync(t, dir))
+	bset := b.s.Settings()
+	bset.LogLevel = "warning"
+	if err := b.s.SaveSettings(bset); err != nil {
+		t.Fatal(err)
+	}
+	markDirty(b)
+	step(b)
+	after := syncfile.SealedValues(readSync(t, dir))
+	if after[syncfile.ManualNodeSecretPath(n1.ID, "password")] != before[syncfile.ManualNodeSecretPath(n1.ID, "password")] {
+		t.Fatal("locked device dropped sealed manual node secret on rewrite")
+	}
+
+	// Unlock device B: secrets, runtime compose, and keychain are populated.
+	if err := b.s.UnlockSync(sealPass); err != nil {
+		t.Fatal(err)
+	}
+	bNodes := b.s.ManualNodes()
+	if len(bNodes) != 2 || bNodes[0].Password != "node-pw-secret" || bNodes[0].SSOptsPassword != "node-ss-secret" ||
+		bNodes[1].Password != "hy2-pw-secret" || bNodes[1].ObfsPassword != "hy2-obfs-secret" {
+		t.Fatalf("unlocked manual nodes = %+v", bNodes)
+	}
+	if in, _, err := b.s.buildInput(composeArgs{}); err != nil || len(in.ManualNodes) != 2 {
+		t.Fatalf("unlocked buildInput = %+v %v", in.ManualNodes, err)
+	}
+	step(b)
+	if bks.get(syncfile.ManualNodeSecretKey(n1.ID, "password")) != "node-pw-secret" {
+		t.Fatal("unlocked node secret not stored in keychain")
+	}
+
+	// Sync device B's LogLevel change onto A before A modifies n2.
+	step(a)
+
+	// Clearing optional ObfsPassword on unlocked device A clears it in the sealed file and keychain.
+	n2.ObfsPassword = ""
+	if _, err := a.s.SaveManualNode(n2); err != nil {
+		t.Fatal(err)
+	}
+	step(a)
+	if doc := readSync(t, dir); doc.ManualNodes[1].ObfsPassword != "" {
+		t.Fatalf("cleared optional secret kept in sealed file: %q", doc.ManualNodes[1].ObfsPassword)
+	}
+	if aks.get(syncfile.ManualNodeSecretKey(n2.ID, "obfsPassword")) != "" {
+		t.Fatal("cleared optional secret kept in keychain")
+	}
+
+	// Changing passphrase re-seals manual node secrets and keeps secrets out of logs & diagnostics.
+	if err := a.s.SetSyncPassphrase(sealPass2); err != nil {
+		t.Fatal(err)
+	}
+	doc := readSync(t, dir)
+	var sealed []string
+	for _, v := range syncfile.SealedValues(doc) {
+		sealed = append(sealed, strings.TrimPrefix(v, syncfile.SealedPrefix))
+	}
+	forbidden := append([]string{"node-pw-secret", "node-ss-secret", "hy2-pw-secret", "hy2-obfs-secret", sealPass, sealPass2}, sealed...)
+	zipPath := filepath.Join(t.TempDir(), "diag.zip")
+	if err := a.s.ExportDiagnostics(zipPath); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		rc, _ := f.Open()
+		data, _ := io.ReadAll(rc)
+		rc.Close()
+		for _, bad := range forbidden {
+			if strings.Contains(string(data), bad) {
+				t.Errorf("diag:%s contains %q", f.Name, bad)
+			}
+		}
+	}
+}

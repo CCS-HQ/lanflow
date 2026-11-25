@@ -492,14 +492,16 @@ func (s *store) setCustomRules(r []model.CustomRule) ([]model.CustomRule, error)
 func (s *store) manualNodesList() []model.ManualNode {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]model.ManualNode(nil), s.manualNodes...)
+	return model.CloneManualNodes(s.manualNodes)
 }
 
 func (s *store) setManualNodes(nodes []model.ManualNode) ([]model.ManualNode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]model.ManualNode, len(nodes))
-	copy(out, nodes)
+	out := model.CloneManualNodes(nodes)
+	if out == nil {
+		out = []model.ManualNode{}
+	}
 	taken := map[string]bool{}
 	for _, n := range out {
 		if n.ID != "" {
@@ -518,7 +520,7 @@ func (s *store) setManualNodes(nodes []model.ManualNode) ([]model.ManualNode, er
 		s.manualNodes = backup
 		return nil, err
 	}
-	return append([]model.ManualNode(nil), out...), nil
+	return model.CloneManualNodes(out), nil
 }
 
 func (s *store) proxyChainsList() []model.ProxyChain {

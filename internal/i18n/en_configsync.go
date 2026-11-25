@@ -27,6 +27,14 @@ func init() {
 		"YAML 语法错误：": "YAML syntax error: ",
 		"订阅 ID 只能由字母、数字、- 和 _ 组成（最多 64 个字符）": "a subscription ID may only hold letters, digits, - and _ (at most 64 characters)",
 		"订阅 ID 重复": "duplicate subscription ID",
+		"手动节点 ID 只能由字母、数字、- 和 _ 组成（最多 64 个字符）": "a manual node ID may only hold letters, digits, - and _ (at most 64 characters)",
+		"手动节点 ID 重复":         "duplicate manual node ID",
+		"手动节点名称不能为空":         "the manual node name cannot be empty",
+		"手动节点名称重复":           "duplicate manual node name",
+		"不支持的代理协议「%s」":       "unsupported proxy protocol \"%s\"",
+		"服务器地址不能为空":          "the server address cannot be empty",
+		"手动节点的数值选项不能为负数":     "manual node numeric options cannot be negative",
+		"不支持的加密值版本，请更新澜流":    "unsupported encrypted value version; update Lanflow first",
 		"链路 ID 只能由字母、数字、- 和 _ 组成（最多 64 个字符）": "a chain ID may only contain letters, digits, - and _ (at most 64 characters)",
 		"链路 ID 重复":         "duplicate chain ID",
 		"链路名称不能为空":         "the chain name must not be empty",
@@ -45,7 +53,8 @@ func init() {
 
 		// internal/app/configdoc.go
 		"文件无效：%v": "The file is not valid: %v",
-		"订阅「%s」（文件中只有钥匙串引用，本机钥匙串里没有它的链接）": "subscription \"%s\" (the file has only a keychain reference, and this machine's keychain does not have its link)",
+		"订阅「%s」（文件中只有钥匙串引用，本机钥匙串里没有它的链接）":   "subscription \"%s\" (the file has only a keychain reference, and this machine's keychain does not have its link)",
+		"手动节点「%s」（文件中只有钥匙串引用，本机钥匙串里没有它的凭据）": "manual node \"%s\" (the file has only a keychain reference, and this machine's keychain does not have its credentials)",
 
 		// internal/app/configsecrets.go, internal/view/subs/page.go
 		"这个订阅来自配置同步，本机钥匙串里没有它的链接。请在「编辑」中重新输入订阅链接。":   "This subscription came through configuration sync, and this machine's keychain does not have its link. Enter the subscription link again in Edit.",
@@ -58,6 +67,7 @@ func init() {
 		"文件与本机配置一致，没有需要加载的内容。": "The file matches this machine's configuration; there is nothing to load.",
 		"更新了%s": "Updated %s",
 		"；%d 个订阅需要重新输入链接": "; %d subscription(s) need their link entered again",
+		"；%d 个手动节点需要重新填写凭据": "; %d manual node(s) need their credentials entered again",
 		"；正在使用的订阅「%s」已保留": "; the subscription in use, \"%s\", was kept",
 
 		// internal/app/configsync.go
@@ -112,6 +122,9 @@ func init() {
 		"%d 个订阅的链接不在本机钥匙串中（%s），请在「订阅」页编辑并重新输入链接。":   "The links of %d subscription(s) are not in this machine's keychain (%s); edit them on the Subscriptions page and enter the links again.",
 		"%d 个订阅的链接不在本机凭据管理器中（%s），请在「订阅」页编辑并重新输入链接。": "The links of %d subscription(s) are not in this machine's Credential Manager (%s); edit them on the Subscriptions page and enter the links again.",
 		"前往订阅": "Go to Subscriptions",
+		"%d 个手动节点的凭据不在本机钥匙串中（%s），请在「代理」页编辑并重新填写凭据。":   "The credentials of %d manual node(s) are not in this machine's keychain (%s); edit them on the Proxies page and enter the credentials again.",
+		"%d 个手动节点的凭据不在本机凭据管理器中（%s），请在「代理」页编辑并重新填写凭据。": "The credentials of %d manual node(s) are not in this machine's Credential Manager (%s); edit them on the Proxies page and enter the credentials again.",
+		"前往代理": "Go to Proxies",
 		"同步文件中设置了 WebDAV 密码，但本机钥匙串里没有；需要备份到 WebDAV 时请重新输入密码。":   "The sync file says a WebDAV password is set, but this machine's keychain does not have it; enter the password again to back up to WebDAV.",
 		"同步文件中设置了 WebDAV 密码，但本机凭据管理器里没有；需要备份到 WebDAV 时请重新输入密码。": "The sync file says a WebDAV password is set, but this machine's Credential Manager does not have it; enter the password again to back up to WebDAV.",
 		"配置同步已关闭；同步文件保留在原处":                                     "Configuration sync is off; the sync file stays where it is",

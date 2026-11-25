@@ -674,6 +674,7 @@ type SettingsExport struct {
 	Settings      *Settings              `json:"settings,omitempty"`
 	Overrides     *Overrides             `json:"overrides,omitempty"`
 	CustomRules   []CustomRule           `json:"customRules,omitempty"`
+	ManualNodes   []ManualNode           `json:"manualNodes,omitempty"`
 	ProxyChains   []ProxyChain           `json:"proxyChains,omitempty"`
 	Subscriptions []ExportedSubscription `json:"subscriptions,omitempty"`
 }
