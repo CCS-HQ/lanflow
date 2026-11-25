@@ -170,6 +170,7 @@ func normalizeSettings(s model.Settings) model.Settings {
 	}
 	s.Advanced = normalizeAdvanced(s.Advanced, s.MixedPort)
 	s.Tailscale = cleanTailscaleConfig(s.Tailscale)
+	s.TailscaleBuiltin, _ = CheckTailscaleBuiltin(s.TailscaleBuiltin)
 	return s
 }
 

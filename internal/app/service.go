@@ -95,11 +95,12 @@ type Service struct {
 	bgMu    sync.Mutex
 	closing bool
 
-	stats   *statsStore   // 流量统计 (stats.go); its own lock
-	cores   coresState    // installed Mihomo versions and release lists (cores.go); its own lock
-	started time.Time     // when the service was created
-	fb      feedbackState // reports built for 反馈问题 and the automatic report (feedback.go); its own lock
-	capst   captureState  // HTTPS 选择性解密 (capture.go); its own locks
+	stats   *statsStore    // 流量统计 (stats.go); its own lock
+	cores   coresState     // installed Mihomo versions and release lists (cores.go); its own lock
+	started time.Time      // when the service was created
+	fb      feedbackState  // reports built for 反馈问题 and the automatic report (feedback.go); its own lock
+	capst   captureState   // HTTPS 选择性解密 (capture.go); its own locks
+	tsb     tsBuiltinState // 内置 Tailscale (tailscale_builtin.go); its own lock
 }
 
 // state is everything the reads return. Every slice/map handed out is copied.
