@@ -57,6 +57,7 @@ func TestLiveTUN(t *testing.T) {
 
 	set := s.Settings()
 	set.CorePath, set.MixedPort, set.ProbeExits = filepath.Join(res, "mihomo"), freePort(t), false
+	set.ATrustCompat = true // off by default; liveCoexist needs it
 	if err := s.SaveSettings(set); err != nil {
 		t.Fatal(err)
 	}

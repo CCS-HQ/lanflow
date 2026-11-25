@@ -13,7 +13,7 @@ import (
 func TestAdvancedFormRoundTrip(t *testing.T) {
 	a := model.AdvancedSettings{
 		HTTPPort: 7891, SocksPort: 7892, LANAllowedIPs: []string{"192.168.0.0/16"}, Authentication: []string{"u:p"},
-		PACMode: true, PACPort: 11234, TUNStrictRoute: true, TUNMTU: 1500, TUNRouteExcludeAddress: []string{"10.0.0.0/8"},
+		PACMode: true, PACPort: 11234, TUNStrictRoute: true, TUNMTU: 1500, TUNRouteExcludeAddress: []string{"10.0.0.0/8"}, TUNDNSMode: "disabled",
 		FindProcessMode: "strict", KeepAliveIdle: 600, GeodataLoader: "standard", DNSListen: "127.0.0.1:1053", DNSCacheAlgorithm: "arc",
 		DNSFallbackFilter: model.DNSFallbackFilter{GeoIP: true, GeoIPCode: "CN", Domain: []string{"+.google.com"}}, SnifferNoForceDNSMapping: true,
 	}

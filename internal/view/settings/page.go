@@ -594,12 +594,12 @@ func (p *Page) tunTab(c *ui.Context, t *ui.Theme, s model.Settings, st model.Sta
 			})
 		}
 		if st.TUNAvailable || st.TUN {
-			stackOpts := []string{"mixed", "system", "gvisor"}
+			stackOpts := []string{"mixed", "system", "gvisor", "mips"}
 			stack := s.TUNStack
 			if stack == "" {
 				stack = "mixed"
 			}
-			p.selectRow(c, i18n.T("TUN 协议栈"), i18n.T("一般保持 mixed；兼容性问题时可改为 system 或 gvisor"), stack, stackOpts, func(v string) {
+			p.selectRow(c, i18n.T("TUN 协议栈"), i18n.T("一般保持 mixed；兼容性问题时可改为 system 或 gvisor；mips 是内核新的用户态协议栈，内核低于 v1.19.31 时按 mixed 运行"), stack, stackOpts, func(v string) {
 				s.TUNStack = v
 				p.save(s, "", nil)
 			})

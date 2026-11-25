@@ -125,7 +125,7 @@ func normalizeSettings(s model.Settings) model.Settings {
 	}
 	s.HideTraySpeed = s.TraySpeed == model.TraySpeedOff
 	switch s.TUNStack {
-	case "mixed", "system", "gvisor":
+	case "mixed", "system", "gvisor", "mips":
 	default:
 		s.TUNStack = d.TUNStack
 	}
@@ -261,4 +261,25 @@ func (s *Service) removeMarker() { _ = os.Remove(s.markerPath()) }
 func (s *Service) markerExists() bool {
 	_, err := os.Stat(s.markerPath())
 	return err == nil
+}
+
+// mipsSince is the first Mihomo release that accepts `stack: mips`; an
+// older core refuses the whole config ("invalid tun stack").
+const mipsSince = "v1.19.31"
+
+// composeTUNStack is the stack written into the config: mips falls back
+// to mixed when the core in use (coreVersion, "" = the bundled one) is a
+// release older than mipsSince. Alpha builds are newer than any release.
+func composeTUNStack(stack, coreVersion string) string {
+	if stack != "mips" {
+		return stack
+	}
+	v := coreVersion
+	if v == "" {
+		v = pinnedCoreVersion
+	}
+	if _, ok := semverParts(v); ok && compareSemver(v, mipsSince) < 0 {
+		return "mixed"
+	}
+	return stack
 }

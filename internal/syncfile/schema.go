@@ -16,7 +16,7 @@ const SchemaPath = "docs/schema/lanflow.schema.json"
 var enums = map[string][]string{
 	"settings.appearance":                 {"system", "light", "dark"},
 	"settings.language":                   {"zh", "en"},
-	"settings.tunStack":                   {"mixed", "system", "gvisor"},
+	"settings.tunStack":                   {"mixed", "system", "gvisor", "mips"},
 	"settings.mode":                       {"rule", "global", "direct"},
 	"settings.logLevel":                   {"debug", "info", "warning", "error", "silent"},
 	"settings.coreChannel":                {"stable", "alpha"},
@@ -26,6 +26,7 @@ var enums = map[string][]string{
 	"settings.advanced.findProcessMode":   {"", "off", "strict", "always"},
 	"settings.advanced.geodataLoader":     {"", "memconservative", "standard"},
 	"settings.advanced.dnsCacheAlgorithm": {"", "lru", "arc"},
+	"settings.advanced.tunDnsMode":        {"", "disabled", "native", "hijack"},
 }
 
 // patterns constrain some strings further.

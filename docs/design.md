@@ -568,7 +568,7 @@ api.github.com:443       git           GEOSITE         节点选择›东京03  
 | 设置 | 控件 | 优先级 |
 | --- | --- | --- |
 | TUN 模式（增强模式） | 开关；首次打开时引导安装权限组件。已安装的权限组件来自另一个版本时，下方显示黄色提示条「TUN 模式暂不可用，需要重新安装权限组件」+「重新安装…」 | P2 |
-| TUN 协议栈 | 下拉：mixed / system / gvisor，说明「一般保持 mixed；兼容性问题时可改为 system 或 gvisor」；TUN 可用时才显示 | P2 |
+| TUN 协议栈 | 下拉：mixed / system / gvisor / mips，说明「一般保持 mixed；兼容性问题时可改为 system 或 gvisor；mips 是内核新的用户态协议栈」；TUN 可用时才显示。默认仍为 mixed（Mihomo v1.19.32 起自身默认是 mips，澜流不跟随，待虚拟机比较后再定） | P2 |
 | 自动设置系统 DNS | 开关（仅 macOS，TUN 可用时才显示），默认开启；说明「开启 TUN 时把系统 DNS 指向 223.5.5.5，让 DNS 查询经过澜流；关闭 TUN 或退出时恢复原设置」 | P2 |
 | aTrust 兼容 | 开关 +「配置…」，规则见 README「与其他代理软件共存」 | P2 |
 | 进阶 TUN 参数 | 一行「MTU、严格路由与排除网段」+「前往高级设置」，跳到高级栏的 TUN 分组 | P2 |
@@ -607,7 +607,7 @@ api.github.com:443       git           GEOSITE         节点选择›东京03  
 | --- | --- |
 | 端口与局域网 | HTTP 端口（`port`）、SOCKS 端口（`socks-port`，与代理端口和彼此不得相同，被占用时拒绝）；允许 / 禁止的局域网地址（`lan-allowed-ips` / `lan-disallowed-ips`）；代理认证 `用户名:密码`（`authentication`）与免认证的地址（`skip-auth-prefixes`）。允许局域网连接而没有认证时，代理栏和这里都显示黄色提示 |
 | 系统代理 | PAC 模式：系统代理改为自动配置脚本，澜流在 `127.0.0.1:<PAC 端口>`（默认 11233）提供 `/proxy.pac`，「不走代理的地址」变成 PAC 里的 DIRECT 规则，其余 `PROXY 127.0.0.1:<代理端口>; SOCKS5 …; DIRECT`；「国内域名直连」把 `.cn` 和常见国内网站加为 DIRECT。macOS 用 `networksetup -setautoproxyurl`，Windows 用 WinINet 的逐连接选项，对局域网和每个拨号／VPN 连接都设置（全局代理同样如此；局域网设置失败时退回写注册表的 `AutoConfigURL` 等值；系统代理被别的程序改走后，澜流放手前会把仍指向自己的拨号／VPN 连接还原。降级注意：0.1.9 及更早版本只认局域网，在新版本开着系统代理时直接换回旧版本，旧版本关闭代理只还原局域网，拨号／VPN 连接上的代理要在新版本里先关掉系统代理，或在 Windows「Internet 选项 → 连接」里手动清除）；关闭时和全局代理一样恢复之前的设置，异常退出后的恢复也认得 PAC |
-| TUN | 严格路由（`strict-route`）、MTU、端点无关 NAT（`endpoint-independent-nat`）、只接管 / 不接管的网段（`route-address` / `route-exclude-address`，后者与 aTrust 兼容加入的合并）、DNS 劫持（`dns-hijack`，留空为 `any:53` 与 `tcp://any:53`）、网卡名称（`device`，留空为 `utun1700`）、只在 / 不在这些网卡上接管（`include-interface` / `exclude-interface`）。Linux 专有的 `auto-redirect`、redir / tproxy 端口不做 |
+| TUN | 严格路由（`strict-route`）、MTU、端点无关 NAT（`endpoint-independent-nat`）、只接管 / 不接管的网段（`route-address` / `route-exclude-address`，后者与 aTrust 兼容加入的合并）、DNS 劫持（`dns-hijack`，留空为 `any:53` 与 `tcp://any:53`）、DNS 模式（`dns-mode`：自动 / 不接管 / native / hijack；自动在 Windows 同 hijack、macOS 同不接管）、网卡名称（`device`，留空为 `utun1700`）、只在 / 不在这些网卡上接管（`include-interface` / `exclude-interface`）。Linux 专有的 `auto-redirect`、redir / tproxy 端口不做 |
 | 内核行为 | IPv6、统一延迟、TCP 并发、进程匹配（`find-process-mode`：默认 / 关闭 / 严格 / 总是）、TCP 保活间隔与空闲、禁用 TCP 保活、出站网卡（`interface-name`）、地理数据加载（`geodata-loader`）、禁用 ETag（`etag-support: false`）、保存 Fake-IP 映射（`profile.store-fake-ip`）、下载 User-Agent（`global-ua`）。`global-client-fingerprint` 已被内核移除，不提供 |
 | DNS 高级 | 作用于当前生效的 dns 段（跟随订阅或接管均可）：本机 DNS 监听（`listen`）、优先 HTTP/3、缓存算法（`cache-algorithm`）、引导服务器（`default-nameserver`）、备用服务器（`fallback`）及其过滤（`fallback-filter` 的 geoip / geoip-code / ipcidr / domain） |
 | 嗅探高级 | 不强制 DNS 映射（`force-dns-mapping: false`）；嗅探纯 IP 连接已在嗅探栏 |
