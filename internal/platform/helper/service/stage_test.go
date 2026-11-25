@@ -608,3 +608,74 @@ func TestStagePrunesOldFiles(t *testing.T) {
 		}
 	}
 }
+
+// The built-in Tailscale node's state follows the user's copy into the
+// helper's work directory at a start (one tailnet device for the root-run
+// and the user-run core), stays however old while the user's directory
+// has it, and goes with the rest once a logout removed the user's.
+func TestStageTailscaleState(t *testing.T) {
+	s, f := stageFixture(t)
+	mustWrite(t, f.spec.Config, "mixed-port: 7890\n")
+	user := f.spec.WorkDir
+	mustWrite(t, filepath.Join(user, "tailscale", tsStateFile), `{"user":1}`)
+	mustWrite(t, filepath.Join(user, "tailscale", "other"), "not copied")
+	old := time.Now().Add(-2 * pruneAge)
+	put := func(rel string) {
+		t.Helper()
+		p := filepath.Join(s.WorkDir, rel)
+		mustWrite(t, p, "root")
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("tailscale/derpmap.cached.json") // the core's own, kept with the directory
+	put("tailscale-1/" + tsStateFile)    // logged out: the user's directory is gone
+
+	// a reload copies nothing
+	if _, err := s.stage(f.spec, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(s.WorkDir, "tailscale", tsStateFile)); err == nil {
+		t.Fatal("a reload seeded the state")
+	}
+	if _, err := s.stage(f.spec, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := readOr(filepath.Join(s.WorkDir, "tailscale", tsStateFile)); got != `{"user":1}` {
+		t.Errorf("state = %q", got)
+	}
+	if _, err := os.Lstat(filepath.Join(s.WorkDir, "tailscale", "other")); err == nil {
+		t.Error("a file other than the state was copied")
+	}
+	if got := readOr(filepath.Join(s.WorkDir, "tailscale", "derpmap.cached.json")); got != "root" {
+		t.Errorf("old file of a kept state directory pruned: %q", got)
+	}
+	if _, err := os.Lstat(filepath.Join(s.WorkDir, "tailscale-1")); err == nil {
+		t.Error("state directory of a logout kept")
+	}
+
+	// the root-run core wrote a newer state: the user's older copy does not replace it
+	root := filepath.Join(s.WorkDir, "tailscale", tsStateFile)
+	mustWrite(t, root, `{"root":2}`)
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(user, "tailscale", tsStateFile), past, past); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.stage(f.spec, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := readOr(root); got != `{"root":2}` {
+		t.Errorf("newer root state replaced: %q", got)
+	}
+}
+
+func TestTSStateDirName(t *testing.T) {
+	for name, want := range map[string]bool{
+		"tailscale": true, "tailscale-1": true, "Tailscale-12": true,
+		"tailscale-": false, "tailscale-x": false, "tailscaled": false, "tailscale-1-2": false, "ts": false,
+	} {
+		if got := tsStateDir(name); got != want {
+			t.Errorf("%q: %v", name, got)
+		}
+	}
+}

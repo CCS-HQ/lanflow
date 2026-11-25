@@ -30,6 +30,7 @@ import (
 type Fake struct {
 	mu             sync.Mutex
 	appLogsCleared bool
+	tsKey          string // SetTailscaleAuthKey
 	st             model.Status
 	up, down       []int64
 	px             model.ProxySnapshot
@@ -2028,5 +2029,31 @@ func (f *Fake) ClearSubscriptions() {
 func (f *Fake) TailscaleReport() model.TailscaleReport {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return model.TailscaleReport{Compat: f.set.TailscaleCompat, Config: f.set.Tailscale.Clone(), State: f.st.Tailscale}
+	return model.TailscaleReport{Compat: f.set.TailscaleCompat, Config: f.set.Tailscale.Clone(), Builtin: f.set.TailscaleBuiltin, AuthKey: f.tsKey != "", State: f.st.Tailscale}
+}
+
+// SetTailscaleAuthKey implements app.API.
+func (f *Fake) SetTailscaleAuthKey(key string) error {
+	f.mu.Lock()
+	f.tsKey = key
+	f.mu.Unlock()
+	f.emit(app.TopicSettings)
+	return nil
+}
+
+// TailscaleAuthKeySet implements app.API.
+func (f *Fake) TailscaleAuthKeySet() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tsKey != ""
+}
+
+// LogoutTailscale implements app.API.
+func (f *Fake) LogoutTailscale() error {
+	f.mu.Lock()
+	f.set.TailscaleBuiltin.StateGen++
+	f.st.Tailscale.Builtin = model.TailscaleBuiltinState{State: model.TSStateNeedsLogin, Hostname: f.st.Tailscale.Builtin.Hostname}
+	f.mu.Unlock()
+	f.emit(app.TopicSettings, app.TopicStatus)
+	return nil
 }

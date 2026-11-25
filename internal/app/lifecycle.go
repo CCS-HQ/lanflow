@@ -117,6 +117,9 @@ func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, 
 	}
 	in.Coexist = coexistInput(co, set, sysDNS)
 	in.Tailscale = tailscaleInput(tsInfo, set, sysDNS)
+	if n := in.Tailscale.Node; n != nil {
+		n.AuthKey = s.tailscaleAuthKey() // the keychain; tailscale_builtin.go
+	}
 	in.Capture = s.captureInput(set) // capture.go
 	if a.useRules {
 		in.CustomRules = a.custom
@@ -718,7 +721,8 @@ func (s *Service) afterConfigChange() {
 	s.refreshRules()
 	s.refreshProviders()
 	s.rebuildRoutes()
-	s.captureAfterReload() // capture.go
+	s.captureAfterReload()   // capture.go
+	s.tailscaleAfterConfig() // tailscale_builtin.go
 }
 
 func (s *Service) running() bool {

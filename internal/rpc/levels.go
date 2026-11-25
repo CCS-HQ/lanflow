@@ -172,6 +172,10 @@ var methodLevels = map[string]Level{
 
 	// ---- Tailscale ----
 	"TailscaleReport": LevelRead,
+	// the auth key is a credential: only the user enters it, in the window
+	"SetTailscaleAuthKey": LevelUI,
+	"TailscaleAuthKeySet": LevelRead,
+	"LogoutTailscale":     LevelDanger,
 
 	// ---- mirror ----
 	"TestMirrors": LevelRead,

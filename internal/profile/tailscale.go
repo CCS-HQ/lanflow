@@ -11,6 +11,10 @@ import (
 // Lanflow.
 const layerTailscale = "Tailscale 兼容"
 
+// layerTailscaleBuiltin attributes the lines added for the core's own
+// tailnet node.
+const layerTailscaleBuiltin = "内置 Tailscale"
+
 // TailscaleOutbound is the hidden outbound that reaches the tailnet: a
 // direct outbound bound to Tailscale's interface. Bound, because with the
 // TUN on the core binds every other outbound to the physical interface,
@@ -19,12 +23,18 @@ const layerTailscale = "Tailscale 兼容"
 // themselves and out of the window's lists (app.hideInternalProxies).
 const TailscaleOutbound = "LANFLOW-TAILSCALE"
 
-// Tailscale describes Tailscale running beside Lanflow and how the
-// tailnet is kept out of Lanflow's TUN, fake-ip DNS and remote nodes. The
-// app works it out from detection and the user's configuration; the zero
-// value (no Iface) adds nothing.
+// Tailscale describes how the tailnet is reached and kept out of
+// Lanflow's fake-ip DNS and remote nodes: through the Tailscale app
+// running beside Lanflow (Iface, 兼容), or through the core's own tailnet
+// node (Node, 内置). The app works it out from detection and the user's
+// configuration; the zero value (neither) adds nothing.
 type Tailscale struct {
 	Iface string // Tailscale's interface: TailscaleOutbound binds to it
+	// Node makes TailscaleOutbound the core's own tailnet node (Mihomo's
+	// tailscale outbound) instead of a direct outbound bound to Iface.
+	// Then nothing is kept out of the TUN: the tailnet is only reachable
+	// through the core.
+	Node *TailscaleNode
 	// ExcludeCIDRs never enter the TUN (route-exclude-address): the system
 	// routes them to Tailscale. Rules send them to TailscaleOutbound when
 	// they reach the core some other way (the system proxy, an app set to
@@ -44,13 +54,61 @@ type Tailscale struct {
 	DNS []DomainDNS
 }
 
+// TailscaleNode is the core's own tailnet node (Mihomo's `type:
+// tailscale` outbound, tsnet).
+type TailscaleNode struct {
+	Hostname   string
+	AuthKey    string // "" = log in through the URL the core logs
+	ControlURL string // "" = Tailscale's coordination server
+	// StateDir is relative to the core's work directory (Mihomo refuses
+	// one outside it).
+	StateDir     string
+	AcceptRoutes bool
+	ExitNode     string
+}
+
+// TailscaleDNS is the nameserver that resolves through the node's MagicDNS
+// (Mihomo's tailscale:// scheme names the outbound).
+const TailscaleDNS = "tailscale://" + TailscaleOutbound
+
 // DomainDNS is a domain suffix and the servers that resolve it.
 type DomainDNS struct {
 	Domain  string
 	Servers []string
 }
 
-func (ts Tailscale) empty() bool { return ts.Iface == "" }
+func (ts Tailscale) empty() bool { return ts.Iface == "" && ts.Node == nil }
+
+// outbound is TailscaleOutbound for ts.
+func (ts Tailscale) outbound() *yaml.Node {
+	n := ts.Node
+	if n == nil {
+		return mapNode(
+			"name", strNode(TailscaleOutbound),
+			"type", strNode("direct"),
+			"udp", boolNode(true),
+			"interface-name", strNode(ts.Iface),
+		)
+	}
+	m := mapNode(
+		"name", strNode(TailscaleOutbound),
+		"type", strNode("tailscale"),
+		"udp", boolNode(true),
+	)
+	opt := func(k, v string) {
+		if v != "" {
+			mapSet(m, k, strNode(v))
+		}
+	}
+	opt("hostname", n.Hostname)
+	opt("auth-key", n.AuthKey)
+	opt("control-url", n.ControlURL)
+	opt("state-dir", n.StateDir)
+	// always written: a node keeps the preference it was last given
+	mapSet(m, "accept-routes", boolNode(n.AcceptRoutes))
+	opt("exit-node", n.ExitNode)
+	return m
+}
 
 // applyTailscale adds the Tailscale layer. It runs after the aTrust layer,
 // so its rules come first.
@@ -64,14 +122,12 @@ func applyTailscale(c *composer, ts Tailscale, tunOn bool) {
 		return
 	}
 	c.layer = layerTailscale
+	if ts.Node != nil {
+		c.layer = layerTailscaleBuiltin
+	}
 
 	ps := c.seq("proxies")
-	ps.Content = append(ps.Content, c.mark(mapNode(
-		"name", strNode(TailscaleOutbound),
-		"type", strNode("direct"),
-		"udp", boolNode(true),
-		"interface-name", strNode(ts.Iface),
-	)))
+	ps.Content = append(ps.Content, c.mark(ts.outbound()))
 	excludeFromAutoGroups(c, "^"+TailscaleOutbound+"$")
 
 	// rules: ahead of everything else
@@ -120,7 +176,10 @@ func applyTailscale(c *composer, ts Tailscale, tunOn bool) {
 			e := ts.DNS[i]
 			var servers []string
 			for _, s := range e.Servers {
-				servers = append(servers, s+"#"+TailscaleOutbound)
+				if !strings.Contains(s, "://") { // a plain address: reached through the outbound
+					s += "#" + TailscaleOutbound
+				}
+				servers = append(servers, s)
 			}
 			mapPrepend(policy, "+."+e.Domain, c.mark(strSeq(servers)))
 		}

@@ -53,7 +53,7 @@ const tailscaleDNSOnly = "ts.net"
 // state. Never call with mu held.
 func (s *Service) scanTailscale() tailscale.Info {
 	s.mu.Lock()
-	on := s.state.settings.TailscaleCompat
+	on := tailscaleWatched(s.state.settings)
 	detect := s.d.tsDetect
 	s.mu.Unlock()
 	if !on || detect == nil || s.rootCtx.Err() != nil {
@@ -62,6 +62,12 @@ func (s *Service) scanTailscale() tailscale.Info {
 	ctx, cancel := s.svcCtx(8 * time.Second)
 	defer cancel()
 	return detect(ctx, isOwnTUN)
+}
+
+// tailscaleWatched reports whether Tailscale is looked for: for 兼容,
+// and for 内置, which gives way to the Tailscale app.
+func tailscaleWatched(set model.Settings) bool {
+	return set.TailscaleCompat || set.TailscaleBuiltin.Enabled
 }
 
 // detectTailscale detects and stores the result at once (no grace): at a
@@ -78,11 +84,12 @@ func (s *Service) detectTailscale() bool {
 func (s *Service) storeTailscale(info tailscale.Info, settle bool) bool {
 	s.mu.Lock()
 	set := s.state.settings
-	if !set.TailscaleCompat {
+	watched := tailscaleWatched(set)
+	if !watched {
 		info = tailscale.Info{}
 	}
 	prev := s.state.tailscale
-	if !info.Running() && prev.Running() && set.TailscaleCompat && !settle {
+	if !info.Running() && prev.Running() && watched && !settle {
 		s.state.tsMisses++
 		if s.state.tsMisses < tailscaleGrace {
 			s.mu.Unlock()
@@ -94,7 +101,7 @@ func (s *Service) storeTailscale(info tailscale.Info, settle bool) bool {
 		addrs := !slices.Equal(info.Addrs, prev.Addrs)
 		s.state.tailscale = info
 		if addrs {
-			s.state.st.Tailscale = tailscaleStatus(info, tailscaleInput(info, set, s.state.net.DNS))
+			s.setTailscaleStatusLocked(info, tailscaleInput(info, set, s.state.net.DNS))
 		}
 		s.mu.Unlock()
 		if addrs {
@@ -104,19 +111,28 @@ func (s *Service) storeTailscale(info tailscale.Info, settle bool) bool {
 	}
 	s.state.tailscale = info
 	ts := tailscaleInput(info, set, s.state.net.DNS)
-	s.state.st.Tailscale = tailscaleStatus(info, ts)
+	s.setTailscaleStatusLocked(info, ts)
 	tunOn := set.TUN
-	first := info.Running() && !s.state.tsNotified
+	first := info.Running() && set.TailscaleCompat && !s.state.tsNotified
 	if first {
 		s.state.tsNotified = true
 	}
+	paused := set.TailscaleBuiltin.Enabled && info.Running() != prev.Running()
 	s.mu.Unlock()
 	if info.Running() {
 		s.alog.Infof("Tailscale: interface %s, suffix %q, MagicDNS %v, exit node %v, routes %v, resolvers %d", info.Iface, info.Suffix, info.MagicDNS, info.ExitNode, info.Routes, len(info.Resolvers))
 	} else {
-		s.alog.Infof("Tailscale: not running (compatibility setting %s)", onOff(set.TailscaleCompat))
+		s.alog.Infof("Tailscale: not running (compatibility setting %s, built-in %s)", onOff(set.TailscaleCompat), onOff(set.TailscaleBuiltin.Enabled))
 	}
 	s.em.emit(TopicStatus)
+	switch {
+	case paused && info.Running():
+		s.notify(Notice{Kind: "toast", Title: i18n.T("检测到 Tailscale App，内置 Tailscale 已暂停"),
+			Detail: i18n.T("Tailscale App 和内置 Tailscale 只能用一个。退出 Tailscale App 后内置节点会自动启用；也可以关闭内置 Tailscale。")})
+	case paused:
+		s.notify(Notice{Kind: "toast", Title: i18n.T("Tailscale App 已退出，内置 Tailscale 已启用"),
+			Detail: i18n.T("经过澜流的流量改由内置节点访问 tailnet。")})
+	}
 	if first {
 		s.notify(Notice{Kind: "toast", Title: i18n.T("检测到 Tailscale，已启用兼容模式"),
 			Detail: i18n.T("tailnet 地址和 MagicDNS 域名将直接经 Tailscale 访问，不经过澜流的节点和 TUN。")})
@@ -133,7 +149,7 @@ func (s *Service) storeTailscale(info tailscale.Info, settle bool) bool {
 func tailscaleStatus(i tailscale.Info, ts profile.Tailscale) model.TailscaleState {
 	st := model.TailscaleState{
 		Running: i.Running(), Interface: i.Iface, Addresses: i.Addrs, Suffix: i.Suffix, ExitNode: i.ExitNode,
-		Applied: ts.Iface != "",
+		Applied: ts.Iface != "" || ts.Node != nil,
 	}
 	if st.Applied {
 		st.Outbound = profile.TailscaleOutbound
@@ -157,6 +173,9 @@ func tailscaleStatus(i tailscale.Info, ts profile.Tailscale) model.TailscaleStat
 // the user's lists (Settings.Tailscale) and the system's DNS servers. The
 // zero value means no layer.
 func tailscaleInput(i tailscale.Info, set model.Settings, sysDNS []string) profile.Tailscale {
+	if tailscaleBuiltinOn(i, set) {
+		return builtinTailscaleInput(set) // tailscale_builtin.go
+	}
 	if !set.TailscaleCompat || !i.Running() {
 		return profile.Tailscale{}
 	}
@@ -240,6 +259,9 @@ func tailscaleInput(i tailscale.Info, set model.Settings, sysDNS []string) profi
 // its ranges and every name the layer resolves with Tailscale's DNS.
 func tailscaleBypass(base []string, ts profile.Tailscale) []string {
 	out := append([]string(nil), base...)
+	if ts.Node != nil {
+		return out // the built-in node is only reachable through the core
+	}
 	add := func(v string) {
 		if !slices.Contains(out, v) {
 			out = append(out, v)
@@ -272,7 +294,7 @@ func (s *Service) tailscaleLocked() profile.Tailscale {
 func (s *Service) tailscaleOwn() func(string) bool {
 	s.mu.Lock()
 	iface := ""
-	if s.state.settings.TailscaleCompat {
+	if tailscaleWatched(s.state.settings) {
 		iface = s.state.tailscale.Iface
 	}
 	s.mu.Unlock()
@@ -283,7 +305,7 @@ func (s *Service) tailscaleOwn() func(string) bool {
 // stored) changes the layer, and refreshes Status.Tailscale when it does.
 // Never call with mu held.
 func (s *Service) tailscaleSettingsChanged(old, in model.Settings) bool {
-	if reflect.DeepEqual(old.Tailscale, in.Tailscale) && old.TailscaleCompat == in.TailscaleCompat {
+	if reflect.DeepEqual(old.Tailscale, in.Tailscale) && old.TailscaleCompat == in.TailscaleCompat && old.TailscaleBuiltin == in.TailscaleBuiltin {
 		return false
 	}
 	s.mu.Lock()
@@ -293,7 +315,7 @@ func (s *Service) tailscaleSettingsChanged(old, in model.Settings) bool {
 		s.mu.Unlock()
 		return false
 	}
-	s.state.st.Tailscale = tailscaleStatus(info, after)
+	s.setTailscaleStatusLocked(info, after)
 	s.mu.Unlock()
 	s.em.emit(TopicStatus)
 	return true
@@ -419,16 +441,23 @@ func (s *Service) TailscaleReport() model.TailscaleReport {
 	s.mu.Lock()
 	set := s.state.settings
 	st := s.state.st.Tailscale
+	st.Builtin.Addresses = slices.Clone(st.Builtin.Addresses)
 	info := s.state.tailscale
+	running := s.state.st.Core == model.CoreRunning
 	s.mu.Unlock()
-	return tailscaleReport(set, st, info.Resolvers, runtime.GOOS)
+	r := tailscaleReport(set, st, info.Resolvers, runtime.GOOS)
+	r.AuthKey = s.TailscaleAuthKeySet()
+	r.Notes = append(r.Notes, builtinNotes(set, st, running)...)
+	return r
 }
 
 // tailscaleReport words the report and its notes.
 func tailscaleReport(set model.Settings, st model.TailscaleState, resolvers []tailscale.Resolver, goos string) model.TailscaleReport {
-	r := model.TailscaleReport{Compat: set.TailscaleCompat, Config: set.Tailscale.Clone(), State: st}
+	r := model.TailscaleReport{Compat: set.TailscaleCompat, Config: set.Tailscale.Clone(), Builtin: set.TailscaleBuiltin, State: st}
 	note := func(s string) { r.Notes = append(r.Notes, s) }
 	switch {
+	case set.TailscaleBuiltin.Enabled && !st.Running:
+		// the built-in node is in use: builtinNotes
 	case !set.TailscaleCompat:
 		note(i18n.T("Tailscale 兼容已关闭：tailnet 地址和 MagicDNS 域名按订阅规则处理，开启 TUN 时通常无法访问。"))
 	case !st.Running:
