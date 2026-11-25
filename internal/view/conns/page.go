@@ -348,13 +348,7 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, co
 		case "host":
 			env.Highlight(c, cn.Host, q, t.Text).SingleLine().Tooltip(cn.Host)
 		case "process":
-			name := cn.Process
-			switch {
-			case cn.IsInner():
-				name = i18n.T("链路前置")
-			case name == "":
-				name = "—"
-			}
+			name := processDisplayName(cn)
 			ui.Row(c).Gap(5).AlignItems(ui.Center).FillWidth().Children(func() {
 				if cn.Process != "" {
 					p.icons.Draw(c, t, cn.ProcessPath, procicon.Size)
@@ -566,7 +560,7 @@ func (p *Page) filter(src []model.Connection) []model.Connection {
 		h, ok := p.hay[cn.ID]
 		if !ok || !h.of(cn) {
 			if h, ok = old[cn.ID]; !ok || !h.of(cn) {
-				h = hayText{host: cn.Host, process: cn.Process, chains: len(cn.Chains), retChains: len(cn.CaptureReturnChains), text: strings.ToLower(haystack(cn))}
+				h = hayText{host: cn.Host, process: cn.Process, processPath: cn.ProcessPath, chains: len(cn.Chains), retChains: len(cn.CaptureReturnChains), text: strings.ToLower(haystack(cn))}
 			}
 			p.hay[cn.ID] = h
 		}
@@ -581,25 +575,53 @@ func (p *Page) filter(src []model.Connection) []model.Connection {
 // still change during its life (the process found late, the chain
 // resolved), to tell when it is out of date.
 type hayText struct {
-	host, process string
-	chains        int
-	retChains     int
-	text          string
+	host, process, processPath string
+	chains                     int
+	retChains                  int
+	text                       string
 }
 
 func (h hayText) of(cn model.Connection) bool {
-	return h.host == cn.Host && h.process == cn.Process && h.chains == len(cn.Chains) && h.retChains == len(cn.CaptureReturnChains)
+	return h.host == cn.Host && h.process == cn.Process && h.processPath == cn.ProcessPath && h.chains == len(cn.Chains) && h.retChains == len(cn.CaptureReturnChains)
 }
 
-// haystack is the text the search matches: host, process, rule with its
-// payload, chain, destination IP and source, so a topology node's label
-// (topology_graph.go) finds its connections.
+// appBundleName returns the outermost macOS .app bundle name from a process
+// path (e.g. "/Applications/Antigravity.app/Contents/.../language_server" ->
+// "Antigravity"), or "" when path is not inside an .app bundle.
+func appBundleName(path string) string {
+	for _, seg := range strings.Split(path, "/") {
+		if strings.HasSuffix(seg, ".app") && len(seg) > 4 {
+			return strings.TrimSuffix(seg, ".app")
+		}
+	}
+	return ""
+}
+
+// processDisplayName formats the process column: for helper binaries inside a
+// macOS .app bundle, lead with the owning app name so it is immediately
+// recognizable and highlights when searching by app name.
+func processDisplayName(cn model.Connection) string {
+	if cn.IsInner() {
+		return i18n.T("链路前置")
+	}
+	if cn.Process == "" {
+		return "—"
+	}
+	if app := appBundleName(cn.ProcessPath); app != "" && !strings.EqualFold(app, cn.Process) {
+		return app + " · " + cn.Process
+	}
+	return cn.Process
+}
+
+// haystack is the text the search matches: host, process (and its path /
+// owning .app bundle), rule with its payload, chain, destination IP and
+// source, so a topology node's label (topology_graph.go) finds its connections.
 func haystack(cn model.Connection) string {
 	src := cn.SourceIP
 	if cn.SourcePort != "" {
 		src += ":" + cn.SourcePort
 	}
-	return cn.Host + " " + cn.Process + " " + ruleName(cn) + " " + cn.RulePayload + " " + chain(cn) + " " + cn.DstIP + " " + src
+	return cn.Host + " " + cn.Process + " " + cn.ProcessPath + " " + ruleName(cn) + " " + cn.RulePayload + " " + chain(cn) + " " + cn.DstIP + " " + src
 }
 
 // sortRows returns rows in the order s asks for, newest first among
@@ -621,7 +643,7 @@ func sortRows(rows []model.Connection, s ui.SortOrder) []model.Connection {
 		case "host":
 			k.text = cn.Host
 		case "process":
-			k.text = cn.Process
+			k.text = processDisplayName(*cn)
 		case "rule":
 			k.text = ruleName(*cn)
 		case "chain":
