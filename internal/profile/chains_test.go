@@ -319,3 +319,19 @@ func TestChainKeepsOwnDialerProxy(t *testing.T) {
 	}
 	checkWithCore(t, out.YAML)
 }
+
+func TestChainHopOf(t *testing.T) {
+	t.Parallel()
+	chains := []model.ProxyChain{{ID: "a-b", Name: "中转", Hops: []string{"香港", "B", "C"}}}
+	if ch, pos, node, ok := ChainHopOf(ChainCloneName("a-b", 3), chains); !ok || ch.Name != "中转" || pos != 3 || node != "C" {
+		t.Fatalf("got %v %d %q %v", ch, pos, node, ok)
+	}
+	for _, n := range []string{"C", ChainCloneName("a-b", 1), ChainCloneName("a-b", 4), ChainCloneName("zz", 2), "LANFLOW-CHAIN-x"} {
+		if _, _, _, ok := ChainHopOf(n, chains); ok {
+			t.Errorf("%q matched", n)
+		}
+	}
+	if DisplayName(ChainCloneName("a-b", 2), chains) != "B" || DisplayName("X", chains) != "X" {
+		t.Fatal("DisplayName")
+	}
+}

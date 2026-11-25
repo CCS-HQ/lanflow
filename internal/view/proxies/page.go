@@ -61,22 +61,25 @@ func gridColumnsFor(w float32) int {
 type Page struct {
 	e *env.Env
 
-	query       string
-	search      ui.Handle
-	sort        int
-	hideTimeout bool
-	view        int                       // viewList or viewGrid, remembered
-	open        map[string]bool           // group expanded state, remembered across restarts
-	openInit    map[string]bool           // groups whose default state was decided
-	loaded      bool                      // open/view restored from API.UIState
-	provOpen    bool                      // 代理集合 section expanded
-	scrollTo    string                    // group to reveal after Navigate
-	locate       locateState               // 定位当前节点 (locate.go)
-	manual       manualNodeDialog          // 添加 / 编辑手动节点 (manual_dialog.go)
+	query        string
+	search       ui.Handle
+	sort         int
+	hideTimeout  bool
+	view         int              // viewList or viewGrid, remembered
+	open         map[string]bool  // group expanded state, remembered across restarts
+	openInit     map[string]bool  // groups whose default state was decided
+	loaded       bool             // open/view restored from API.UIState
+	provOpen     bool             // 代理集合 section expanded
+	scrollTo     string           // group to reveal after Navigate
+	locate       locateState      // 定位当前节点 (locate.go)
+	manual       manualNodeDialog // 添加 / 编辑手动节点 (manual_dialog.go)
 	manualByName map[string]model.ManualNode
-	icons        map[string]ui.ImageSource // decoded group icons by reference (locate.go)
-	iconFail    map[string]bool           // references that do not decode
-	lists       map[string]*ui.ListState  // the virtual lists of large groups, by group
+	chains       chainsDialog                // 链式代理 (chains.go)
+	chainList    []model.ProxyChain          // API.ProxyChains of this build
+	chainByName  map[string]model.ProxyChain // chains in force, by their group's name
+	icons        map[string]ui.ImageSource   // decoded group icons by reference (locate.go)
+	iconFail     map[string]bool             // references that do not decode
+	lists        map[string]*ui.ListState    // the virtual lists of large groups, by group
 
 	// idle is set by View when no node of the snapshot it draws is being
 	// tested: no group then walks its members to look for one (group).
@@ -206,6 +209,12 @@ func (p *Page) View(c *ui.Context) {
 				p.testAll()
 			}
 		}
+		more := ui.Button(c, "").Label(i18n.T("更多")).Tooltip(i18n.T("更多"))
+		more.Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
+			if m.Item(i18n.T("链式代理…")).Disabled(!st.HasSubscriptions).Chosen() {
+				p.openChains()
+			}
+		})
 		add := ui.Button(c, "").Label(i18n.T("添加节点"))
 		add.Children(func() {
 			k.Icon(c, "plus", 13)
@@ -220,6 +229,12 @@ func (p *Page) View(c *ui.Context) {
 	}
 	if run && c.Shortcut(ui.Cmd, ui.KeyR) {
 		p.testAll()
+	}
+
+	p.chainList = p.e.API.ProxyChains()
+	p.chainByName = map[string]model.ProxyChain{}
+	for _, ch := range p.chainList {
+		p.chainByName[ch.Name] = ch
 	}
 
 	manualNodes := p.e.API.ManualNodes()
@@ -254,6 +269,7 @@ func (p *Page) View(c *ui.Context) {
 			p.stoppedManualSection(c, manualNodes)
 		}
 		p.manualDialogView(c)
+		p.chainsDialogView(c, px)
 		return
 	}
 
@@ -304,6 +320,7 @@ func (p *Page) View(c *ui.Context) {
 		})
 	})
 	p.manualDialogView(c)
+	p.chainsDialogView(c, px)
 }
 
 // visibleGroups returns the groups in config order, GLOBAL first in
@@ -358,6 +375,9 @@ func (p *Page) filterNodes(g model.ProxyGroup, px model.ProxySnapshot) []string 
 			continue
 		}
 		seen[n] = struct{}{}
+		if profile.IsChainClone(n) {
+			continue // a chain's generated node: its group shows the chain (chains.go)
+		}
 		if q != "" && !strings.Contains(strings.ToLower(n), q) {
 			continue
 		}
@@ -451,6 +471,11 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 		}
 	}
 	selectable := g.Type == model.GroupSelect
+	chain, isChain := p.chainByName[g.Name]
+	inForce := isChain && len(g.All) == 1 && profile.IsChainClone(g.All[0])
+	if inForce {
+		now = strings.Join(chain.Hops, " → ")
+	}
 
 	box := ui.Column(c.Key("group:"+g.Name)).Radius(12).Background(t.Background).Border(1, t.Border.Alpha(0.75)).Clip()
 	if p.scrollTo == g.Name {
@@ -474,9 +499,15 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 					})
 				}
 				meta := groupTypeName(g.Type)
-				if p.query != "" {
+				switch {
+				case inForce:
+					meta = i18n.Tn(len(chain.Hops), "链式代理 · %d 跳", len(chain.Hops))
+				case isChain:
+					k.Tag(c, i18n.T("已停用"), "gray")
+					meta = i18n.T("链路已停用，命中它的流量被拒绝")
+				case p.query != "":
 					meta = i18n.Tn(matched, "%s · %d 个匹配", meta, matched)
-				} else if len(g.All) > 0 {
+				case len(g.All) > 0:
 					meta = fmt.Sprintf("%s · %d", meta, len(g.All))
 				}
 				ui.Text(c, meta).FontSize(11.5).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(meta)
@@ -507,6 +538,18 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 					}
 					m.Separator()
 				}
+				if isChain {
+					if m.Item(i18n.T("编辑链路…")).Chosen() {
+						p.editChain(chain)
+					}
+					m.Separator()
+				}
+				if g.Name == profile.ChainGroupName || g.Name == profile.ChainGroupAltName {
+					if m.Item(i18n.T("管理链式代理…")).Chosen() {
+						p.openChains()
+					}
+					m.Separator()
+				}
 				if m.Item(i18n.T("设为主代理组")).Checked(g.Name == px.MainGroup).Disabled(!selectable).Chosen() {
 					name := g.Name
 					p.e.Run(func() error { return p.e.API.SetMainGroup(name) }, i18n.Tf("已将「%s」设为主代理组", name))
@@ -522,6 +565,13 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 			p.persist()
 		}
 		parts.Panel(func() {
+			if inForce {
+				ui.Column(c).Padding(0, 6, 6, 6).Children(func() {
+					ui.Box(c).Height(1).Background(t.Border).Margin(0, 6, 4, 6)
+					p.chainGroupPanel(c, g, chain, px)
+				})
+				return
+			}
 			if nodes == nil {
 				nodes = p.filterNodes(g, px)
 			}
@@ -660,7 +710,8 @@ func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 		tip = n + " · " + proto
 	}
 
-	tile := ui.Row(c.Key("cell:" + n)).Radius(10).AlignItems(ui.Stretch).MinHeight(52).Clip()
+	tile := ui.Row(c.Key("cell:" + n)).Radius(10).AlignItems(ui.Stretch).MinHeight(52).Clip().
+		ContextMenu(func(m *ui.Menu) { p.nodeChainMenu(m, g, n, px, names) })
 	selHovered := false
 	selClicked := false
 
@@ -876,7 +927,8 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 	proto, _, builtin := memberKind(n, px, names)
 	cur := n == now
 
-	row := ui.Row(c.Key("node:" + n)).Height(nodeRowH).AlignItems(ui.Stretch).Radius(6).Clip()
+	row := ui.Row(c.Key("node:" + n)).Height(nodeRowH).AlignItems(ui.Stretch).Radius(6).Clip().
+		ContextMenu(func(m *ui.Menu) { p.nodeChainMenu(m, g, n, px, names) })
 	selHovered := false
 	selClicked := false
 

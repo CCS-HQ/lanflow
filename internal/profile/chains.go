@@ -2,6 +2,7 @@ package profile
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -60,6 +61,39 @@ func ChainCloneName(id string, i int) string {
 
 // IsChainClone reports whether name is a node a chain generated.
 func IsChainClone(name string) bool { return strings.HasPrefix(name, ChainClonePrefix) }
+
+// ChainHopOf returns, for a clone name, the chain it belongs to and the
+// position (1-based) and name of the original node it clones.
+func ChainHopOf(name string, chains []model.ProxyChain) (ch model.ProxyChain, pos int, node string, ok bool) {
+	rest, found := strings.CutPrefix(name, ChainClonePrefix)
+	if !found {
+		return ch, 0, "", false
+	}
+	i := strings.LastIndexByte(rest, '-')
+	if i <= 0 {
+		return ch, 0, "", false
+	}
+	id := rest[:i]
+	n, err := strconv.Atoi(rest[i+1:])
+	if err != nil {
+		return ch, 0, "", false
+	}
+	for _, c := range chains {
+		if c.ID == id && n >= 2 && n <= len(c.Hops) {
+			return c, n, c.Hops[n-1], true
+		}
+	}
+	return ch, 0, "", false
+}
+
+// DisplayName is how the interface names a proxy: a chain clone by the
+// node it clones, anything else as it is.
+func DisplayName(name string, chains []model.ProxyChain) string {
+	if _, _, node, ok := ChainHopOf(name, chains); ok {
+		return node
+	}
+	return name
+}
 
 // IsReservedName reports whether name uses the prefix of the names
 // Lanflow generates.
