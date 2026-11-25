@@ -14,6 +14,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
@@ -25,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,15 +118,17 @@ type tracked struct {
 
 // Agent is a running capture agent.
 type Agent struct {
-	cfg   atomic.Pointer[compiled]
-	root  *ca.Root
-	st    *store
-	ln    net.Listener
-	src   *sourceCheck
-	loop  *loopGuard
-	pins  *pinTable
-	sem   chan struct{}
-	roots *x509.CertPool // upstream roots; nil = the system's
+	cfg     atomic.Pointer[compiled]
+	root    *ca.Root
+	st      *store
+	ln      net.Listener
+	src     *sourceCheck
+	loop    *loopGuard
+	pins    *pinTable
+	sem     chan struct{}
+	roots   *x509.CertPool // upstream roots; nil = the system's
+	upCache tls.ClientSessionCache
+	tickets *ticketRing
 
 	mu     sync.Mutex
 	active map[*tracked]struct{} // decrypted connections
@@ -132,6 +136,43 @@ type Agent struct {
 	wg     sync.WaitGroup
 	// Accepts counts accepted connections (tests).
 	Accepts atomic.Int64
+}
+
+const ticketRotateInterval = time.Hour
+
+// ticketRing holds downstream TLS session ticket keys so reconnecting
+// clients can resume TLS sessions across connections. Keys rotate hourly
+// while keeping the previous key for graceful overlap.
+type ticketRing struct {
+	mu      sync.Mutex
+	keys    [][32]byte
+	rotated time.Time
+}
+
+func newTicketRing() *ticketRing {
+	r := &ticketRing{}
+	r.rotateLocked(time.Now())
+	return r
+}
+
+func (r *ticketRing) rotateLocked(now time.Time) {
+	var k [32]byte
+	_, _ = rand.Read(k[:])
+	if len(r.keys) == 0 {
+		r.keys = [][32]byte{k}
+	} else {
+		r.keys = [][32]byte{k, r.keys[0]}
+	}
+	r.rotated = now
+}
+
+func (r *ticketRing) current() [][32]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if now := time.Now(); len(r.keys) == 0 || now.Sub(r.rotated) >= ticketRotateInterval {
+		r.rotateLocked(now)
+	}
+	return slices.Clone(r.keys)
 }
 
 // New listens and returns an agent; Serve runs it.
@@ -151,6 +192,7 @@ func New(cfg Config, root *ca.Root) (*Agent, error) {
 		max = 256
 	}
 	a := &Agent{root: root, ln: ln, pins: newPinTable(), sem: make(chan struct{}, max), active: map[*tracked]struct{}{},
+		upCache: tls.NewLRUClientSessionCache(256), tickets: newTicketRing(),
 		st: newStore(cfg.MaxFlows, cfg.BodyCap, cfg.MemLimit, cfg.SpillDir, 0)}
 	a.loop = newLoopGuard(time.Duration(cfg.LoopWindow)*time.Millisecond, cfg.LoopMax)
 	if cfg.NoLoopGuard {
@@ -169,7 +211,10 @@ func compile(c Config) *compiled {
 }
 
 // SetRoots replaces the upstream trust roots (tests; nil = system).
-func (a *Agent) SetRoots(p *x509.CertPool) { a.roots = p }
+func (a *Agent) SetRoots(p *x509.CertPool) {
+	a.roots = p
+	a.upCache = tls.NewLRUClientSessionCache(256)
+}
 
 // SetController points the source check at a controller (tests).
 func (a *Agent) SetController(addr string, dial func(ctx context.Context) (net.Conn, error)) {
@@ -412,19 +457,29 @@ func (a *Agent) handle(c net.Conn) {
 		a.relayQuiet(c, br, cfg, req)
 		return
 	}
-	// The kernel's view of the connection: source, process and the name
-	// it was asked for (a CONNECT to an already resolved destination
-	// carries only the IP; the return leg and the ECH check use the name).
-	local := a.locate(sel, req, &base)
-	if base.Host != req.host {
-		req.host = base.Host
-	}
 	switch {
 	case isTLS && ch == nil:
 		base.Proto = "tls"
+		if base.Attribution == "" {
+			base.Attribution = "unknown"
+		}
 		a.passthrough(c, br, cfg, req, base, "无法解析 ClientHello", model.FlowPassthrough)
 	case isTLS:
 		base.Proto = "tls"
+		if why, flags := a.preDecideTLS(cfg, sel, req, ch); why != "" {
+			if base.Attribution == "" {
+				base.Attribution = "unknown"
+			}
+			a.passthrough(c, br, cfg, req, base, why, flags...)
+			return
+		}
+		// The kernel's view of the connection: source, process and the name
+		// it was asked for (a CONNECT to an already resolved destination
+		// carries only the IP; the return leg and the ECH check use the name).
+		local := a.locate(sel, req, &base)
+		if base.Host != req.host {
+			req.host = base.Host
+		}
 		why, flags := a.decide(cfg, sel, req, ch)
 		if why == "" && !local {
 			why, flags = "来源不是本机或无法确认", []string{model.FlowPassthrough, model.FlowNotLocal}
@@ -439,10 +494,24 @@ func (a *Agent) handle(c net.Conn) {
 		a.mitm(c, br, cfg, sel, req, ch, base)
 	case !looksHTTP(br):
 		base.Proto = "tcp"
+		if base.Attribution == "" {
+			base.Attribution = "unknown"
+		}
 		a.passthrough(c, br, cfg, req, base, "非 HTTP", model.FlowPassthrough)
 	default:
 		// plaintext HTTP: recorded when selected, forwarded unchanged
 		base.Proto = "tcp"
+		if why, flags := a.preDecidePlain(cfg, sel, req); why != "" {
+			if base.Attribution == "" {
+				base.Attribution = "unknown"
+			}
+			a.passthrough(c, br, cfg, req, base, why, flags...)
+			return
+		}
+		local := a.locate(sel, req, &base)
+		if base.Host != req.host {
+			req.host = base.Host
+		}
 		why, flags := a.decidePlain(cfg, sel, req)
 		if why == "" && !local {
 			why, flags = "来源不是本机或无法确认", []string{model.FlowPassthrough, model.FlowNotLocal}
@@ -486,6 +555,47 @@ func (a *Agent) selfTarget(cfg *compiled, host string, port int) bool {
 		return true
 	}
 	return false
+}
+
+// preDecideTLS filters out connections that will definitely pass through
+// before incurring a synchronous controller sourceCheck lookup.
+func (a *Agent) preDecideTLS(cfg *compiled, sel Selector, req connectReq, ch *clientHello) (string, []string) {
+	if !isIP(req.host) {
+		return a.decide(cfg, sel, req, ch)
+	}
+	pass := model.FlowPassthrough
+	if !cfg.enabled {
+		return "解密已关闭", []string{pass}
+	}
+	if a.root == nil {
+		return "没有根证书", []string{pass}
+	}
+	sni := strings.ToLower(strings.TrimSuffix(ch.sni, "."))
+	if sni == "" || isIP(sni) {
+		return "没有 SNI", []string{pass}
+	}
+	if !ch.ech && sel.Kind != "app" && cfg.domains.match(sni) == "" {
+		return "不在选择范围内", []string{pass}
+	}
+	if cfg.bypass.match(sni) != "" {
+		return "在跳过列表中", []string{pass}
+	}
+	if a.pins.skipped(sel.User + "|" + sni) {
+		return "证书固定，暂时跳过", []string{pass, model.FlowPinned}
+	}
+	return "", nil
+}
+
+// preDecidePlain filters out plaintext HTTP connections that will definitely
+// pass through before querying the controller.
+func (a *Agent) preDecidePlain(cfg *compiled, sel Selector, req connectReq) (string, []string) {
+	if !isIP(req.host) {
+		return a.decidePlain(cfg, sel, req)
+	}
+	if !cfg.enabled {
+		return "解密已关闭", []string{model.FlowPassthrough}
+	}
+	return "", nil
 }
 
 // decide returns "" to decrypt, or why not with the flags to record.
@@ -788,9 +898,10 @@ func (a *Agent) mitm(c net.Conn, br *bufio.Reader, cfg *compiled, sel Selector, 
 	}
 	clientCert := false
 	ucfg := &tls.Config{
-		ServerName: ch.sni,
-		NextProtos: ch.alpn,
-		RootCAs:    a.roots,
+		ServerName:         ch.sni,
+		NextProtos:         ch.alpn,
+		RootCAs:            a.roots,
+		ClientSessionCache: a.upCache,
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			clientCert = true
 			return nil, errors.New("upstream requests a client certificate")
@@ -827,6 +938,9 @@ func (a *Agent) mitm(c net.Conn, br *bufio.Reader, cfg *compiled, sel Selector, 
 		return
 	}
 	scfg := &tls.Config{Certificates: []tls.Certificate{*leaf}, MinVersion: tls.VersionTLS12}
+	if a.tickets != nil {
+		scfg.SetSessionTicketKeys(a.tickets.current())
+	}
 	if ust.NegotiatedProtocol != "" {
 		scfg.NextProtos = []string{ust.NegotiatedProtocol}
 	}

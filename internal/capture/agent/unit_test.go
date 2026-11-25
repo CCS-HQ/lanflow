@@ -6,7 +6,10 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -15,9 +18,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"lanflow/internal/capture/ca"
 	"lanflow/internal/model"
 )
 
@@ -130,6 +135,7 @@ func TestMatcher(t *testing.T) {
 func TestStoreSpill(t *testing.T) {
 	dir := t.TempDir()
 	s := newStore(10, 1<<10, 4<<10, dir, 1<<20)
+	t.Cleanup(s.close)
 	var ids []int64
 	for i := 0; i < 8; i++ {
 		r := s.add(model.CaptureFlow{Host: "h"})
@@ -138,8 +144,9 @@ func TestStoreSpill(t *testing.T) {
 		s.update(r, func(d *model.CaptureFlowDetail) { d.Flow.Done = true })
 		ids = append(ids, r.d.Flow.ID)
 	}
-	if s.memUsed > 4<<10 {
-		t.Fatalf("memory %d over the limit", s.memUsed)
+	s.waitSpill()
+	if memUsed, _, _ := s.stats(); memUsed > 4<<10 {
+		t.Fatalf("memory %d over the limit", memUsed)
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "session-*.bin"))
 	if len(files) != 1 {
@@ -350,6 +357,7 @@ func TestStoreSearchBodies(t *testing.T) {
 	r5 := s.add(model.CaptureFlow{Host: "pad.test"})
 	s.appendBody(r5, true, bytes.Repeat([]byte{'z'}, 2048))
 	s.update(r5, func(d *model.CaptureFlowDetail) { d.Flow.Done = true })
+	s.waitSpill()
 
 	ctx := context.Background()
 	if got := s.searchBodies(ctx, ""); got != nil {
@@ -385,5 +393,288 @@ func TestStoreSearchBodies(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || len(out.IDs) != 3 {
 		t.Fatalf("/search response %s err=%v", rec.Body.String(), err)
+	}
+}
+
+// startConnectRelay runs a minimal HTTP CONNECT proxy forwarding to targetAddr.
+func startConnectRelay(t *testing.T, targetAddr string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				for {
+					l, err := br.ReadString('\n')
+					if err != nil || l == "\r\n" {
+						break
+					}
+				}
+				dst, err := net.Dial("tcp", targetAddr)
+				if err != nil {
+					io.WriteString(c, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
+					return
+				}
+				defer dst.Close()
+				io.WriteString(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+				go func() {
+					io.Copy(dst, br)
+					closeWrite(dst)
+				}()
+				io.Copy(c, dst)
+				closeWrite(c)
+			}(c)
+		}
+	}()
+	return ln.Addr().String()
+}
+
+func TestTLSSessionResumptionBothSides(t *testing.T) {
+	pki := newTestPKI(t)
+	cert := pki.leaf(t, "resume.test")
+	upLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { upLn.Close() })
+
+	var upResumed atomic.Int32
+	var upTotal atomic.Int32
+	upCfg := &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2", "http/1.1"}}
+	go func() {
+		for {
+			raw, err := upLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(raw net.Conn) {
+				defer raw.Close()
+				tc := tls.Server(raw, upCfg)
+				if err := tc.Handshake(); err != nil {
+					return
+				}
+				defer tc.Close()
+				upTotal.Add(1)
+				if tc.ConnectionState().DidResume {
+					upResumed.Add(1)
+				}
+				// Read request and send a tiny HTTP response so both TLS
+				// clients (upstream agent and downstream test client) read
+				// TLS 1.3 post-handshake NewSessionTicket messages.
+				br := bufio.NewReader(tc)
+				for {
+					l, err := br.ReadString('\n')
+					if err != nil || l == "\r\n" {
+						break
+					}
+				}
+				io.WriteString(tc, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+			}(raw)
+		}
+	}()
+
+	upProxy := startConnectRelay(t, upLn.Addr().String())
+	root, _, err := ca.Generate(&ca.MemKeys{}, "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := Selector{User: "u", Pass: "p", Kind: "domain", Name: "域名"}
+	a, err := New(Config{
+		Selectors:   []Selector{sel},
+		UpAddr:      upProxy,
+		UpUser:      "up",
+		UpPass:      "uppass",
+		Domains:     []string{"resume.test"},
+		Enabled:     true,
+		NoLoopGuard: true,
+	}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetRoots(pki.pool)
+	go a.Serve()
+	t.Cleanup(a.Close)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(root.Cert)
+	clientCache := tls.NewLRUClientSessionCache(16)
+	auth := base64.StdEncoding.EncodeToString([]byte("u:p"))
+
+	dialOnce := func(alpn []string) tls.ConnectionState {
+		t.Helper()
+		c, err := net.DialTimeout("tcp", a.Addr(), 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		fmt.Fprintf(c, "CONNECT resume.test:443 HTTP/1.1\r\nHost: resume.test:443\r\nProxy-Authorization: Basic %s\r\n\r\n", auth)
+		br := bufio.NewReader(c)
+		line, err := br.ReadString('\n')
+		if err != nil || !strings.Contains(line, "200") {
+			t.Fatalf("CONNECT: %q %v", line, err)
+		}
+		for l, _ := br.ReadString('\n'); l != "\r\n" && l != ""; l, _ = br.ReadString('\n') {
+		}
+		tc := tls.Client(&bufConn{Conn: c, r: br}, &tls.Config{
+			ServerName:         "resume.test",
+			RootCAs:            pool,
+			NextProtos:         alpn,
+			ClientSessionCache: clientCache,
+		})
+		if err := tc.Handshake(); err != nil {
+			t.Fatalf("client handshake (%v): %v", alpn, err)
+		}
+		st := tc.ConnectionState()
+		// Exchange an HTTP/1.1 message (sent even over h2 ALPN since this
+		// test bypasses HTTP/2 framing) or read until close so TLS 1.3
+		// NewSessionTicket is consumed into clientCache.
+		tc.Write([]byte("GET / HTTP/1.1\r\nHost: resume.test\r\n\r\n"))
+		io.ReadAll(tc)
+		tc.Close()
+		return st
+	}
+
+	st1 := dialOnce([]string{"h2", "http/1.1"})
+	if st1.DidResume {
+		t.Fatal("first handshake unexpectedly resumed")
+	}
+	st2 := dialOnce([]string{"h2", "http/1.1"})
+	if !st2.DidResume {
+		t.Fatal("downstream client TLS session did not resume on second connection")
+	}
+	if upResumed.Load() == 0 {
+		t.Fatalf("upstream TLS session did not resume (total=%d resumed=%d)", upTotal.Load(), upResumed.Load())
+	}
+	// Switching ALPN on a subsequent connection still handshakes cleanly.
+	st3 := dialOnce([]string{"http/1.1"})
+	if st3.NegotiatedProtocol != "http/1.1" {
+		t.Fatalf("ALPN switch got %q, want http/1.1", st3.NegotiatedProtocol)
+	}
+}
+
+func TestHandleSkipsSourceCheckForObviousPassthrough(t *testing.T) {
+	upLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { upLn.Close() })
+	go func() {
+		for {
+			c, err := upLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				io.Copy(io.Discard, c)
+			}(c)
+		}
+	}()
+	upProxy := startConnectRelay(t, upLn.Addr().String())
+	root, _, err := ca.Generate(&ca.MemKeys{}, "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := Selector{User: "u", Pass: "p", Kind: "domain", Name: "域名"}
+	a, err := New(Config{
+		Selectors:   []Selector{sel},
+		UpAddr:      upProxy,
+		UpUser:      "up",
+		UpPass:      "uppass",
+		Domains:     []string{"sel.test"},
+		Bypass:      []string{"skip.test"},
+		Enabled:     true,
+		NoLoopGuard: true,
+	}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ctrlCalls atomic.Int32
+	a.SetController("", func(ctx context.Context) (net.Conn, error) {
+		ctrlCalls.Add(1)
+		return nil, fmt.Errorf("controller unreachable")
+	})
+	go a.Serve()
+	t.Cleanup(a.Close)
+
+	auth := base64.StdEncoding.EncodeToString([]byte("u:p"))
+	send := func(host string, payload []byte) time.Duration {
+		t.Helper()
+		start := time.Now()
+		c, err := net.DialTimeout("tcp", a.Addr(), 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(c, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\nProxy-Authorization: Basic %s\r\n\r\n", host, host, auth)
+		br := bufio.NewReader(c)
+		line, err := br.ReadString('\n')
+		if err != nil || !strings.Contains(line, "200") {
+			c.Close()
+			t.Fatalf("CONNECT %s: %q %v", host, line, err)
+		}
+		for l, _ := br.ReadString('\n'); l != "\r\n" && l != ""; l, _ = br.ReadString('\n') {
+		}
+		c.Write(payload)
+		c.Close()
+		// Wait briefly for handle() to record the flow.
+		deadline := time.Now().Add(2 * time.Second)
+		before := a.Count()
+		_ = before
+		for time.Now().Before(deadline) {
+			fs, _, _, _ := a.Flows(0, 0)
+			if len(fs) > 0 && fs[len(fs)-1].Done {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		return time.Since(start)
+	}
+
+	selHello := clientHelloBytes(t, &tls.Config{ServerName: "sel.test"})
+	otherHello := clientHelloBytes(t, &tls.Config{ServerName: "other.test"})
+	skipHello := clientHelloBytes(t, &tls.Config{ServerName: "skip.test"})
+
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		host    string
+		payload []byte
+	}{
+		{"non-HTTP", true, "sel.test", []byte("SSH-2.0-OpenSSH\r\n")},
+		{"bad ClientHello", true, "sel.test", []byte{0x16, 3, 1, 0, 2, 1, 2}},
+		{"unselected domain", true, "other.test", otherHello},
+		{"bypass domain", true, "skip.test", skipHello},
+		{"capture disabled", false, "sel.test", selHello},
+	} {
+		en := tc.enabled
+		a.Apply(Update{Enabled: &en})
+		a.Clear()
+		ctrlCalls.Store(0)
+		d := send(tc.host, tc.payload)
+		if got := ctrlCalls.Load(); got != 0 {
+			t.Errorf("%s: controller called %d times, want 0", tc.name, got)
+		}
+		if d > 150*time.Millisecond {
+			t.Logf("%s: took %v", tc.name, d)
+		}
+	}
+
+	// Selected host still performs sourceCheck.
+	en := true
+	a.Apply(Update{Enabled: &en})
+	a.Clear()
+	ctrlCalls.Store(0)
+	send("sel.test", selHello)
+	if got := ctrlCalls.Load(); got == 0 {
+		t.Fatal("selected connection did not invoke sourceCheck")
 	}
 }

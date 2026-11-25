@@ -34,8 +34,7 @@ type postData struct {
 	MimeType string `json:"mimeType"`
 	Text     string `json:"text"`
 	// Encoding "base64" (as in content; an extension HAR readers such as
-	// the browsers' accept): the body is not text, or its
-	// Content-Encoding could not be undone.
+	// the browsers' accept): the decoded body is not UTF-8 text.
 	Encoding string `json:"encoding,omitempty"`
 	Comment  string `json:"comment,omitempty"`
 }
@@ -202,7 +201,7 @@ func build(d model.CaptureFlowDetail, withBodies bool) (entry, bool) {
 	if len(d.ReqBody) > 0 || d.ReqBodySize > 0 {
 		ct := hv(d.ReqHeader, "content-type")
 		pd := &postData{MimeType: ct}
-		pd.Text, pd.Encoding, pd.Comment = bodyText(d.ReqBody, hv(d.ReqHeader, "content-encoding"), ct)
+		pd.Text, pd.Encoding, pd.Comment = bodyText(d.ReqBody, hvJoin(d.ReqHeader, "content-encoding"), ct)
 		if d.ReqBodySize > int64(len(d.ReqBody)) {
 			pd.Comment = joinComment("truncated", pd.Comment)
 		}
@@ -210,7 +209,7 @@ func build(d model.CaptureFlowDetail, withBodies bool) (entry, bool) {
 	}
 	if len(d.RespBody) > 0 {
 		c := &e.Response.Content
-		c.Text, c.Encoding, c.Comment = bodyText(d.RespBody, hv(d.RespHeader, "content-encoding"), f.ContentType)
+		c.Text, c.Encoding, c.Comment = bodyText(d.RespBody, hvJoin(d.RespHeader, "content-encoding"), f.ContentType)
 		if d.RespBodySize > int64(len(d.RespBody)) {
 			c.Comment = joinComment("truncated", c.Comment)
 		}
@@ -220,13 +219,13 @@ func build(d model.CaptureFlowDetail, withBodies bool) (entry, bool) {
 
 // bodyText is a body as HAR text: decoded and masked when it is text; as
 // base64 of the decoded bytes when it is binary (as a string it would lose
-// every byte that is not UTF-8); as base64 of the bytes as sent when the
-// Content-Encoding (br, zstd) cannot be undone here.
+// every byte that is not UTF-8); omitted when Content-Encoding cannot be
+// decoded so unredacted credentials are never exported.
 func bodyText(raw []byte, encoding, contentType string) (text, enc, comment string) {
 	body, ok := redact.Decode(raw, encoding)
 	switch {
 	case !ok:
-		return base64.StdEncoding.EncodeToString(raw), "base64", "content-encoding " + strings.TrimSpace(encoding) + " not decoded"
+		return "", "", "content-encoding " + strings.TrimSpace(encoding) + " not decoded; body omitted"
 	case !utf8.Valid(body):
 		return base64.StdEncoding.EncodeToString(body), "base64", ""
 	}
@@ -268,6 +267,18 @@ func hv(h []model.KV, name string) string {
 		}
 	}
 	return ""
+}
+
+func hvJoin(h []model.KV, name string) string {
+	var vals []string
+	for _, kv := range h {
+		if strings.EqualFold(kv.Key, name) {
+			if v := strings.TrimSpace(kv.Value); v != "" {
+				vals = append(vals, v)
+			}
+		}
+	}
+	return strings.Join(vals, ", ")
 }
 
 func itoa(i int) string {

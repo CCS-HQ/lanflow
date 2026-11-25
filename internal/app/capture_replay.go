@@ -129,7 +129,7 @@ func (s *Service) ReplayRequest(req model.ReplayRequest) (res model.ReplayResult
 	sortKV(res.Header)
 	res.Body = raw
 	if !res.Truncated {
-		if dec, ok := redact.Decode(raw, resp.Header.Get("Content-Encoding")); ok {
+		if dec, ok := redact.Decode(raw, strings.Join(resp.Header.Values("Content-Encoding"), ", ")); ok {
 			res.Body = dec
 		}
 	}

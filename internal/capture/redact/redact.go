@@ -19,6 +19,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
+
 	"lanflow/internal/model"
 )
 
@@ -100,26 +103,82 @@ func Path(p string) string {
 	return path + "?" + strings.Join(parts, "&")
 }
 
-// Decode undoes a Content-Encoding (gzip, deflate) for display; other
-// encodings (br, zstd) return ok=false.
+const (
+	decodeMaxBytes    = 16 << 20
+	maxEncodingLayers = 8
+)
+
+// Decode undoes Content-Encoding (gzip, x-gzip, deflate, br, zstd, including
+// comma-separated layered encodings applied in reverse order per RFC 9110
+// §8.4) for display, replay, and redaction. Unsupported or corrupt encodings
+// return ok=false.
 func Decode(body []byte, encoding string) ([]byte, bool) {
-	switch strings.ToLower(strings.TrimSpace(encoding)) {
-	case "", "identity":
+	var layers []string
+	for _, part := range strings.Split(encoding, ",") {
+		enc := strings.ToLower(strings.TrimSpace(part))
+		if enc == "" || enc == "identity" {
+			continue
+		}
+		switch enc {
+		case "gzip", "x-gzip", "deflate", "br", "zstd":
+		default:
+			return nil, false
+		}
+		layers = append(layers, enc)
+	}
+	if len(layers) == 0 {
 		return body, true
+	}
+	if len(layers) > maxEncodingLayers {
+		return nil, false
+	}
+	cur := body
+	for i := len(layers) - 1; i >= 0; i-- {
+		if len(cur) == 0 {
+			return cur, true
+		}
+		var ok bool
+		cur, ok = decodeOne(cur, layers[i])
+		if !ok {
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+func decodeOne(body []byte, enc string) ([]byte, bool) {
+	switch enc {
 	case "gzip", "x-gzip":
 		r, err := gzip.NewReader(bytes.NewReader(body))
 		if err != nil {
 			return nil, false
 		}
-		b, err := io.ReadAll(io.LimitReader(r, 16<<20))
+		defer r.Close()
+		b, err := io.ReadAll(io.LimitReader(r, decodeMaxBytes))
 		return b, err == nil || len(b) > 0
 	case "deflate":
 		if r, err := zlib.NewReader(bytes.NewReader(body)); err == nil {
-			if b, err := io.ReadAll(io.LimitReader(r, 16<<20)); err == nil || len(b) > 0 {
+			b, rerr := io.ReadAll(io.LimitReader(r, decodeMaxBytes))
+			r.Close()
+			if rerr == nil || len(b) > 0 {
 				return b, true
 			}
 		}
-		b, err := io.ReadAll(io.LimitReader(flate.NewReader(bytes.NewReader(body)), 16<<20))
+		fr := flate.NewReader(bytes.NewReader(body))
+		defer fr.Close()
+		b, err := io.ReadAll(io.LimitReader(fr, decodeMaxBytes))
+		return b, err == nil || len(b) > 0
+	case "br":
+		r := brotli.NewReader(bytes.NewReader(body))
+		b, err := io.ReadAll(io.LimitReader(r, decodeMaxBytes))
+		return b, err == nil || len(b) > 0
+	case "zstd":
+		r, err := zstd.NewReader(bytes.NewReader(body), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(decodeMaxBytes))
+		if err != nil {
+			return nil, false
+		}
+		defer r.Close()
+		b, err := io.ReadAll(io.LimitReader(r, decodeMaxBytes))
 		return b, err == nil || len(b) > 0
 	}
 	return nil, false

@@ -2,10 +2,15 @@ package redact
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 
 	"lanflow/internal/model"
 )
@@ -37,15 +42,87 @@ func TestBodyAndStructure(t *testing.T) {
 }
 
 func TestDecode(t *testing.T) {
-	var buf bytes.Buffer
-	w := gzip.NewWriter(&buf)
-	w.Write([]byte("hello"))
-	w.Close()
-	if b, ok := Decode(buf.Bytes(), "gzip"); !ok || string(b) != "hello" {
-		t.Fatal(b, ok)
+	plain := []byte("hello world hello world")
+
+	gz := func(in []byte) []byte {
+		var buf bytes.Buffer
+		w := gzip.NewWriter(&buf)
+		w.Write(in)
+		w.Close()
+		return buf.Bytes()
 	}
-	if _, ok := Decode([]byte("x"), "br"); ok {
-		t.Fatal("br decoded")
+	zl := func(in []byte) []byte {
+		var buf bytes.Buffer
+		w := zlib.NewWriter(&buf)
+		w.Write(in)
+		w.Close()
+		return buf.Bytes()
+	}
+	fl := func(in []byte) []byte {
+		var buf bytes.Buffer
+		w, _ := flate.NewWriter(&buf, flate.DefaultCompression)
+		w.Write(in)
+		w.Close()
+		return buf.Bytes()
+	}
+	br := func(in []byte) []byte {
+		var buf bytes.Buffer
+		w := brotli.NewWriter(&buf)
+		w.Write(in)
+		w.Close()
+		return buf.Bytes()
+	}
+	zs := func(in []byte) []byte {
+		var buf bytes.Buffer
+		w, err := zstd.NewWriter(&buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Write(in)
+		w.Close()
+		return buf.Bytes()
+	}
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+		enc  string
+	}{
+		{"empty", plain, ""},
+		{"identity", plain, "identity"},
+		{"gzip", gz(plain), "gzip"},
+		{"x-gzip", gz(plain), " X-Gzip "},
+		{"deflate-zlib", zl(plain), "deflate"},
+		{"deflate-raw", fl(plain), "deflate"},
+		{"br", br(plain), "br"},
+		{"zstd", zs(plain), "zstd"},
+		{"layered gzip, br", br(gz(plain)), "gzip, br"},
+		{"layered deflate, zstd", zs(zl(plain)), "deflate, identity, zstd"},
+	} {
+		if b, ok := Decode(tc.data, tc.enc); !ok || !bytes.Equal(b, plain) {
+			t.Fatalf("%s: ok=%v got=%q", tc.name, ok, b)
+		}
+	}
+
+	if b, ok := Decode(nil, "br"); !ok || len(b) != 0 {
+		t.Fatalf("empty br: ok=%v len=%d", ok, len(b))
+	}
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+		enc  string
+	}{
+		{"unknown", []byte("x"), "lz4"},
+		{"unknown empty", nil, "lz4"},
+		{"corrupt gzip", []byte("not-gzip"), "gzip"},
+		{"corrupt br", []byte{0xff, 0xff, 0xff, 0xff}, "br"},
+		{"corrupt zstd", []byte("not-zstd"), "zstd"},
+		{"too many layers", gz(plain), "gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip"},
+	} {
+		if _, ok := Decode(tc.data, tc.enc); ok {
+			t.Fatalf("%s: unexpectedly decoded", tc.name)
+		}
 	}
 }
 

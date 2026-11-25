@@ -1226,6 +1226,18 @@ func header(h []model.KV, name string) string {
 	return ""
 }
 
+func headerJoined(h []model.KV, name string) string {
+	var vals []string
+	for _, x := range h {
+		if strings.EqualFold(x.Key, name) {
+			if v := strings.TrimSpace(x.Value); v != "" {
+				vals = append(vals, v)
+			}
+		}
+	}
+	return strings.Join(vals, ", ")
+}
+
 func (p *Page) frames(c *ui.Context, t *ui.Theme, fs []model.CaptureWSFrame) {
 	for _, f := range fs {
 		dir := "↑"
