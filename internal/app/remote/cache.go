@@ -21,7 +21,7 @@ const lookupIPCap = 2048
 // topicReads lists the reads each topic invalidates. A read missing from
 // every list is dropped on every event; staticReads are never dropped.
 var topicReads = map[app.Topic][]string{
-	app.TopicStatus:       {"Status", "TUNHelperInstalled", "CaptureStatus"},
+	app.TopicStatus:       {"Status", "TUNHelperInstalled", "CaptureStatus", "TailscaleReport", "TailscaleAuthKeySet"},
 	app.TopicTraffic:      {"Status", "TrafficHistory"},
 	app.TopicMetrics:      {"Status"},
 	app.TopicProxies:      {"Proxies", "ProxyProviders", "IconData", "ProbeRegions", "Status", "ManualNodes", "ProxyChains"},
@@ -31,7 +31,7 @@ var topicReads = map[app.Topic][]string{
 	app.TopicRules:        {"Rules", "CustomRules", "RuleProviders", "Status"},
 	app.TopicExits:        {"ExitRoutes", "You"},
 	app.TopicNet:          {"NetInfo", "Sites", "LeakCheck"},
-	app.TopicSettings:     {"Settings", "Overrides", "OverrideList", "EffectiveDNS", "EffectiveSniffer", "WebDAVInfo", "ConfigSyncStatus", "FeedbackInfo", "UIState", "GeoDataInfo", "Status", "Proxies", "CacheUsage", "CaptureStatus"},
+	app.TopicSettings:     {"Settings", "Overrides", "OverrideList", "EffectiveDNS", "EffectiveSniffer", "WebDAVInfo", "ConfigSyncStatus", "FeedbackInfo", "UIState", "GeoDataInfo", "Status", "Proxies", "CacheUsage", "CaptureStatus", "TailscaleReport", "TailscaleAuthKeySet"},
 	app.TopicCoreDownload: {"CoreDownload"},
 	app.TopicCores:        {"InstalledCores", "Status"},
 	app.TopicProbe:        {"Probe", "ProbeRegions"},
@@ -42,8 +42,9 @@ var topicReads = map[app.Topic][]string{
 
 var staticReads = map[string]bool{"ConfigDir": true, "LogDir": true, "ATrustReference": true, "LookupIP": true}
 
-// uncachedReads are reads with effects or that block.
-var uncachedReads = map[string]bool{"TakeNotices": true, "TestMirrors": true, "CheckCaptureTarget": true}
+// uncachedReads are reads with effects or that block (CaptureLeftoverRoots
+// rescans the trust store and may emit TopicCapture).
+var uncachedReads = map[string]bool{"TakeNotices": true, "TestMirrors": true, "CheckCaptureTarget": true, "CaptureLeftoverRoots": true}
 
 var listedReads = func() map[string]bool {
 	m := map[string]bool{}
