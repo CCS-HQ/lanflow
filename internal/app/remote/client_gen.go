@@ -271,6 +271,21 @@ func (cl *Client) SubscriptionRaw(id string) (res0 string, err error) {
 	return
 }
 
+func (cl *Client) ManualNodes() (res0 []model.ManualNode) {
+	_ = cl.call("ManualNodes", nil, &res0)
+	return
+}
+
+func (cl *Client) SaveManualNode(n model.ManualNode) (res0 model.ManualNode, err error) {
+	err = cl.call("SaveManualNode", []any{n}, &res0)
+	return
+}
+
+func (cl *Client) DeleteManualNode(id string) (err error) {
+	err = cl.call("DeleteManualNode", []any{id})
+	return
+}
+
 func (cl *Client) CloseConnection(id string) (err error) {
 	err = cl.call("CloseConnection", []any{id})
 	return

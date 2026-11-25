@@ -60,6 +60,14 @@ func (s *Store) SetCustomRules(r []model.CustomRule) ([]model.CustomRule, error)
 	return s.s.setCustomRules(r)
 }
 
+// ManualNodes returns the user-defined proxy nodes in order.
+func (s *Store) ManualNodes() []model.ManualNode { return s.s.manualNodesList() }
+
+// SetManualNodes replaces the user-defined proxy nodes (IDs assigned to empty ones).
+func (s *Store) SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, error) {
+	return s.s.setManualNodes(nodes)
+}
+
 // ---- download ----
 
 // Fetched is a downloaded subscription.
@@ -108,6 +116,7 @@ type Input struct {
 	// after SubOverride and GlobalOverride, each attributed by its Name.
 	Overrides   []Layer
 	CustomRules []model.CustomRule
+	ManualNodes []model.ManualNode
 	DNS         model.DNSSettings     // applied when DNS.TakeOver; when TUN is on and the result has no dns section, a default fake-ip DNS is added
 	Sniffer     model.SnifferSettings // Enable always applied; full section when TakeOver
 	Geo         model.GeoSettings     // geox-url, geodata-mode, geo-auto-update, geo-update-interval

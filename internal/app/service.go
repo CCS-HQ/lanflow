@@ -125,6 +125,7 @@ type state struct {
 	rulesAt      time.Time // when rules were fetched (refreshed on demand, rules.go)
 	rulesBusy    bool      // a refreshRules runs
 	custom       []model.CustomRule
+	manualNodes  []model.ManualNode
 	provs        []model.RuleProvider
 	provUpdating map[string]bool
 
@@ -409,10 +410,11 @@ func (s *Service) bootstrap() {
 		return // the recovery answer decides whether to start
 	}
 	_, hasSub := s.d.store.Current()
+	hasConfig := hasSub || len(s.d.store.ManualNodes()) > 0
 	switch {
-	case set.AutoSystemProxy && hasSub:
+	case set.AutoSystemProxy && hasConfig:
 		_ = s.SetSystemProxy(true)
-	case hasSub:
+	case hasConfig:
 		_ = s.ensureStarted()
 	}
 }
@@ -530,22 +532,28 @@ func coreMissingText(custom string, err error) string {
 // storeView is what the service caches from the store, read in one go
 // without mu (the store has its own lock and may wait for a disk write).
 type storeView struct {
-	subs   []model.Subscription
-	cur    model.Subscription
-	hasCur bool
-	ovs    []model.Override
-	custom []model.CustomRule
+	subs        []model.Subscription
+	cur         model.Subscription
+	hasCur      bool
+	ovs         []model.Override
+	custom      []model.CustomRule
+	manualNodes []model.ManualNode
 }
 
 // readStore reads the store's lists; call without mu.
 func (s *Service) readStore() storeView {
-	v := storeView{subs: s.d.store.List(), ovs: s.d.store.Overrides(), custom: s.d.store.CustomRules()}
+	v := storeView{
+		subs:        s.d.store.List(),
+		ovs:         s.d.store.Overrides(),
+		custom:      s.d.store.CustomRules(),
+		manualNodes: s.d.store.ManualNodes(),
+	}
 	v.cur, v.hasCur = s.d.store.Current()
 	return v
 }
 
-// applyStoreLocked refreshes the cached subscription list, overrides and
-// custom rules from v; call with mu held or before run.
+// applyStoreLocked refreshes the cached subscription list, overrides,
+// custom rules and manual nodes from v; call with mu held or before run.
 func (s *Service) applyStoreLocked(v storeView) {
 	subs, cur, hasCur := v.subs, v.cur, v.hasCur
 	for i := range subs {
@@ -554,13 +562,14 @@ func (s *Service) applyStoreLocked(v storeView) {
 		subs[i].NeedsURL = subs[i].Source == urlSubscriptionK && subs[i].URL == ""
 	}
 	s.state.subs = subs
-	s.state.st.HasSubscriptions = len(subs) > 0
+	s.state.st.HasSubscriptions = len(subs) > 0 || len(v.manualNodes) > 0
 	s.state.st.CurrentSubscription = ""
 	if hasCur {
 		s.state.st.CurrentSubscription = cur.ID
 	}
 	s.state.overrides = overridesSnapshot(v.ovs, subs)
 	s.state.custom = v.custom
+	s.state.manualNodes = v.manualNodes
 }
 
 // refreshStore reloads the store caches and emits. The store and the

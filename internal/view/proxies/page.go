@@ -8,6 +8,7 @@ import (
 	"image"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -16,6 +17,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 	"lanflow/internal/view/env"
 )
 
@@ -69,8 +71,10 @@ type Page struct {
 	loaded      bool                      // open/view restored from API.UIState
 	provOpen    bool                      // 代理集合 section expanded
 	scrollTo    string                    // group to reveal after Navigate
-	locate      locateState               // 定位当前节点 (locate.go)
-	icons       map[string]ui.ImageSource // decoded group icons by reference (locate.go)
+	locate       locateState               // 定位当前节点 (locate.go)
+	manual       manualNodeDialog          // 添加 / 编辑手动节点 (manual_dialog.go)
+	manualByName map[string]model.ManualNode
+	icons        map[string]ui.ImageSource // decoded group icons by reference (locate.go)
 	iconFail    map[string]bool           // references that do not decode
 	lists       map[string]*ui.ListState  // the virtual lists of large groups, by group
 
@@ -162,46 +166,53 @@ func (p *Page) View(c *ui.Context) {
 	p.mu.Unlock()
 
 	k.Header(c, i18n.T("代理"), "", func() {
-		if !st.HasSubscriptions {
-			return
-		}
-		ui.SearchField(c.Key("search"), &p.query).Placeholder(i18n.T("搜索节点")).Label(i18n.T("搜索节点")).Width(160).Bind(&p.search)
-		ui.MenuButton(c, i18n.T("排序"), func(m *ui.Menu) {
-			if m.Item(i18n.T("网格")).Radio(p.view == viewGrid).Chosen() && p.view != viewGrid {
-				p.view = viewGrid
-				p.persist()
-			}
-			if m.Item(i18n.T("列表")).Radio(p.view == viewList).Chosen() && p.view != viewList {
-				p.view = viewList
-				p.persist()
-			}
-			m.Separator()
-			for i, name := range []string{i18n.T("默认顺序"), i18n.T("按延迟"), i18n.T("按名称")} {
-				if m.Item(name).Radio(p.sort == i).Chosen() && p.sort != i {
-					p.sort = i
+		if st.HasSubscriptions {
+			ui.SearchField(c.Key("search"), &p.query).Placeholder(i18n.T("搜索节点")).Label(i18n.T("搜索节点")).Width(160).Bind(&p.search)
+			ui.MenuButton(c, i18n.T("排序"), func(m *ui.Menu) {
+				if m.Item(i18n.T("网格")).Radio(p.view == viewGrid).Chosen() && p.view != viewGrid {
+					p.view = viewGrid
 					p.persist()
 				}
+				if m.Item(i18n.T("列表")).Radio(p.view == viewList).Chosen() && p.view != viewList {
+					p.view = viewList
+					p.persist()
+				}
+				m.Separator()
+				for i, name := range []string{i18n.T("默认顺序"), i18n.T("按延迟"), i18n.T("按名称")} {
+					if m.Item(name).Radio(p.sort == i).Chosen() && p.sort != i {
+						p.sort = i
+						p.persist()
+					}
+				}
+				m.Separator()
+				if m.Item(i18n.T("隐藏超时节点")).Checked(p.hideTimeout).Chosen() {
+					p.hideTimeout = !p.hideTimeout
+					p.persist()
+				}
+			}).Label(i18n.T("排序"))
+			tip := i18n.T("依次测试所有组的延迟（⌘R）")
+			if !p.e.Mac {
+				tip = i18n.T("依次测试所有组的延迟（Ctrl+R）")
 			}
-			m.Separator()
-			if m.Item(i18n.T("隐藏超时节点")).Checked(p.hideTimeout).Chosen() {
-				p.hideTimeout = !p.hideTimeout
-				p.persist()
+			b := ui.Button(c, "").Label(i18n.T("全部测速")).Tooltip(tip).Disabled(!run || testingAll)
+			b.Children(func() {
+				if testingAll {
+					ui.Spinner(c).Size(12, 12)
+				} else {
+					k.Icon(c, "bolt", 14)
+				}
+			})
+			if b.Clicked() {
+				p.testAll()
 			}
-		}).Label(i18n.T("排序"))
-		tip := i18n.T("依次测试所有组的延迟（⌘R）")
-		if !p.e.Mac {
-			tip = i18n.T("依次测试所有组的延迟（Ctrl+R）")
 		}
-		b := ui.Button(c, "").Label(i18n.T("全部测速")).Tooltip(tip).Disabled(!run || testingAll)
-		b.Children(func() {
-			if testingAll {
-				ui.Spinner(c).Size(12, 12)
-			} else {
-				k.Icon(c, "bolt", 14)
-			}
+		add := ui.Button(c, "").Label(i18n.T("添加节点"))
+		add.Children(func() {
+			k.Icon(c, "plus", 13)
+			ui.Text(c, i18n.T("添加节点")).SingleLine()
 		})
-		if b.Clicked() {
-			p.testAll()
+		if add.Clicked() {
+			p.openAddManualNode()
 		}
 	})
 	if c.Shortcut(ui.Cmd, ui.KeyF) {
@@ -211,13 +222,23 @@ func (p *Page) View(c *ui.Context) {
 		p.testAll()
 	}
 
+	manualNodes := p.e.API.ManualNodes()
+	p.manualByName = make(map[string]model.ManualNode, len(manualNodes))
+	for _, mn := range manualNodes {
+		p.manualByName[mn.Name] = mn
+	}
+
 	switch {
 	case !st.HasSubscriptions:
-		k.Empty(c, "proxies", i18n.T("还没有订阅"), i18n.T("导入订阅后，这里会列出代理组和节点。"), func() {
+		k.Empty(c, "proxies", i18n.T("还没有订阅"), i18n.T("导入订阅或手动添加代理节点后，这里会列出代理组和节点。"), func() {
 			if ui.PrimaryButton(c, i18n.T("导入订阅")).Clicked() {
 				p.e.Navigate(env.Subs, "import-url")
 			}
+			if ui.Button(c, i18n.T("手动添加节点")).Clicked() {
+				p.openAddManualNode()
+			}
 		})
+		p.manualDialogView(c)
 		return
 	case !run:
 		k.Empty(c, "power", i18n.T("内核未启动"), i18n.T("启动内核后才能查看和切换节点。"), func() {
@@ -229,6 +250,10 @@ func (p *Page) View(c *ui.Context) {
 				p.e.Run(p.e.API.StartCore, i18n.T("内核已启动"))
 			}
 		})
+		if len(manualNodes) > 0 {
+			p.stoppedManualSection(c, manualNodes)
+		}
+		p.manualDialogView(c)
 		return
 	}
 
@@ -278,6 +303,7 @@ func (p *Page) View(c *ui.Context) {
 			}
 		})
 	})
+	p.manualDialogView(c)
 }
 
 // visibleGroups returns the groups in config order, GLOBAL first in
@@ -475,6 +501,12 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 				p.e.Run(func() error { return p.e.API.TestGroupDelay(name) }, "")
 			}
 			ui.Button(c, "").Label(i18n.Tf("更多 %s", g.Name)).Tooltip(i18n.T("更多")).Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
+				if g.Name == profile.ManualGroupName {
+					if m.Item(i18n.T("添加节点…")).Chosen() {
+						p.openAddManualNode()
+					}
+					m.Separator()
+				}
 				if m.Item(i18n.T("设为主代理组")).Checked(g.Name == px.MainGroup).Disabled(!selectable).Chosen() {
 					name := g.Name
 					p.e.Run(func() error { return p.e.API.SetMainGroup(name) }, i18n.Tf("已将「%s」设为主代理组", name))
@@ -898,6 +930,18 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 				p.e.Run(func() error { return p.e.API.TestProxyDelay(name) }, "")
 			}
 		})
+		if mn, isManual := p.manualByName[n]; isManual {
+			ui.Box(c).Padding(0, 4, 0, 0).AlignItems(ui.Center).Justify(ui.Center).Shrink(0).Children(func() {
+				ui.Button(c, "").Label(i18n.Tf("更多 %s", n)).Tooltip(i18n.T("更多")).Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
+					if m.Item(i18n.T("编辑…")).Chosen() {
+						p.openManualNode(mn)
+					}
+					if m.Item(i18n.T("删除…")).Danger().Chosen() {
+						p.askDeleteManualNode(mn)
+					}
+				})
+			})
+		}
 	})
 
 	switch {
@@ -915,6 +959,36 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 	if selectable && selClicked && !cur {
 		p.pick(g.Name, n)
 	}
+}
+
+func (p *Page) askDeleteManualNode(mn model.ManualNode) {
+	p.e.Confirm(i18n.Tf("删除节点「%s」？", mn.Name), i18n.T("删除后会重新生成配置。"), i18n.T("删除"), true, func() {
+		p.e.Run(func() error { return p.e.API.DeleteManualNode(mn.ID) }, i18n.T("节点已删除"))
+	})
+}
+
+func (p *Page) stoppedManualSection(c *ui.Context, nodes []model.ManualNode) {
+	t := c.Theme()
+	k := p.e.Kit
+	ui.Column(c).Padding(0, 24, 20, 24).Gap(8).Children(func() {
+		k.Section(c, i18n.T("手动节点"), "", func() {
+			for _, mn := range nodes {
+				node := mn
+				ui.Row(c.Key("manual:"+node.ID)).MinHeight(40).Padding(4, 12).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, node.Name).FontSize(13).FontWeight(500).SingleLine().Shrink(1)
+					ui.Text(c, protoOptionForType(node.Type).label).FontSize(11).TextColor(t.TextMuted).SingleLine()
+					ui.Text(c, node.Server+":"+strconv.Itoa(node.Port)).FontSize(11).Font("monospace").TextColor(t.TextMuted).SingleLine()
+					ui.Spacer(c)
+					if ui.Button(c, i18n.T("编辑")).Clicked() {
+						p.openManualNode(node)
+					}
+					if ui.Button(c, i18n.T("删除")).TextColor(t.Danger).Clicked() {
+						p.askDeleteManualNode(node)
+					}
+				})
+			}
+		})
+	})
 }
 
 // pick selects a node: optimistic until the core confirms.

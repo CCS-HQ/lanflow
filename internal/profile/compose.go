@@ -124,9 +124,15 @@ func (c *composer) applyOverrideLayer(text, layer string) error {
 }
 
 func compose(in Input) (Output, error) {
-	root, err := parseDoc(in.Subscription)
-	if err != nil {
-		return Output{}, fmt.Errorf("订阅内容%s", err.Error())
+	var root *yaml.Node
+	var err error
+	if len(strings.TrimSpace(string(in.Subscription))) == 0 && len(in.ManualNodes) > 0 {
+		root = mapNode("rules", strSeq([]string{"MATCH," + ManualGroupName}))
+	} else {
+		root, err = parseDoc(in.Subscription)
+		if err != nil {
+			return Output{}, fmt.Errorf("订阅内容%s", err.Error())
+		}
 	}
 	c := &composer{root: root, layer: layerSub, keySrc: map[string]string{}, nodeSrc: map[*yaml.Node]string{}}
 	for i := 0; i+1 < len(root.Content); i += 2 {
@@ -182,6 +188,11 @@ func compose(in Input) (Output, error) {
 		}
 		rs := c.seq("rules")
 		rs.Content = append([]*yaml.Node{c.mark(strNode(ipv6RejectRule))}, rs.Content...)
+	}
+
+	c.layer = layerManualNodes
+	if err := c.addManualNodes(in.ManualNodes); err != nil {
+		return Output{}, err
 	}
 
 	c.layer = layerCustom

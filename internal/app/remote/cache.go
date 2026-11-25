@@ -20,8 +20,8 @@ import (
 var topicReads = map[app.Topic][]string{
 	app.TopicStatus:       {"Status", "TUNHelperInstalled", "Proxies", "NetInfo"},
 	app.TopicTraffic:      {"Status", "TrafficHistory"},
-	app.TopicProxies:      {"Proxies", "ProxyProviders", "IconData", "ProbeRegions", "Status"},
-	app.TopicSubs:         {"Subscriptions", "EffectiveDNS", "EffectiveSniffer", "ProbeRegions", "Status", "Proxies", "OverrideList", "Overrides"},
+	app.TopicProxies:      {"Proxies", "ProxyProviders", "IconData", "ProbeRegions", "Status", "ManualNodes"},
+	app.TopicSubs:         {"Subscriptions", "EffectiveDNS", "EffectiveSniffer", "ProbeRegions", "Status", "Proxies", "OverrideList", "Overrides", "ManualNodes"},
 	app.TopicConns:        {"Connections", "ClosedConnections", "Status"},
 	app.TopicLogs:         {"Logs", "AppLogs"},
 	app.TopicRules:        {"Rules", "CustomRules", "RuleProviders"},
