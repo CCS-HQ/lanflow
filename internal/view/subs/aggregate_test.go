@@ -13,13 +13,13 @@ import (
 func TestAggregateEditorCreatePreviewSave(t *testing.T) {
 	api := fake.NewInstant()
 	e, toasts := testEnv(api)
-	p := New(e)
+	p := NewAggregates(e)
 	tt := ui.NewTester(p.View, 1200, 800)
 	tt.Frame()
-	if err := tt.Click("导入"); err != nil {
-		t.Fatal(err)
+	if !tt.HasText("还没有聚合订阅") {
+		t.Fatalf("empty list: %q", tt.Texts())
 	}
-	if err := tt.ChooseMenuItem("新建聚合订阅…"); err != nil {
+	if err := tt.Click("新建聚合订阅"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -142,11 +142,15 @@ func TestAggregateEditorCreatePreviewSave(t *testing.T) {
 		t.Fatalf("toast %q", got)
 	}
 
-	// Editing loads the stored spec, on the advanced mode (it has rules).
-	if err := tt.Click("更多 全部节点"); err != nil {
-		t.Fatal(err)
+	// The list shows it, with what its spec holds.
+	tt.Frame()
+	tt.Frame()
+	if !tt.HasText("全部节点") || !tt.HasText("2 个来源 · 高级配置 · 更新于 刚刚") {
+		t.Fatalf("list: %q", tt.Texts())
 	}
-	if err := tt.ChooseMenuItem("编辑聚合…"); err != nil {
+
+	// Editing loads the stored spec, on the advanced mode (it has rules).
+	if err := tt.Click("编辑 全部节点"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()

@@ -40,11 +40,14 @@ const (
 	Stats    Page = "stats"
 	Probe    Page = "probe"
 	Capture  Page = "capture" // 抓包 (docs/capture.md §7.2)
-	Settings Page = "settings"
+	// Aggregate lists the aggregate subscriptions and edits them
+	// (docs/aggregate.md); its arg is "new" or a subscription ID.
+	Aggregate Page = "aggregate"
+	Settings  Page = "settings"
 )
 
 // Order is the sidebar order (⌘1…⌘9 map to the first nine).
-var Order = []Page{Overview, Proxies, Subs, Conns, Logs, Rules, Net, Stats, Probe, Capture, Settings}
+var Order = []Page{Overview, Proxies, Subs, Conns, Logs, Rules, Net, Stats, Probe, Capture, Aggregate, Settings}
 
 // ImportURLPrefix starts the Subs navigation arg that opens the
 // import-from-link dialog with a link prefilled (a lanflow:// or clash://
@@ -75,7 +78,7 @@ func ParseImportURL(arg string) (url, name string, ok bool) {
 
 // Title returns the page's Chinese title.
 func Title(p Page) string {
-	return map[Page]string{Overview: i18n.T("概览"), Proxies: i18n.T("代理"), Subs: i18n.T("订阅"), Conns: i18n.T("连接"), Logs: i18n.T("日志"), Rules: i18n.T("规则|页"), Net: i18n.T("网络"), Stats: i18n.T("统计"), Probe: i18n.T("检测"), Capture: i18n.T("抓包"), Settings: i18n.T("设置")}[p]
+	return map[Page]string{Overview: i18n.T("概览"), Proxies: i18n.T("代理"), Subs: i18n.T("订阅"), Conns: i18n.T("连接"), Logs: i18n.T("日志"), Rules: i18n.T("规则|页"), Net: i18n.T("网络"), Stats: i18n.T("统计"), Probe: i18n.T("检测"), Capture: i18n.T("抓包"), Aggregate: i18n.T("聚合订阅"), Settings: i18n.T("设置")}[p]
 }
 
 // I18nColumns returns cols with their titles translated (i18n.T), for a

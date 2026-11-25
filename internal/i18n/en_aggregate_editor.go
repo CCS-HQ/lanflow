@@ -268,6 +268,16 @@ func init() {
 		"删除模板":      "Delete template",
 		"删除模板「%s」？已用它生成的订阅不受影响。":                                         "Delete template “%s”? Subscriptions built with it are not affected.",
 		"每行一条分享链接，也可以粘贴 Clash YAML 格式的节点（单个、列表或带 proxies 的配置），两种可以混在一起。": "One share link per line, or paste Clash YAML nodes (one, a list or a config with proxies); the two can be mixed.",
+		"从订阅链接、节点链接或 YAML 生成自己的订阅：节点筛选、代理组和分流规则都可以在这里编辑，之后随时回来修改、更新。":    "Build your own subscription from subscription links, node links or YAML: node filters, proxy groups and routing rules are all edited here, and you can come back to change or update it at any time.",
+		"多个来源合成一个订阅，在本机编辑维护":                                             "Several sources in one subscription, edited on this computer",
+		"聚合订阅也会出现在「订阅」页，可以和其他订阅一样切换使用。":                                  "Aggregate subscriptions also appear on the Subscriptions page and can be switched to like any other.",
+		"还没有聚合订阅":       "No aggregate subscriptions yet",
+		"重新下载来源并生成":     "Download the sources again and rebuild",
+		"高级配置":          "Advanced",
+		"%d 个来源":        "%d sources",
+		"已用 %s / %s GB": "%s / %s GB used",
+		"更新于 %s":        "Updated %s",
+		"编辑 %s":         "Edit %s",
 	} {
 		en[k] = v
 	}

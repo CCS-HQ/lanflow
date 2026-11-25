@@ -58,7 +58,7 @@ var icons = map[string]*ui.SVG{
 // pageIcons maps sidebar pages to their icon names.
 var pageIcons = map[string]string{
 	"overview": "overview", "proxies": "proxies", "subs": "subs", "conns": "conns",
-	"logs": "logs", "rules": "rules", "net": "net", "stats": "stats", "probe": "probe", "capture": "capture", "settings": "settings",
+	"logs": "logs", "rules": "rules", "net": "net", "stats": "stats", "probe": "probe", "capture": "capture", "aggregate": "layers", "settings": "settings",
 }
 
 // Icon returns the SVG of a named icon, nil if unknown.

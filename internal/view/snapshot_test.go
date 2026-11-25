@@ -45,6 +45,8 @@ var snapshots = []snapshot{
 	{name: "proxies", page: env.Proxies},
 	{name: "subs", page: env.Subs},
 	// The aggregate subscription editor (docs/aggregate.md), on each tab.
+	{name: "aggregate-empty", page: env.Aggregate},
+	{name: "aggregate-list", page: env.Aggregate, prep: aggregateSaved},
 	{name: "subs-aggregate", page: env.Subs, prep: aggregatePrep()},
 	{name: "subs-aggregate-preview", page: env.Subs, prep: aggregatePrep("生成配置")},
 	{name: "subs-aggregate-advanced", page: env.Subs, prep: aggregatePrep("高级模式", "生成配置")},
@@ -387,6 +389,26 @@ func aggregateScrolled(titles ...string) func(*testing.T, *fake.Fake, *Shell, *u
 	}
 }
 
+// aggregateSaved saves two aggregate subscriptions in the fake, the
+// second one in use, for the 聚合订阅 list.
+func aggregateSaved(t *testing.T, api *fake.Fake, _ *Shell, tt *ui.Tester) {
+	spec := profile.DefaultAggregateSpec()
+	spec.Sources = []model.AggregateSource{
+		{Kind: model.AggSourceURL, URL: "https://air.example.com/sub"},
+		{Kind: model.AggSourceLinks, Links: "trojan://pw@tw.example.com:443#台湾 09"},
+	}
+	if _, err := api.SaveAggregate(model.Subscription{Name: "全部节点", AutoUpdateHours: 12}, spec, false); err != nil {
+		t.Fatal(err)
+	}
+	spec.Template = "lite"
+	if _, err := api.SaveAggregate(model.Subscription{Name: "家里用", AutoUpdateHours: 24}, spec, true); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		tt.Frame()
+	}
+}
+
 // aggregatePrep saves an aggregate subscription in the fake, opens it in
 // the editor and clicks the given texts (生成配置 builds the preview).
 func aggregatePrep(clicks ...string) func(*testing.T, *fake.Fake, *Shell, *ui.Tester) {
@@ -402,7 +424,7 @@ func aggregatePrep(clicks ...string) func(*testing.T, *fake.Fake, *Shell, *ui.Te
 		if err != nil {
 			t.Fatal(err)
 		}
-		s.navigate(env.Subs, "aggregate:"+sub.ID)
+		s.navigate(env.Aggregate, sub.ID)
 		tt.Frame()
 		for _, k := range clicks {
 			click(t, tt, i18n.T(k))
