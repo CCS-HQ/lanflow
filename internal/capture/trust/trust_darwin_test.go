@@ -66,13 +66,14 @@ func TestRemoveByHash(t *testing.T) {
 	}()
 	der := []byte("matching-der-cert")
 	wantHash := SHA1(der)
+	expectHash := wantHash
 	findCerts = func() [][]byte { return [][]byte{[]byte("other"), der} }
 
 	var calls []string
 	run = func(name string, args ...string) error {
 		calls = append(calls, args[0])
-		if args[0] == "delete-certificate" && !slices.Contains(args, wantHash) {
-			t.Fatalf("delete-certificate missing hash %s: %v", wantHash, args)
+		if args[0] == "delete-certificate" && !slices.Contains(args, expectHash) {
+			t.Fatalf("delete-certificate missing hash %s: %v", expectHash, args)
 		}
 		return nil
 	}
@@ -84,6 +85,7 @@ func TestRemoveByHash(t *testing.T) {
 	}
 
 	calls = nil
+	expectHash = "DEADBEEF"
 	if err := removeByHash("DEADBEEF"); err != nil {
 		t.Fatal(err)
 	}
