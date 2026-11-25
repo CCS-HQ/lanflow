@@ -743,6 +743,11 @@ func (cl *Client) ClearCaptureFlows() (err error) {
 	return
 }
 
+func (cl *Client) SearchCaptureBodies(query string) (res0 []int64, err error) {
+	err = cl.call("SearchCaptureBodies", []any{query}, &res0)
+	return
+}
+
 func (cl *Client) SetCaptureRecording(on bool) (err error) {
 	err = cl.call("SetCaptureRecording", []any{on})
 	return
@@ -770,6 +775,16 @@ func (cl *Client) RegenerateCA() (err error) {
 
 func (cl *Client) RemoveCACert() (err error) {
 	err = cl.call("RemoveCACert", nil)
+	return
+}
+
+func (cl *Client) CaptureLeftoverRoots() (res0 []string) {
+	_ = cl.call("CaptureLeftoverRoots", nil, &res0)
+	return
+}
+
+func (cl *Client) RemoveCaptureLeftoverRoots() (err error) {
+	err = cl.call("RemoveCaptureLeftoverRoots", nil)
 	return
 }
 

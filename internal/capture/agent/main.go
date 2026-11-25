@@ -198,6 +198,7 @@ func NewControl(a *Agent, addr string) (*Control, error) {
 	mux.HandleFunc("POST /config", c.config)
 	mux.HandleFunc("GET /flows", c.flows)
 	mux.HandleFunc("GET /flow", c.flow)
+	mux.HandleFunc("GET /search", c.search)
 	mux.HandleFunc("POST /clear", c.clear)
 	c.srv = &http.Server{Handler: c.auth(mux), ReadHeaderTimeout: 5 * time.Second}
 	return c, nil
@@ -268,6 +269,13 @@ func (c *Control) flow(w http.ResponseWriter, r *http.Request) {
 func (c *Control) clear(w http.ResponseWriter, r *http.Request) {
 	c.a.Clear()
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (c *Control) search(w http.ResponseWriter, r *http.Request) {
+	ids := c.a.SearchBodies(r.Context(), r.URL.Query().Get("q"))
+	writeJSON(w, struct {
+		IDs []int64 `json:"ids"`
+	}{IDs: ids})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

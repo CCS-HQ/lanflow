@@ -425,6 +425,9 @@ type API interface {
 	// AddCaptureApp adds the program behind a connection (and turns on).
 	AddCaptureApp(processPath, process string, enable bool) error
 	ClearCaptureFlows() error
+	// SearchCaptureBodies searches captured request/response headers, decoded
+	// bodies, and WebSocket text frames on the agent, returning matching IDs.
+	SearchCaptureBodies(query string) ([]int64, error)
 	// SetCaptureRecording pauses (false) or resumes the request list; paused,
 	// decryption relays without decrypting or storing anything.
 	SetCaptureRecording(on bool) error
@@ -442,6 +445,12 @@ type API interface {
 	// RemoveCACert turns decryption off and removes the root's trust,
 	// key and certificate.
 	RemoveCACert() error
+	// CaptureLeftoverRoots lists SHA-1 hashes of old Lanflow CA roots left
+	// in the user's trust store other than the active root.
+	CaptureLeftoverRoots() []string
+	// RemoveCaptureLeftoverRoots deletes leftover Lanflow CA roots from the
+	// user's trust store.
+	RemoveCaptureLeftoverRoots() error
 	// ExportCACert writes the root certificate (never the key) as PEM.
 	ExportCACert(path string) error
 	// ExportHAR writes the records as HAR 1.2; bodies only with withBodies,

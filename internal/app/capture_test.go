@@ -374,3 +374,49 @@ func TestAgentStartEndsOnShutdown(t *testing.T) {
 		t.Fatal("Shutdown did not finish")
 	}
 }
+
+func TestCaptureLeftoverRootsAndRemove(t *testing.T) {
+	ft := &fakeTrust{installed: map[string]bool{}}
+	defer ft.hooks()()
+
+	left := []string{"AAAA1111", "BBBB2222"}
+	var removed []string
+	var scanCalls int
+	TrustHooks.Leftovers = func(keep []byte) []string {
+		scanCalls++
+		return append([]string(nil), left...)
+	}
+	TrustHooks.RemoveByHash = func(h string) error {
+		removed = append(removed, h)
+		var next []string
+		for _, cur := range left {
+			if cur != h {
+				next = append(next, cur)
+			}
+		}
+		left = next
+		return nil
+	}
+
+	h := newHarness(t, nil)
+	s := h.s
+	if got := s.CaptureLeftoverRoots(); len(got) != 2 || got[0] != "AAAA1111" {
+		t.Fatalf("CaptureLeftoverRoots = %v", got)
+	}
+	callsBeforeStatus := scanCalls
+	if st := s.CaptureStatus(); len(st.LeftoverRoots) != 2 || st.LeftoverRoots[1] != "BBBB2222" {
+		t.Fatalf("CaptureStatus.LeftoverRoots = %v", st.LeftoverRoots)
+	}
+	if scanCalls != callsBeforeStatus {
+		t.Fatalf("CaptureStatus scanned external trust store (%d -> %d)", callsBeforeStatus, scanCalls)
+	}
+	if err := s.RemoveCaptureLeftoverRoots(); err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 || removed[0] != "AAAA1111" || removed[1] != "BBBB2222" {
+		t.Fatalf("removed = %v", removed)
+	}
+	if st := s.CaptureStatus(); len(st.LeftoverRoots) != 0 {
+		t.Fatalf("LeftoverRoots still present after cleanup: %v", st.LeftoverRoots)
+	}
+}

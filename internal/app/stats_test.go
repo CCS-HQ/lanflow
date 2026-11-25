@@ -372,3 +372,35 @@ func TestStatsFromConnectionStream(t *testing.T) {
 		t.Errorf("reset statistics written back on shutdown: %v", entries)
 	}
 }
+
+func TestStatsCaptureReturnDedup(t *testing.T) {
+	st := newStatsStore(t.TempDir(), time.Now, nil)
+	leg := model.Connection{
+		ID:                  "leg-1",
+		Host:                "api.example.com:443",
+		CaptureLeg:          true,
+		Chains:              []string{"LANFLOW-MITM-abcd"},
+		CaptureReturnChains: []string{"节点选择", "东京 03"},
+		Upload:              120,
+		Download:            800,
+	}
+	ret := model.Connection{
+		ID:            "ret-1",
+		Host:          "api.example.com:443",
+		CaptureReturn: true,
+		Chains:        []string{"节点选择", "东京 03"},
+		Upload:        120,
+		Download:      800,
+	}
+	st.record([]model.Connection{leg, ret}, time.Now())
+	snap := st.snapshot(model.StatsToday)
+	if snap.Totals.Upload != 120 || snap.Totals.Download != 800 || snap.Totals.Requests != 1 {
+		t.Fatalf("stats totals not deduplicated: %+v", snap.Totals)
+	}
+	if _, bad := bucketOf(snap, model.StatsProxy, "LANFLOW-MITM-abcd"); bad {
+		t.Fatalf("LANFLOW-MITM-abcd should not appear in proxy stats")
+	}
+	if b, ok := bucketOf(snap, model.StatsProxy, "节点选择/东京 03"); !ok || b.Requests != 1 || b.Download != 800 {
+		t.Fatalf("proxy stats missing paired return chain: %+v %v", b, ok)
+	}
+}

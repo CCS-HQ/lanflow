@@ -68,6 +68,8 @@ func init() {
 		"其他 %d 项|one": "%d other",
 		"链路前置":        "Chain front hop",
 		"链式代理的前置跳：澜流与内核为下一跳建立的连接，流量已计入它所服务的连接": "The front hop of a proxy chain: the connection the core opens for the next hop; its traffic is counted in the connection it serves",
+		"已解密 · 回流经 %s": "Decrypted · via %s",
+		"已解密":          "Decrypted",
 	} {
 		en[k] = v
 	}

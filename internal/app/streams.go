@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -267,24 +268,29 @@ func (s *Service) onConnections(c controller.Connections) {
 	for i := len(closed) - 1; i >= 0; i-- { // closed is newest first
 		s.state.closed.Push(closed[i])
 	}
-	// A dialer-proxy hop is a connection of its own (INNER, docs/chain-
-	// proxy.md §1) whose bytes the core counts once more in its totals
-	// and in /traffic: they are taken out, so a chain counts once.
+	// A dialer-proxy hop (INNER, docs/chain-proxy.md §1) or a capture
+	// return leg (lanflow-mitm-up, docs/capture.md §9) is a connection of
+	// its own whose bytes the core counts once more in its totals and in
+	// /traffic: they are taken out, so each flow counts once.
 	var inUp, inDown, inTotUp, inTotDown int64
+	activeCount := 0
 	for _, cn := range active {
-		if cn.IsInner() {
+		if cn.IsInner() || cn.CaptureReturn {
 			inUp, inDown = inUp+cn.UpSpeed, inDown+cn.DownSpeed
 			inTotUp, inTotDown = inTotUp+cn.Upload, inTotDown+cn.Download
 		}
+		if !cn.CaptureReturn {
+			activeCount++
+		}
 	}
 	for _, cn := range closed {
-		if cn.IsInner() {
+		if cn.IsInner() || cn.CaptureReturn {
 			s.state.innerClosedUp += cn.Upload
 			s.state.innerClosedDown += cn.Download
 		}
 	}
 	s.state.innerUp, s.state.innerDown = inUp, inDown
-	s.state.st.Connections = len(active)
+	s.state.st.Connections = activeCount
 	s.state.st.TotalUp = max(0, c.UploadTotal-inTotUp-s.state.innerClosedUp)
 	s.state.st.TotalDown = max(0, c.DownloadTotal-inTotDown-s.state.innerClosedDown)
 	if c.Memory > 0 {
@@ -323,7 +329,8 @@ type connSample struct {
 // connTracker turns successive connection snapshots into speeds and a list
 // of connections that disappeared since the previous snapshot.
 type connTracker struct {
-	prev map[string]connSample
+	prev          map[string]connSample
+	captureChains map[string][]string // downstream conn ID → paired return chains
 }
 
 // update maps the snapshot to model connections (chains outermost first,
@@ -360,7 +367,117 @@ func (t *connTracker) update(c controller.Connections, now time.Time) (active, c
 		closed = append(closed, cc)
 	}
 	t.prev = next
+	t.pairCaptureReturn(active, closed)
 	return active, closed
+}
+
+// pairCaptureReturn matches capture return legs (lanflow-mitm-up) 1-to-1
+// FIFO with their client-to-agent legs and attaches the real outbound
+// chains to the client legs (docs/capture.md §9).
+func (t *connTracker) pairCaptureReturn(active, closed []model.Connection) {
+	if t.captureChains == nil {
+		t.captureChains = map[string][]string{}
+	}
+	var downs, rets []int
+	for i, cn := range active {
+		if !cn.CaptureLeg {
+			continue
+		}
+		if cn.CaptureReturn {
+			rets = append(rets, i)
+		} else {
+			downs = append(downs, i)
+		}
+	}
+	byStart := func(a, b int) int {
+		if d := active[a].Start.Compare(active[b].Start); d != 0 {
+			return d
+		}
+		return strings.Compare(active[a].ID, active[b].ID)
+	}
+	slices.SortFunc(downs, byStart)
+	slices.SortFunc(rets, byStart)
+
+	used := make([]bool, len(rets))
+	for _, di := range downs {
+		d := &active[di]
+		matched := false
+		for rpos, ri := range rets {
+			if used[rpos] {
+				continue
+			}
+			r := active[ri]
+			if !captureLegMatch(*d, r) {
+				continue
+			}
+			used[rpos] = true
+			matched = true
+			d.CaptureReturnChains = slices.Clone(r.Chains)
+			if d.DstIP == "" && r.DstIP != "" {
+				d.DstIP = r.DstIP
+			}
+			if d.RemoteDestination == "" && r.RemoteDestination != "" {
+				d.RemoteDestination = r.RemoteDestination
+			}
+			t.captureChains[d.ID] = slices.Clone(r.Chains)
+			break
+		}
+		if !matched {
+			if prev, ok := t.captureChains[d.ID]; ok {
+				d.CaptureReturnChains = slices.Clone(prev)
+			}
+		}
+	}
+	for i := range closed {
+		cc := &closed[i]
+		if cc.CaptureLeg && !cc.CaptureReturn {
+			if prev, ok := t.captureChains[cc.ID]; ok {
+				cc.CaptureReturnChains = slices.Clone(prev)
+			}
+		}
+		delete(t.captureChains, cc.ID)
+	}
+	for id := range t.captureChains {
+		if _, ok := t.prev[id]; !ok {
+			delete(t.captureChains, id)
+		}
+	}
+}
+
+func captureLegMatch(down, ret model.Connection) bool {
+	if !down.Start.IsZero() && !ret.Start.IsZero() {
+		if ret.Start.Before(down.Start.Add(-2*time.Second)) || ret.Start.After(down.Start.Add(5*time.Second)) {
+			return false
+		}
+	}
+	if strings.EqualFold(down.Host, ret.Host) {
+		return true
+	}
+	dh, dp := splitHostPortStr(down.Host)
+	rh, rp := splitHostPortStr(ret.Host)
+	if dp != "" && dp != rp {
+		return false
+	}
+	if ret.DstIP != "" && (down.DstIP == ret.DstIP || strings.EqualFold(dh, ret.DstIP)) {
+		return true
+	}
+	return dh != "" && strings.EqualFold(dh, rh)
+}
+
+func splitHostPortStr(hp string) (string, string) {
+	if strings.HasPrefix(hp, "[") {
+		if end := strings.Index(hp, "]"); end >= 0 {
+			port := ""
+			if rest := hp[end+1:]; strings.HasPrefix(rest, ":") {
+				port = rest[1:]
+			}
+			return hp[1:end], port
+		}
+	}
+	if i := strings.LastIndex(hp, ":"); i > 0 && strings.Count(hp, ":") == 1 {
+		return hp[:i], hp[i+1:]
+	}
+	return hp, ""
 }
 
 // toConnection maps a controller connection to the model (chains reversed).
@@ -377,7 +494,8 @@ func toConnection(rc controller.Connection) model.Connection {
 		host = joinHostPort(host, md.DestinationPort)
 	}
 	chains := make([]string, len(rc.Chains))
-	leg := md.InboundName == profile.CaptureUpListener
+	ret := md.InboundName == profile.CaptureUpListener
+	leg := ret
 	for i, c := range rc.Chains {
 		chains[len(rc.Chains)-1-i] = c
 		leg = leg || strings.HasPrefix(c, profile.CaptureOutboundPrefix)
@@ -400,6 +518,7 @@ func toConnection(rc controller.Connection) model.Connection {
 		Download:          rc.Download,
 		Start:             rc.Start,
 		CaptureLeg:        leg,
+		CaptureReturn:     ret,
 	}
 }
 
