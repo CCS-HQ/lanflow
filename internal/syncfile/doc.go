@@ -47,6 +47,11 @@ type Doc struct {
 	Overrides     []Override     `sync:"overrides"`
 	CustomRules   []Rule         `sync:"customRules"`
 	Subscriptions []Subscription `sync:"subscriptions"`
+	// ProxyChains are the user's proxy chains (docs/chain-proxy.md): node
+	// and group names only, no secrets. A file without the key (written
+	// by a version without chains) leaves this machine's chains as they
+	// are; `proxyChains: []` removes them.
+	ProxyChains []Chain `sync:"proxyChains"`
 	// WebDAVPassword is WebDAVPasswordRef when a password is set: the
 	// password itself stays in the keychain. With Encryption it is the
 	// sealed password (enc:v1:…).
@@ -70,6 +75,15 @@ type Rule struct {
 	Type    string `sync:"type"`
 	Payload string `sync:"payload"`
 	Target  string `sync:"target"`
+}
+
+// Chain is a proxy chain (model.ProxyChain). The ID is the same on every
+// machine: the generated nodes are named after it.
+type Chain struct {
+	ID      string   `sync:"id"`
+	Name    string   `sync:"name"`
+	Hops    []string `sync:"hops"`
+	Enabled bool     `sync:"enabled"`
 }
 
 // Subscription is a subscription with a link (model.Subscription with
@@ -383,6 +397,34 @@ func validate(doc Doc, top *yaml.Node) error {
 		p := "customRules[" + strconv.Itoa(i) + "]"
 		if strings.TrimSpace(r.Type) == "" || strings.TrimSpace(r.Payload) == "" || strings.TrimSpace(r.Target) == "" {
 			return errAt(NodeAt(top, p), p, i18n.T("自定义规则需要 type、payload 和 target"))
+		}
+	}
+	chainIDs, chainNames := map[string]bool{}, map[string]bool{}
+	for i, c := range doc.ProxyChains {
+		p := "proxyChains[" + strconv.Itoa(i) + "]"
+		if !idPattern.MatchString(c.ID) {
+			return errAt(NodeAt(top, p+".id"), p+".id", i18n.T("链路 ID 只能由字母、数字、- 和 _ 组成（最多 64 个字符）"))
+		}
+		if chainIDs[c.ID] {
+			return errAt(NodeAt(top, p+".id"), p+".id", i18n.T("链路 ID 重复"))
+		}
+		chainIDs[c.ID] = true
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			return errAt(NodeAt(top, p), p+".name", i18n.T("链路名称不能为空"))
+		}
+		if chainNames[name] {
+			return errAt(NodeAt(top, p+".name"), p+".name", i18n.T("链路名称重复"))
+		}
+		chainNames[name] = true
+		if n := len(c.Hops); n < model.ProxyChainMinHops || n > model.ProxyChainMaxHops {
+			return errAt(NodeAt(top, p+".hops"), p+".hops", i18n.Tf("链路需要 %d–%d 跳", model.ProxyChainMinHops, model.ProxyChainMaxHops))
+		}
+		for j, h := range c.Hops {
+			if strings.TrimSpace(h) == "" {
+				hp := p + ".hops[" + strconv.Itoa(j) + "]"
+				return errAt(NodeAt(top, hp), hp, i18n.T("链路的跳不能为空"))
+			}
 		}
 	}
 	return nil

@@ -11,6 +11,8 @@
 //	overrides.json           []model.Override, the ordered override list (overrides.go)
 //	overrides/*.yaml         the former single texts, migrated into overrides.json on first open
 //	custom-rules.json        []model.CustomRule
+//	manual-nodes.json        []model.ManualNode
+//	proxy-chains.json        []model.ProxyChain (chains.go)
 package profile
 
 import (
@@ -68,6 +70,14 @@ func (s *Store) SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, er
 	return s.s.setManualNodes(nodes)
 }
 
+// ProxyChains returns the user-defined proxy chains in order.
+func (s *Store) ProxyChains() []model.ProxyChain { return s.s.proxyChainsList() }
+
+// SetProxyChains replaces the proxy chains (IDs assigned to empty ones).
+func (s *Store) SetProxyChains(chains []model.ProxyChain) ([]model.ProxyChain, error) {
+	return s.s.setProxyChains(chains)
+}
+
 // ---- download ----
 
 // Fetched is a downloaded subscription.
@@ -117,6 +127,9 @@ type Input struct {
 	Overrides   []Layer
 	CustomRules []model.CustomRule
 	ManualNodes []model.ManualNode
+	// ProxyChains are composed after the manual nodes and before the
+	// custom rules, which may target a chain (chains.go).
+	ProxyChains []model.ProxyChain
 	DNS         model.DNSSettings     // applied when DNS.TakeOver; when TUN is on and the result has no dns section, a default fake-ip DNS is added
 	Sniffer     model.SnifferSettings // Enable always applied; full section when TakeOver
 	Geo         model.GeoSettings     // geox-url, geodata-mode, geo-auto-update, geo-update-interval

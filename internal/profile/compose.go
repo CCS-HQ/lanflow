@@ -3,6 +3,7 @@ package profile
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -195,6 +196,9 @@ func compose(in Input) (Output, error) {
 		return Output{}, err
 	}
 
+	c.layer = layerChains
+	chainWarns := c.addProxyChains(in.ProxyChains, in.CustomRules)
+
 	c.layer = layerCustom
 	if len(in.CustomRules) > 0 {
 		if err := c.addCustomRules(in.CustomRules); err != nil {
@@ -275,7 +279,10 @@ func compose(in Input) (Output, error) {
 	applyAdvanced(c, in.Advanced)
 	applyCoexist(c, in.Coexist, m.TUN)
 	hoistCaptureRules(c)
-	warns := append(lanWarns, scrubCaptureRefs(c)...)
+	c.layer = layerChains
+	ownGlobal := excludeChainClones(c)
+	warns := append(lanWarns, chainWarns...)
+	warns = append(warns, scrubCaptureRefs(c)...)
 	warns = append(warns, captureFindProcess(c, in.Capture)...)
 	c.layer = layerLanflow
 
@@ -289,6 +296,11 @@ func compose(in Input) (Output, error) {
 	}
 
 	out := Output{Groups: groupNames(root, true), Warnings: warns}
+	if ownGlobal {
+		// GLOBAL written out only to leave the chain clones out of it
+		// (chains.go): not a group of the configuration's own
+		out.Groups = slices.DeleteFunc(out.Groups, func(n string) bool { return n == "GLOBAL" })
+	}
 	out.YAML, out.Lines, err = c.render()
 	if err != nil {
 		return Output{}, err

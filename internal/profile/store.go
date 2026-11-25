@@ -21,6 +21,7 @@ const (
 	indexFile       = "profiles.json"
 	customRulesFile = "custom-rules.json"
 	manualNodesFile = "manual-nodes.json"
+	proxyChainsFile = "proxy-chains.json"
 	profilesDir     = "profiles"
 	overridesDir    = "overrides"
 	overrideGlobal  = "global"
@@ -83,6 +84,7 @@ type store struct {
 	index       fileIndex
 	rules       []model.CustomRule
 	manualNodes []model.ManualNode
+	chains      []model.ProxyChain
 	ovs         []model.Override // the ordered override list (overrides.go)
 }
 
@@ -153,6 +155,22 @@ func (s *store) load() error {
 	}
 	if s.manualNodes == nil {
 		s.manualNodes = []model.ManualNode{}
+	}
+
+	data, err = os.ReadFile(filepath.Join(s.dir, proxyChainsFile))
+	switch {
+	case err == nil:
+		if len(strings.TrimSpace(string(data))) > 0 {
+			if err := json.Unmarshal(data, &s.chains); err != nil {
+				return fmt.Errorf("链式代理 %s 已损坏：%w", proxyChainsFile, err)
+			}
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		return fmt.Errorf("无法读取链式代理：%w", err)
+	}
+	if s.chains == nil {
+		s.chains = []model.ProxyChain{}
 	}
 	return s.loadOverrides()
 }
@@ -461,4 +479,41 @@ func (s *store) setManualNodes(nodes []model.ManualNode) ([]model.ManualNode, er
 		return nil, err
 	}
 	return append([]model.ManualNode(nil), out...), nil
+}
+
+func (s *store) proxyChainsList() []model.ProxyChain {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return model.CloneProxyChains(s.chains)
+}
+
+// setProxyChains replaces the chains, assigning IDs to the ones without.
+func (s *store) setProxyChains(chains []model.ProxyChain) ([]model.ProxyChain, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := model.CloneProxyChains(chains)
+	if out == nil {
+		out = []model.ProxyChain{}
+	}
+	taken := map[string]bool{}
+	for _, c := range out {
+		if c.ID != "" {
+			taken[c.ID] = true
+		}
+	}
+	for i := range out {
+		if out[i].ID == "" {
+			out[i].ID = newID(func(id string) bool { return taken[id] })
+			taken[out[i].ID] = true
+		}
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	if err := atomicWrite(filepath.Join(s.dir, proxyChainsFile), append(data, '\n')); err != nil {
+		return nil, err
+	}
+	s.chains = out
+	return model.CloneProxyChains(out), nil
 }
