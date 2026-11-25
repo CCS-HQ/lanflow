@@ -95,8 +95,8 @@ func TestExpectedCoreSHA256(t *testing.T) {
 	good := strings.Repeat("ab", 32)
 
 	// the pinned version needs no network
-	hits := digestServer(t, "v1.19.34", nil)
-	asset := "mihomo-darwin-arm64-v1.19.33.gz"
+	hits := digestServer(t, "v1.19.35", nil)
+	asset := "mihomo-darwin-arm64-" + pinnedCoreVersion + ".gz"
 	if sum, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, pinnedCoreVersion, asset); err != nil || sum != pinnedCoreSHA256[asset] {
 		t.Fatalf("pinned: %q %v", sum, err)
 	}
@@ -105,22 +105,22 @@ func TestExpectedCoreSHA256(t *testing.T) {
 	}
 
 	// another stable version: the API digest of the asset
-	asset = "mihomo-darwin-arm64-v1.19.34.gz"
-	digestServer(t, "v1.19.34", map[string]string{asset: "sha256:" + strings.ToUpper(good), "other.gz": "sha256:" + strings.Repeat("0", 64)})
-	if sum, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, "v1.19.34", asset); err != nil || sum != good {
+	asset = "mihomo-darwin-arm64-v1.19.35.gz"
+	digestServer(t, "v1.19.35", map[string]string{asset: "sha256:" + strings.ToUpper(good), "other.gz": "sha256:" + strings.Repeat("0", 64)})
+	if sum, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, "v1.19.35", asset); err != nil || sum != good {
 		t.Fatalf("api digest: %q %v", sum, err)
 	}
 	// an asset without a digest, or with something else, is refused
-	digestServer(t, "v1.19.34", map[string]string{asset: ""})
-	if _, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, "v1.19.34", asset); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+	digestServer(t, "v1.19.35", map[string]string{asset: ""})
+	if _, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, "v1.19.35", asset); err == nil || !strings.Contains(err.Error(), "SHA-256") {
 		t.Fatalf("missing digest must be refused: %v", err)
 	}
-	digestServer(t, "v1.19.34", map[string]string{asset: "md5:abc"})
-	if _, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, "v1.19.34", asset); err == nil {
+	digestServer(t, "v1.19.35", map[string]string{asset: "md5:abc"})
+	if _, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, "v1.19.35", asset); err == nil {
 		t.Fatal("a non-sha256 digest must be refused")
 	}
-	digestServer(t, "v1.19.34", map[string]string{"other.gz": "sha256:" + good})
-	if _, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, "v1.19.34", asset); err == nil {
+	digestServer(t, "v1.19.35", map[string]string{"other.gz": "sha256:" + good})
+	if _, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, "v1.19.35", asset); err == nil {
 		t.Fatal("an asset the release lacks must be refused")
 	}
 
@@ -133,7 +133,7 @@ func TestExpectedCoreSHA256(t *testing.T) {
 
 	// the API answering an error is an error, not an empty sum
 	digestServer(t, "nothing", nil)
-	if _, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, "v1.19.34", "mihomo-darwin-arm64-v1.19.34.gz"); err == nil || !strings.Contains(err.Error(), "404") {
+	if _, err := h.s.expectedCoreSHA256(ctx, model.CoreChannelStable, "v1.19.35", "mihomo-darwin-arm64-v1.19.35.gz"); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("API error must surface: %v", err)
 	}
 }
@@ -142,15 +142,15 @@ func TestExpectedCoreSHA256(t *testing.T) {
 // download mirror.
 func TestExpectedCoreSHA256IgnoresMirror(t *testing.T) {
 	good := strings.Repeat("cd", 32)
-	asset := "mihomo-darwin-arm64-v1.19.34.gz"
-	hits := digestServer(t, "v1.19.34", map[string]string{asset: "sha256:" + good})
+	asset := "mihomo-darwin-arm64-v1.19.35.gz"
+	hits := digestServer(t, "v1.19.35", map[string]string{asset: "sha256:" + good})
 	h := newHarness(t, nil)
 	set := h.s.Settings()
 	set.DownloadMirror = "http://127.0.0.1:1/" // nothing listens there
 	if err := h.s.SaveSettings(set); err != nil {
 		t.Fatal(err)
 	}
-	if sum, err := h.s.expectedCoreSHA256(context.Background(), model.CoreChannelStable, "v1.19.34", asset); err != nil || sum != good || hits.Load() == 0 {
+	if sum, err := h.s.expectedCoreSHA256(context.Background(), model.CoreChannelStable, "v1.19.35", asset); err != nil || sum != good || hits.Load() == 0 {
 		t.Fatalf("mirror must not be used for the digest: %q %v hits=%d", sum, err, hits.Load())
 	}
 }
@@ -187,17 +187,17 @@ func TestInstallCoreRejectsChecksumMismatch(t *testing.T) {
 // End to end with the real lookup: a non-pinned version installs when the
 // API digest matches, and is not even downloaded when there is none.
 func TestInstallCoreUsesAPIDigest(t *testing.T) {
-	body := []byte("core v1.19.34")
+	body := []byte("core v1.19.35")
 	srv, dlHits := coreServer(t, body, http.StatusOK)
 	useCoreServer(t, srv)
 	coreDigest = (*Service).expectedCoreSHA256 // coreServer trusted any sum; use the real lookup
 
-	asset, _, err := coreAsset(runtime.GOOS, runtime.GOARCH, "v1.19.34")
+	asset, _, err := coreAsset(runtime.GOOS, runtime.GOARCH, "v1.19.35")
 	if err != nil {
 		t.Skip(err)
 	}
 	// the payload coreServer serves for this platform
-	resp, err := http.Get(srv.URL + "/v1.19.34/" + asset)
+	resp, err := http.Get(srv.URL + "/v1.19.35/" + asset)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,23 +211,23 @@ func TestInstallCoreUsesAPIDigest(t *testing.T) {
 
 	h := newHarness(t, func(h *harness) {
 		h.core.findFn = realFind
-		h.core.versionFn = func(string) (string, error) { return "v1.19.34", nil }
+		h.core.versionFn = func(string) (string, error) { return "v1.19.35", nil }
 	})
 
-	digestServer(t, "v1.19.34", map[string]string{asset: ""})
+	digestServer(t, "v1.19.35", map[string]string{asset: ""})
 	before := dlHits.Load()
-	if err := h.s.InstallCore(model.CoreChannelStable, "v1.19.34"); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+	if err := h.s.InstallCore(model.CoreChannelStable, "v1.19.35"); err == nil || !strings.Contains(err.Error(), "SHA-256") {
 		t.Fatalf("no digest must refuse the install: %v", err)
 	}
 	if dlHits.Load() != before {
 		t.Fatal("nothing should be downloaded without a known checksum")
 	}
 
-	digestServer(t, "v1.19.34", map[string]string{asset: "sha256:" + sum})
-	if err := h.s.InstallCore(model.CoreChannelStable, "v1.19.34"); err != nil {
+	digestServer(t, "v1.19.35", map[string]string{asset: "sha256:" + sum})
+	if err := h.s.InstallCore(model.CoreChannelStable, "v1.19.35"); err != nil {
 		t.Fatalf("InstallCore: %v", err)
 	}
-	if got, _ := os.ReadFile(h.s.coreVersionPath("v1.19.34")); string(got) != string(body) {
+	if got, _ := os.ReadFile(h.s.coreVersionPath("v1.19.35")); string(got) != string(body) {
 		t.Fatalf("installed core = %q", got)
 	}
 }

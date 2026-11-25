@@ -66,7 +66,7 @@ gh attestation verify lanflow-<版本>-arm64.dmg --repo Owlbay/lanflow
 
 ## 本地开发
 
-需要 Go 1.27.4+。先下载官方 Mihomo（固定 v1.19.33）与地理数据库到 `bin/`：
+需要 Go 1.27.4+。先下载官方 Mihomo（固定 v1.19.34）与地理数据库到 `bin/`：
 
 ```sh
 scripts/fetch-core.sh                 # 宿主平台；也可 scripts/fetch-core.sh windows amd64
@@ -236,7 +236,7 @@ agent 可以直接编辑 `lanflow.yaml`，或用 `lanflow ctl config sync apply 
 
 安装包里另有第三方组件，清单与许可证见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)，许可证全文在安装包内的 `licenses/` 文件夹（macOS：`Lanflow.app/Contents/Resources/licenses/`）：
 
-- **Mihomo** 内核为 GPL-3.0，以独立程序随包分发，未作修改；包内附有许可证全文和对应版本源代码的地址（当前为 [v1.19.33](https://github.com/MetaCubeX/mihomo/tree/v1.19.33)）。
+- **Mihomo** 内核为 GPL-3.0，以独立程序随包分发，未作修改；包内附有许可证全文和对应版本源代码的地址（当前为 [v1.19.34](https://github.com/MetaCubeX/mihomo/tree/v1.19.34)）。
 - **地理数据库**来自 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat)。This product includes GeoLite2 Data created by MaxMind, available from <https://www.maxmind.com>.
 - 地图陆地数据来自 Natural Earth（公有领域）。
 

@@ -10,11 +10,11 @@ Lanflow itself is released under the MIT License. The packages also contain the 
 
 | 项目 | 内容 |
 | --- | --- |
-| 组件 | [Mihomo](https://github.com/MetaCubeX/mihomo) v1.19.33，官方发布版，未作修改，以子进程方式运行 |
-| 许可证 | GNU General Public License v3.0（全文见包内 `licenses/mihomo/LICENSE`，或 <https://github.com/MetaCubeX/mihomo/blob/v1.19.33/LICENSE>） |
-| 对应源代码 | <https://github.com/MetaCubeX/mihomo/tree/v1.19.33>（压缩包：<https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.33.tar.gz>） |
+| 组件 | [Mihomo](https://github.com/MetaCubeX/mihomo) v1.19.34，官方发布版，未作修改，以子进程方式运行 |
+| 许可证 | GNU General Public License v3.0（全文见包内 `licenses/mihomo/LICENSE`，或 <https://github.com/MetaCubeX/mihomo/blob/v1.19.34/LICENSE>） |
+| 对应源代码 | <https://github.com/MetaCubeX/mihomo/tree/v1.19.34>（压缩包：<https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.34.tar.gz>） |
 
-Mihomo v1.19.33 is distributed with Lanflow as a separate, unmodified program under the GNU General Public License, version 3. The complete corresponding source code of that version is at the link above.
+Mihomo v1.19.34 is distributed with Lanflow as a separate, unmodified program under the GNU General Public License, version 3. The complete corresponding source code of that version is at the link above.
 
 在澜流内（设置 › 内核）另行下载的其他 Mihomo 版本来自同一仓库，源代码在同名 tag。
 
