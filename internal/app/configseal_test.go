@@ -76,6 +76,7 @@ func syncBytes(t *testing.T, dir string) string {
 }
 
 func TestSealEnableWritesSealedFile(t *testing.T) {
+	t.Parallel()
 	h, ks, dir := sealedDevice(t)
 	text := syncBytes(t, dir)
 	doc := readSync(t, dir)
@@ -123,6 +124,7 @@ func TestSealEnableWritesSealedFile(t *testing.T) {
 }
 
 func TestSealRestartKeepsEncryption(t *testing.T) {
+	t.Parallel()
 	h, _, dir := sealedDevice(t)
 	text := syncBytes(t, dir)
 	// a new run: nothing primed, the loop starts dirty and the file is its own
@@ -141,6 +143,7 @@ func TestSealRestartKeepsEncryption(t *testing.T) {
 }
 
 func TestSealNewDeviceUnlocks(t *testing.T) {
+	t.Parallel()
 	_, _, dir := sealedDevice(t)
 	b, bks := secondDevice(t, dir)
 	st := b.s.ConfigSyncStatus()
@@ -195,6 +198,7 @@ func TestSealNewDeviceUnlocks(t *testing.T) {
 }
 
 func TestSealChangePassphraseOtherDevice(t *testing.T) {
+	t.Parallel()
 	a, _, dir := sealedDevice(t)
 	b, _ := secondDevice(t, dir)
 	if err := b.s.UnlockSync(sealPass); err != nil {
@@ -255,6 +259,7 @@ func TestSealChangePassphraseOtherDevice(t *testing.T) {
 }
 
 func TestSealTurnOffAndOn(t *testing.T) {
+	t.Parallel()
 	h, ks, dir := sealedDevice(t)
 	if err := h.s.SetSyncPassphrase(""); err != nil {
 		t.Fatal(err)
@@ -284,6 +289,7 @@ func TestSealTurnOffAndOn(t *testing.T) {
 // TestSealMovedValueRefused: a sealed value copied onto another
 // subscription does not open there; the subscription keeps its own link.
 func TestSealMovedValueRefused(t *testing.T) {
+	t.Parallel()
 	h, _, dir := sealedDevice(t)
 	if _, err := h.store.Put(model.Subscription{ID: "cafe0002", Name: "第二个", Source: urlSubscriptionK, URL: "https://b.example/sub?token=CCC"}); err != nil {
 		t.Fatal(err)
@@ -320,6 +326,7 @@ func TestSealMovedValueRefused(t *testing.T) {
 // TestSealSecretsStayOutOfLogs: neither the links, the passphrase nor
 // the sealed values reach Lanflow's log or the diagnostics bundle.
 func TestSealSecretsStayOutOfLogs(t *testing.T) {
+	t.Parallel()
 	a, _, dir := sealedDevice(t)
 	b, _ := secondDevice(t, dir)
 	_ = b.s.UnlockSync("wrong passphrase!")

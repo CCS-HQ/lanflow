@@ -27,7 +27,7 @@ func TestRate(t *testing.T) {
 func TestPNGStates(t *testing.T) {
 	for _, ink := range []Ink{{}, {Dark: true}, {Windows: true}, {Windows: true, Dark: true}} {
 		for st := Off; st <= Error; st++ {
-			for _, l := range []Look{{State: st}, {State: st, Capture: true}, {State: st, Graph: make([]float64, GraphBars)}} {
+			for _, l := range []Look{{State: st}, {State: st, TUN: true}, {State: st, Capture: true}, {State: st, Graph: make([]float64, GraphBars)}} {
 				b := PNG(l, ink)
 				img, err := png.Decode(bytes.NewReader(b))
 				if err != nil {
@@ -40,6 +40,44 @@ func TestPNGStates(t *testing.T) {
 					t.Errorf("graph icon not wider: %d", img.Bounds().Dx())
 				}
 			}
+		}
+	}
+}
+
+func TestPNGTUNColor(t *testing.T) {
+	if (Look{State: On}).Key() == (Look{State: On, TUN: true}).Key() {
+		t.Fatal("Look.Key() must distinguish TUN on vs off")
+	}
+	for _, ink := range []Ink{{}, {Dark: true}, {Windows: true}, {Windows: true, Dark: true}} {
+		normal := PNG(Look{State: On}, ink)
+		tun := PNG(Look{State: On, TUN: true}, ink)
+		if bytes.Equal(normal, tun) {
+			t.Fatalf("ink=%+v: TUN icon bytes identical to non-TUN icon", ink)
+		}
+		img, err := png.Decode(bytes.NewReader(tun))
+		if err != nil {
+			t.Fatalf("ink=%+v: decode tun png: %v", ink, err)
+		}
+		want := tunColor(ink.Dark)
+		matched := false
+		b := img.Bounds()
+		for y := b.Min.Y; y < b.Max.Y && !matched; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+				if c.A == 255 && c.R == want.R && c.G == want.G && c.B == want.B {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			t.Errorf("ink=%+v: expected TUN colour %v in rendered icon", ink, want)
+		}
+		// Stopped state must not use the TUN colour even if TUN flag is set.
+		off := PNG(Look{State: Off}, ink)
+		offTUN := PNG(Look{State: Off, TUN: true}, ink)
+		if !bytes.Equal(off, offTUN) {
+			t.Errorf("ink=%+v: Off state should not change colour when TUN=true", ink)
 		}
 	}
 }

@@ -109,11 +109,11 @@ EOF
 
 # --- Go ---------------------------------------------------------------------
 # A license file is one of these names, in any case, with any extension.
+# Pure parameter/case matching avoids spawning basename/tr/dirname per file
+# (significant under MSYS2/Git Bash on Windows runners).
 is_license_name() {
-  local n
-  n="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
-  case "$n" in
-  LICENSE* | LICENCE* | UNLICENSE* | COPYING* | NOTICE* | PATENTS*) return 0 ;;
+  case "$1" in
+  [Ll][Ii][Cc][Ee][Nn][SsCc][Ee]* | [Uu][Nn][Ll][Ii][Cc][Ee][Nn][Ss][Ee]* | [Cc][Oo][Pp][Yy][Ii][Nn][Gg]* | [Nn][Oo][Tt][Ii][Cc][Ee]* | [Pp][Aa][Tt][Ee][Nn][Tt][Ss]*) return 0 ;;
   esac
   return 1
 }
@@ -123,7 +123,7 @@ copy_licenses() {
   local f n
   for f in "$1"/*; do
     [ -f "$f" ] || continue
-    n="$(basename "$f")"
+    n="${f##*/}"
     is_license_name "$n" || continue
     [ -e "$2/$n" ] && continue
     mkdir -p "$2"
@@ -146,6 +146,7 @@ go version > "$DEST/go/go/VERSION.txt"
 # a subdirectory, with the license beside it). A module without a license
 # file in its root stops the script.
 modules=0
+checked_dirs=$'\n'
 while IFS=$'\t' read -r mod moddir pkgdir; do
   mod="${mod%$'\r'}"
   moddir="${moddir%$'\r'}"
@@ -161,8 +162,12 @@ while IFS=$'\t' read -r mod moddir pkgdir; do
   fi
   d="$pkgdir"
   while [ "$d" != "$moddir" ] && [ "${d#"$moddir"/}" != "$d" ]; do
+    case "$checked_dirs" in
+    *$'\n'"$d"$'\n'*) break ;;
+    esac
+    checked_dirs="${checked_dirs}${d}"$'\n'
     copy_licenses "$d" "$out/${d#"$moddir"/}"
-    d="$(dirname "$d")"
+    d="${d%/*}"
   done
 done < <(GOOS="$GOOS_T" GOARCH="$GOARCH_T" CGO_ENABLED=0 go list -deps \
   -f '{{with .Module}}{{if .Version}}{{.Path}}@{{.Version}}{{"\t"}}{{.Dir}}{{"\t"}}{{$.Dir}}{{end}}{{end}}' \

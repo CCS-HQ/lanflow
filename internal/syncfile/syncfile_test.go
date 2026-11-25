@@ -43,6 +43,7 @@ func sampleDoc() Doc {
 }
 
 func TestRoundTrip(t *testing.T) {
+	t.Parallel()
 	doc := sampleDoc()
 	data := Encode(doc)
 	got, err := Decode(data, model.Settings{})
@@ -69,6 +70,7 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func TestMachineLocalItemsStayOut(t *testing.T) {
+	t.Parallel()
 	doc := sampleDoc()
 	doc.Settings.CorePath = "/opt/mihomo"
 	doc.Settings.TUN = true
@@ -102,6 +104,7 @@ func TestMachineLocalItemsStayOut(t *testing.T) {
 }
 
 func TestDefaultsForMissingKeys(t *testing.T) {
+	t.Parallel()
 	def := model.Settings{MixedPort: 7890, CloseToTray: true, Mode: model.ModeRule}
 	got, err := Decode([]byte("format: 1\nsettings:\n  mode: global\n"), def)
 	if err != nil {
@@ -113,6 +116,7 @@ func TestDefaultsForMissingKeys(t *testing.T) {
 }
 
 func TestDecodeErrorsHaveLines(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, text string
 		line       int
@@ -145,6 +149,7 @@ func TestDecodeErrorsHaveLines(t *testing.T) {
 }
 
 func TestUnknownKeysWarn(t *testing.T) {
+	t.Parallel()
 	_, warn, err := DecodeWarn([]byte("format: 1\nsettings:\n  futureThing: 3\n"), model.Settings{})
 	if err != nil || len(warn) != 1 || warn[0].Line != 3 || warn[0].Path != "settings.futureThing" {
 		t.Fatalf("got %v %v", warn, err)
@@ -152,6 +157,7 @@ func TestUnknownKeysWarn(t *testing.T) {
 }
 
 func TestSniff(t *testing.T) {
+	t.Parallel()
 	if !Sniff(Encode(sampleDoc())) {
 		t.Fatal("lanflow.yaml not recognised")
 	}
@@ -161,6 +167,7 @@ func TestSniff(t *testing.T) {
 }
 
 func TestLowerCamel(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		"TUNStack": "tunStack", "DNS": "dns", "ATrustCompat": "aTrustCompat", "HTTPPorts": "httpPorts",
 		"SSIDRules": "ssidRules", "MixedPort": "mixedPort", "IPv6": "ipv6", "URL": "url", "AllowLAN": "allowLAN",
@@ -172,6 +179,7 @@ func TestLowerCamel(t *testing.T) {
 }
 
 func TestConflictCopies(t *testing.T) {
+	t.Parallel()
 	for name, want := range map[string]bool{
 		"lanflow 2.yaml": true, "lanflow (1).yaml": true, "lanflow (Ann's conflicted copy 2026-01-02).yaml": true,
 		"lanflow-DESKTOP-1AB2C3D.yaml": true, "lanflow.sync-conflict-20260102-150405-ABC.yaml": true,
@@ -208,6 +216,7 @@ func TestConflictCopies(t *testing.T) {
 //
 //	UPDATE_SCHEMA=1 go test ./internal/syncfile -run TestSchemaUpToDate
 func TestSchemaUpToDate(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join("..", "..", filepath.FromSlash(SchemaPath))
 	want := Schema()
 	if os.Getenv("UPDATE_SCHEMA") != "" {
@@ -228,6 +237,7 @@ func TestSchemaUpToDate(t *testing.T) {
 // property and every schema property is a Go field Encode writes: the
 // schema and the Go structs describe the same file.
 func TestSchemaMatchesEncoding(t *testing.T) {
+	t.Parallel()
 	var schema map[string]any
 	if err := json.Unmarshal(Schema(), &schema); err != nil {
 		t.Fatal(err)
@@ -311,6 +321,7 @@ func TestSchemaMatchesEncoding(t *testing.T) {
 // TestExcludedNamesExist guards against a renamed field silently leaving
 // the exclusion list stale (the item would then sync).
 func TestExcludedNamesExist(t *testing.T) {
+	t.Parallel()
 	all := map[string]bool{}
 	var walk func(rt reflect.Type, path string)
 	walk = func(rt reflect.Type, path string) {

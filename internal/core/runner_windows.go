@@ -102,12 +102,22 @@ func currentSID() (string, error) {
 	return tu.User.Sid.String(), nil
 }
 
+// userPipeSDDL is the DACL for a controller pipe created by a user-mode
+// Mihomo process (execRunner). Unlike service.PipeSDDL — which withholds
+// FILE_CREATE_PIPE_INSTANCE from the user because the server runs as
+// LocalSystem — the user's own Mihomo process needs GA so go-winio can
+// create subsequent pipe instances in Accept under an unprivileged token.
+// Matches internal/rpc/transport_windows.go.
+func userPipeSDDL(sid string) string {
+	return "D:P(D;;GA;;;NU)(A;;GA;;;" + sid + ")"
+}
+
 func extraEnv() []string {
 	sid, err := currentSID()
 	if err != nil || sid == "" {
 		return nil
 	}
-	return []string{"LISTEN_NAMEDPIPE_SDDL=" + service.PipeSDDL(sid)}
+	return []string{"LISTEN_NAMEDPIPE_SDDL=" + userPipeSDDL(sid)}
 }
 
 func currentUserName() string {

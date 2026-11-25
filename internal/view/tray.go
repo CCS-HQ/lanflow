@@ -143,7 +143,7 @@ func (tr *tray) refresh(force bool) {
 	capOn := api.CaptureStatus().Enabled
 	g, ok := mainGroup(px, st)
 	tr.mu.Lock()
-	tr.look.State, tr.look.Capture = trayart.StateOf(st), capOn
+	tr.look.State, tr.look.TUN, tr.look.Capture = trayart.StateOf(st), st.Core == model.CoreRunning && st.TUN, capOn
 	if ok {
 		tr.node = g.Now
 	} else {
@@ -155,7 +155,7 @@ func (tr *tray) refresh(force bool) {
 
 	extra := tr.h.extraItems()
 	var sig strings.Builder
-	fmt.Fprintf(&sig, "%s|%v|%s|%s|%s|%s|%v|%d|", st.Core, st.SystemProxy, st.Mode, st.CurrentSubscription, acc, i18n.Lang(), capOn, len(extra))
+	fmt.Fprintf(&sig, "%s|%v|%v|%s|%s|%s|%s|%v|%d|", st.Core, st.SystemProxy, st.TUN, st.Mode, st.CurrentSubscription, acc, i18n.Lang(), capOn, len(extra))
 	for _, it := range extra {
 		sig.WriteString(it.Label + ";")
 	}
@@ -552,6 +552,7 @@ func (tr *tray) drawIcon(force bool) {
 	tr.drawn = key
 	tr.mu.Unlock()
 	// macOS: template icons (the bar tints them), except the red badge
-	template := !windows && look.State != trayart.Error
+	// and TUN's distinct colour.
+	template := !windows && look.State != trayart.Error && !(look.TUN && look.State == trayart.On)
 	_ = tr.t.SetIcon(trayart.PNG(look, ink), template)
 }

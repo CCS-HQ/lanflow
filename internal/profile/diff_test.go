@@ -36,6 +36,7 @@ func reconstruct(d []model.DiffLine) (a, b []string) {
 }
 
 func TestDiff(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, a, b, want string }{
 		{"identical", "a\nb\n", "a\nb\n", " a\n b\n"},
 		{"empty both", "", "", ""},
@@ -59,6 +60,7 @@ func TestDiff(t *testing.T) {
 }
 
 func TestDiffReconstructs(t *testing.T) {
+	t.Parallel()
 	rng := rand.New(rand.NewSource(1))
 	for iter := 0; iter < 200; iter++ {
 		n := rng.Intn(40)
@@ -98,6 +100,7 @@ func TestDiffReconstructs(t *testing.T) {
 }
 
 func TestDiffLargeFallsBackGracefully(t *testing.T) {
+	t.Parallel()
 	var a, b []string
 	for i := 0; i < maxDiffD+10; i++ {
 		a = append(a, fmt.Sprintf("a%d", i))

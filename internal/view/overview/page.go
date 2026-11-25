@@ -72,12 +72,12 @@ func (p *Page) View(c *ui.Context) {
 		// The divider between the map and the side column drags (or,
 		// focused, takes the arrows) to give either more room: long node
 		// names and merged groups in the route list, or a bigger globe.
-		main := ui.Row(c.Key("main")).Grow(1).AlignItems(ui.Stretch)
+		main := ui.Row(c.Key("main")).Grow(1).Shrink(1).MinHeight(0).AlignItems(ui.Stretch)
 		total := main.Bounds().W
 		main.Children(func() {
 			p.exitCard(c, st, rs, 100-side)
 			p.sideDivider(c, total)
-			ui.Column(c).Grow(side).Basis(0).MinWidth(sideMinWidth).Gap(10).Children(func() {
+			ui.Column(c).Grow(side).Basis(0).MinWidth(sideMinWidth).MinHeight(0).Gap(10).Children(func() {
 				p.routeCard(c, st, rs)
 				p.terminalRow(c, st)
 			})
@@ -647,10 +647,10 @@ func (p *Page) terminalRow(c *ui.Context, st model.Status) {
 	}
 	cmd := ProxyCommand(st.MixedPort, goos)
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
-		ui.Text(c, i18n.T("终端代理")).FontSize(12).TextColor(t.TextMuted).Shrink(0)
+		ui.Text(c, i18n.T("终端代理")).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
 		ui.Text(c, cmd).Font("monospace").FontSize(11).SingleLine().Grow(1).Shrink(1).Basis(0).Padding(4, 8).Radius(6).
 			Background(t.Surface).Border(1, t.Border).Selectable().Tooltip(cmd)
-		b := ui.Button(c, "").Label(i18n.T("复制终端代理命令")).Tooltip(i18n.T("复制到剪贴板")).Children(func() {
+		b := ui.Button(c, "").Label(i18n.T("复制终端代理命令")).Tooltip(i18n.T("复制到剪贴板")).Shrink(0).Children(func() {
 			p.e.Kit.Icon(c, "copy", 13)
 			ui.Text(c, i18n.T("复制")).SingleLine()
 		})

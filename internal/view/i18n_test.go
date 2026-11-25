@@ -233,7 +233,7 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	s.notify = func(title, body string, _ func()) { notified = append(notified, title, body) }
 	s.hiddenOnce, s.hiddenFlag = false, ""
 	s.HiddenToTray()
-	s.handleNotice(nil, app.Notice{Kind: "core-crash", Detail: "exit status 1"})
+	queueNotice(s, app.Notice{Kind: "core-crash", Detail: "exit status 1"})
 	s.systemNotice(app.Notice{Kind: "core-crash", Detail: "exit status 1", System: true})
 	for _, n := range notified {
 		c.text("notification", n)

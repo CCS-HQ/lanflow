@@ -6,6 +6,7 @@ import (
 )
 
 func TestApplyOverride(t *testing.T) {
+	t.Parallel()
 	base := `mixed-port: 7890
 dns:
   enable: true
@@ -131,6 +132,7 @@ proxy-groups:
 }
 
 func TestApplyOverrideKeyOrderPreserved(t *testing.T) {
+	t.Parallel()
 	base := "z: 1\ny: 2\nx: 3\n"
 	out, err := ApplyOverride([]byte(base), "y: 20\nw: 4\n")
 	if err != nil {
@@ -142,6 +144,7 @@ func TestApplyOverrideKeyOrderPreserved(t *testing.T) {
 }
 
 func TestApplyOverrideEmptyBase(t *testing.T) {
+	t.Parallel()
 	out, err := ApplyOverride(nil, "a: 1\n")
 	if err != nil {
 		t.Fatal(err)
@@ -156,6 +159,7 @@ func TestApplyOverrideEmptyBase(t *testing.T) {
 }
 
 func TestApplyOverrideMergeKey(t *testing.T) {
+	t.Parallel()
 	// Values reached through a YAML merge key are readable and appendable.
 	base := "common: &c\n  rules:\n    - MATCH,A\nsub:\n  <<: *c\n"
 	out, err := ApplyOverride([]byte(base), "sub:\n  rules+:\n    - MATCH,B\n")

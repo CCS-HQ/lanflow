@@ -20,6 +20,7 @@ import (
 )
 
 func TestSettingsDefaultsAndPersistence(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	set := h.s.Settings()
 	if set.MixedPort != 7890 || set.Mode != model.ModeRule || !set.CloseToTray || !set.ProbeExits || !set.Sniffer.Enable {
@@ -64,6 +65,7 @@ func TestSettingsDefaultsAndPersistence(t *testing.T) {
 }
 
 func TestRecoveryDetection(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, func(h *harness) {
 		h.sys.state.Enabled, h.sys.state.Host, h.sys.state.Port = true, "127.0.0.1", 7890
 		_ = os.MkdirAll(h.dir, 0o700)
@@ -88,6 +90,7 @@ func TestRecoveryDetection(t *testing.T) {
 }
 
 func TestRecoveryIgnoredWhenProxyIsNotOurs(t *testing.T) {
+	t.Parallel()
 	// marker present but the proxy points elsewhere: stale marker, no prompt
 	h := newHarness(t, func(h *harness) {
 		h.sys.state.Enabled, h.sys.state.Host, h.sys.state.Port = true, "127.0.0.1", 1080
@@ -106,6 +109,7 @@ func TestRecoveryIgnoredWhenProxyIsNotOurs(t *testing.T) {
 }
 
 func TestSystemProxyOwnershipOnStop(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if err := h.s.SetSystemProxy(true); err != nil {
 		t.Fatalf("SetSystemProxy: %v", err)
@@ -149,6 +153,7 @@ func TestSystemProxyOwnershipOnStop(t *testing.T) {
 }
 
 func TestShutdownClearsOwnProxy(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if err := h.s.SetSystemProxy(true); err != nil {
 		t.Fatal(err)
@@ -164,6 +169,7 @@ func TestShutdownClearsOwnProxy(t *testing.T) {
 }
 
 func TestConnectionTrackerSpeedsAndClosed(t *testing.T) {
+	t.Parallel()
 	var tr connTracker
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	c := func(id string, up, down int64) controller.Connection {
@@ -191,6 +197,7 @@ func TestConnectionTrackerSpeedsAndClosed(t *testing.T) {
 }
 
 func TestClosedRingAndStreams(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
@@ -222,6 +229,7 @@ func TestClosedRingAndStreams(t *testing.T) {
 }
 
 func TestBuildSnapshotOrderAndNormalization(t *testing.T) {
+	t.Parallel()
 	snap := buildSnapshot(sampleProxies(), map[string]bool{"香港 01": true}, "")
 	names := make([]string, len(snap.Groups))
 	for i, g := range snap.Groups {
@@ -271,6 +279,7 @@ func TestBuildSnapshotOrderAndNormalization(t *testing.T) {
 }
 
 func TestBuildRoutesGrouping(t *testing.T) {
+	t.Parallel()
 	snap := buildSnapshot(sampleProxies(), nil, "")
 	t0 := time.Now()
 	conns := []model.Connection{
@@ -303,6 +312,7 @@ func TestBuildRoutesGrouping(t *testing.T) {
 }
 
 func TestExitRoutesFromService(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
@@ -338,6 +348,7 @@ func TestExitRoutesFromService(t *testing.T) {
 }
 
 func TestOverrideValidatesBeforeSave(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if err := h.s.SaveOverride("global", "BAD: yaml"); err == nil {
 		t.Fatal("compose failure must reject the override")
@@ -370,6 +381,7 @@ func TestOverrideValidatesBeforeSave(t *testing.T) {
 }
 
 func TestReloadKeepsOldRuntimeOnFailure(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
@@ -409,6 +421,7 @@ func TestReloadKeepsOldRuntimeOnFailure(t *testing.T) {
 }
 
 func TestHotPatchForModeAndPort(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
@@ -443,6 +456,7 @@ func TestHotPatchForModeAndPort(t *testing.T) {
 // run and hold its ports, so it is stopped before the restart (an exit
 // the core reported itself needs no stop).
 func TestCrashOfUnknownStateStopsTheCoreFirst(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	h.s.goBackground(h.s.watchCrashes)
 	if err := h.s.SetSystemProxy(true); err != nil {
@@ -461,6 +475,7 @@ func TestCrashOfUnknownStateStopsTheCoreFirst(t *testing.T) {
 }
 
 func TestCrashRestartsOnceAndNotifies(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	h.s.goBackground(h.s.watchCrashes)
 	if err := h.s.SetSystemProxy(true); err != nil {
@@ -513,6 +528,7 @@ func TestCrashRestartsOnceAndNotifies(t *testing.T) {
 }
 
 func TestEmitterCoalescing(t *testing.T) {
+	t.Parallel()
 	e := newEmitter()
 	var n int32
 	var mu sync.Mutex
@@ -550,6 +566,7 @@ func TestEmitterCoalescing(t *testing.T) {
 }
 
 func TestNoticesAndTakeNotices(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	var got int32
 	off := h.s.OnChange(func(tp Topic) {
@@ -571,6 +588,7 @@ func TestNoticesAndTakeNotices(t *testing.T) {
 }
 
 func TestFirstImportStartsCore(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, func(h *harness) {
 		h.store = newFakeStore() // no subscriptions at all
 		h.prof.fetched.Data = []byte("proxies: [a]\n")
@@ -600,6 +618,7 @@ func TestFirstImportStartsCore(t *testing.T) {
 }
 
 func TestUseSubscriptionRejectsInvalid(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
@@ -635,6 +654,7 @@ func TestUseSubscriptionRejectsInvalid(t *testing.T) {
 }
 
 func TestTUNRequiresHelperAndSwitchesRunner(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if err := h.s.SetTUN(true); !errors.Is(err, ErrHelperRequired) {
 		t.Fatalf("want ErrHelperRequired, got %v", err)
@@ -682,6 +702,7 @@ func TestTUNRequiresHelperAndSwitchesRunner(t *testing.T) {
 }
 
 func TestRulesMappingAndCustomRules(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	h.ctrl.rules = []controller.Rule{
 		{Type: "DomainSuffix", Payload: "openai.com", Proxy: "节点选择", Size: -1},
@@ -733,6 +754,7 @@ func TestRulesMappingAndCustomRules(t *testing.T) {
 }
 
 func TestDNSQueryFakeIP(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if _, err := h.s.DNSQuery("example.com", "A"); err == nil {
 		t.Fatal("needs a running core")
@@ -750,6 +772,7 @@ func TestDNSQueryFakeIP(t *testing.T) {
 }
 
 func TestMissingBinary(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, func(h *harness) { h.core.findErr = errors.New("not found") })
 	st := h.s.Status()
 	if st.Core != model.CoreMissing || st.CoreError == "" {
@@ -764,6 +787,7 @@ func TestMissingBinary(t *testing.T) {
 }
 
 func TestRuntimeConfigAndNetwork(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	lines, err := h.s.RuntimeConfig()
 	if err != nil || len(lines) == 0 {
@@ -789,6 +813,7 @@ func TestRuntimeConfigAndNetwork(t *testing.T) {
 // Another app's proxy that was on before Lanflow took over comes back
 // exactly when Lanflow lets go, instead of being switched off.
 func TestSystemProxyRestoresPreviousOwner(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	h.sys.state = sysproxy.State{Enabled: true, Host: "127.0.0.1", Port: 7897} // e.g. another client
 	if err := h.s.SetSystemProxy(true); err != nil {
@@ -811,6 +836,7 @@ func TestSystemProxyRestoresPreviousOwner(t *testing.T) {
 // If someone else re-pointed the system proxy while Lanflow owned it,
 // turning ours off must leave their setting untouched.
 func TestSystemProxyLeavesForeignChangeAlone(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, nil)
 	if err := h.s.SetSystemProxy(true); err != nil {
 		t.Fatal(err)
@@ -831,6 +857,7 @@ func TestSystemProxyLeavesForeignChangeAlone(t *testing.T) {
 // Mihomo keeps running when its mixed port is taken (it only logs), so the
 // service must refuse to start instead of sharing another client's port.
 func TestStartRefusesTakenPort(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, func(h *harness) { h.taken[7890] = true; h.taken[7891] = true })
 	// first run next to the other client: a free port was chosen
 	if p := h.s.Settings().MixedPort; p != 7892 {
@@ -855,6 +882,7 @@ func TestStartRefusesTakenPort(t *testing.T) {
 
 // Two TUNs break the network: refuse while another client's TUN is active.
 func TestSetTUNRefusesWithOtherTUN(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, func(h *harness) { h.helper.installed = true; h.tunOf = "utun1500" })
 	err := h.s.SetTUN(true)
 	if err == nil || !strings.Contains(err.Error(), "utun1500") {
@@ -873,6 +901,7 @@ func TestSetTUNRefusesWithOtherTUN(t *testing.T) {
 // again instead of leaving TUN unavailable until the next restart; an
 // absent one is not waited for.
 func TestHelperSlowAtStartIsRetried(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, func(h *harness) { h.helper.installed = true })
 	h.helper.mu.Lock()
 	h.helper.slow = helperStartTries - 1
@@ -900,6 +929,7 @@ func TestHelperSlowAtStartIsRetried(t *testing.T) {
 // A helper left over from another release: TUN is unavailable, the status
 // asks for a reinstall, the user is told once, and a reinstall clears it.
 func TestHelperVersionMismatchAsksForReinstall(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, func(h *harness) {
 		_ = os.WriteFile(filepath.Join(h.dir, helperName()), []byte("x"), 0o755)
 		h.helper.installed = true
@@ -960,6 +990,7 @@ func helperName() string {
 // Shutdown returned, racing the removal of the data directory (the
 // "directory not empty" flake of TestUseCoreHotSwitchesRunningCore).
 func TestShutdownWaitsForHintSave(t *testing.T) {
+	t.Parallel()
 	for i := 0; i < 20; i++ {
 		h := newHarness(t, nil)
 		if err := h.s.SetSystemProxy(true); err != nil {

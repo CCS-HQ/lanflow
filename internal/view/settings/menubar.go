@@ -63,6 +63,7 @@ func (p *Page) menuBarPreview(c *ui.Context, t *ui.Theme, s model.Settings) {
 	}
 	look := trayart.Look{
 		State:      trayart.StateOf(st),
+		TUN:        st.Core == model.CoreRunning && st.TUN,
 		Capture:    api.CaptureStatus().Enabled,
 		SpeedLines: trayart.SpeedLinesFor(st, s),
 	}
