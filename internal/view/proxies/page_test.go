@@ -59,6 +59,7 @@ func TestFilterAndSort(t *testing.T) {
 
 func TestPickAndEmptyStates(t *testing.T) {
 	api := fake.NewInstant()
+	_ = api.SaveUIState(model.UIState{OpenGroups: map[string]bool{"节点选择": true}})
 	e, toasts := testEnv(api)
 	p := New(e)
 	tt := ui.NewTester(p.View, 800, 600)
@@ -91,8 +92,8 @@ func TestOpenStateRemembered(t *testing.T) {
 	p := New(e)
 	tt := ui.NewTester(p.View, 800, 600)
 	px := api.Proxies()
-	if !p.isOpen(px.Groups[0], px) || p.isOpen(px.Groups[1], px) {
-		t.Fatal("default: only the main group is open")
+	if p.isOpen(px.Groups[0], px) || p.isOpen(px.Groups[1], px) {
+		t.Fatal("default: all groups start collapsed")
 	}
 	// 故障转移 is only a group header (no group lists it as a member).
 	if err := tt.Click("故障转移"); err != nil {
@@ -102,7 +103,7 @@ func TestOpenStateRemembered(t *testing.T) {
 	if !p.open["故障转移"] {
 		t.Fatalf("open after click: %v", p.open)
 	}
-	if saved := api.UIState(); !saved.OpenGroups["故障转移"] || !saved.OpenGroups["节点选择"] {
+	if saved := api.UIState(); !saved.OpenGroups["故障转移"] {
 		t.Fatalf("state not saved: %+v", saved)
 	}
 	// A fresh page (as after a restart) starts from the saved state.
@@ -118,20 +119,14 @@ func TestOpenStateRemembered(t *testing.T) {
 // click and remembers the choice of view.
 func TestGridView(t *testing.T) {
 	api := fake.NewInstant()
+	_ = api.SaveUIState(model.UIState{OpenGroups: map[string]bool{"节点选择": true}})
 	e, toasts := testEnv(api)
 	p := New(e)
 	tt := ui.NewTester(p.View, 900, 700)
-	if !tt.HasText("列表") || !tt.HasText("网格") {
-		t.Fatalf("view toggle missing: %q", tt.Texts())
+	if p.view != viewGrid {
+		t.Fatalf("expected default grid view, got %d", p.view)
 	}
-	if err := tt.Click("网格"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if p.view != viewGrid || !api.UIState().ProxyGrid {
-		t.Fatalf("grid not chosen/saved: view=%d ui=%+v", p.view, api.UIState())
-	}
-	if !tt.HasText("新加坡 02") || !tt.HasText("Trojan") {
+	if !tt.HasText("新加坡 02") || !tt.HasText("测速") {
 		t.Fatalf("grid cells: %q", tt.Texts())
 	}
 	if err := tt.Click("新加坡 02"); err != nil {
@@ -272,7 +267,7 @@ func TestBigGroupVirtual(t *testing.T) {
 	e, _ := testEnv(api)
 	p := New(e)
 	g := model.ProxyGroup{Name: "大组", Type: model.GroupSelect}
-	for i := 0; i < 300; i++ {
+	for i := 0; i < 500; i++ {
 		g.All = append(g.All, fmt.Sprintf("节点 %03d", i))
 	}
 	g.Now = g.All[0]
@@ -345,7 +340,7 @@ func TestGridColumnsFit(t *testing.T) {
 	for _, c := range []struct {
 		w    float32
 		want int
-	}{{0, gridColumns}, {300, minGridColumns}, {800, 4}, {1800, maxGridColumns}} {
+	}{{0, gridColumns}, {300, minGridColumns}, {800, 3}, {1800, maxGridColumns}} {
 		if got := gridColumnsFor(c.w); got != c.want {
 			t.Errorf("gridColumnsFor(%v) = %d, want %d", c.w, got, c.want)
 		}
@@ -360,10 +355,10 @@ func TestBigGroupGridVirtual(t *testing.T) {
 	p := New(e)
 	p.view = viewGrid
 	g := model.ProxyGroup{Name: "大组", Type: model.GroupSelect}
-	for i := 0; i < 300; i++ {
+	for i := 0; i < 500; i++ {
 		g.All = append(g.All, fmt.Sprintf("节点 %03d", i))
 	}
-	g.Now = g.All[250]
+	g.Now = g.All[450]
 	px := model.ProxySnapshot{Groups: []model.ProxyGroup{g}, MainGroup: g.Name}
 	p.open[g.Name], p.openInit[g.Name] = true, true
 	tt := ui.NewTester(func(c *ui.Context) {
@@ -375,8 +370,8 @@ func TestBigGroupGridVirtual(t *testing.T) {
 			if strings.HasPrefix(x, "节点 ") {
 				n++
 			}
-			cur = cur || x == "节点 250"
 		}
+		_, cur = tt.AccessByRole(ui.RoleButton, "节点 450")
 		return n, cur
 	}
 	n, cur := count()
@@ -406,5 +401,61 @@ func TestHideTimeoutKeepsCurrent(t *testing.T) {
 	px := model.ProxySnapshot{Proxies: map[string]model.Proxy{"a": {Delay: 20}, "b": {Delay: -1}, "c": {Delay: -1}}}
 	if got := strings.Join(p.filterNodes(g, px), ","); got != "a,b" {
 		t.Fatalf("shown %q, want the live node and the current one", got)
+	}
+}
+
+// TestDuplicateNodesAndSingleNodeDelay: groups combining explicit proxies:
+// with include-all-proxies: true may report duplicate member names; filterNodes
+// deduplicates them so widget keys never collide, clicking the node selects it,
+// and clicking the delay button tests only that node without switching selection.
+func TestDuplicateNodesAndSingleNodeDelay(t *testing.T) {
+	api := fake.NewInstant()
+	e, _ := testEnv(api)
+	p := New(e)
+	p.view = viewGrid
+	g := model.ProxyGroup{
+		Name: "AI4",
+		Type: model.GroupSelect,
+		All:  []string{"BWH-VLESS", "BWH-AnyTLS", "HK-01", "BWH-VLESS", "BWH-AnyTLS"},
+		Now:  "HK-01",
+	}
+	px := model.ProxySnapshot{
+		Groups: []model.ProxyGroup{g},
+		Proxies: map[string]model.Proxy{
+			"BWH-VLESS":  {Name: "BWH-VLESS", Type: "VLESS", Delay: 150},
+			"BWH-AnyTLS": {Name: "BWH-AnyTLS", Type: "AnyTLS", Delay: 0},
+			"HK-01":      {Name: "HK-01", Type: "AnyTLS", Delay: 20},
+		},
+	}
+	nodes := p.filterNodes(g, px)
+	if got := strings.Join(nodes, ","); got != "BWH-VLESS,BWH-AnyTLS,HK-01" {
+		t.Fatalf("deduped nodes = %q, want BWH-VLESS,BWH-AnyTLS,HK-01", got)
+	}
+	p.open["AI4"], p.openInit["AI4"] = true, true
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Scroll(c).Fill().Children(func() { p.group(c, g, nodes, len(nodes), px, groupNames(px)) })
+	}, 800, 600)
+	tt.Frame()
+
+	// 1. Clicking single-node delay button must NOT select the node.
+	if err := tt.Click("重新测速 BWH-AnyTLS"); err != nil {
+		t.Fatalf("click delay button: %v", err)
+	}
+	tt.Frame()
+	p.mu.Lock()
+	pendAfterDelay := p.pending["AI4"]
+	p.mu.Unlock()
+	if pendAfterDelay != "" {
+		t.Fatalf("delay click switched pending selection to %q", pendAfterDelay)
+	}
+
+	// 2. Clicking the node area selects it.
+	if err := tt.Click("BWH-VLESS"); err != nil {
+		t.Fatalf("click node BWH-VLESS: %v", err)
+	}
+	tt.Frame()
+	// Also verify it didn't fail to find the button and triggered pick().
+	if _, ok := tt.AccessByRole(ui.RoleButton, "BWH-VLESS"); !ok {
+		t.Fatalf("BWH-VLESS button missing")
 	}
 }

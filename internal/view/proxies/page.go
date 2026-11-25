@@ -4,6 +4,7 @@
 package proxies
 
 import (
+	"fmt"
 	"image"
 	"slices"
 	"sort"
@@ -37,10 +38,10 @@ const (
 // to maxGridColumns, so a wide window shows more columns rather than
 // stretched tiles, and a narrow one keeps node names legible.
 const (
-	gridColumns    = 3
-	gridTileWidth  = 200
+	gridColumns    = 2
+	gridTileWidth  = 260
 	minGridColumns = 2
-	maxGridColumns = 8
+	maxGridColumns = 6
 	// gridChrome is what the window's width loses before the grid: the
 	// sidebar, the page's and the group card's padding.
 	gridChrome = 290
@@ -93,7 +94,7 @@ type Page struct {
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	return &Page{e: e, open: map[string]bool{}, openInit: map[string]bool{}, pending: map[string]string{},
+	return &Page{e: e, view: viewGrid, open: map[string]bool{}, openInit: map[string]bool{}, pending: map[string]string{},
 		icons: map[string]ui.ImageSource{}, iconFail: map[string]bool{}, lists: map[string]*ui.ListState{},
 		iconBusy: map[string]bool{}, iconDone: map[string]image.Image{}, decode: func(fn func()) { go fn() }}
 }
@@ -164,11 +165,17 @@ func (p *Page) View(c *ui.Context) {
 		if !st.HasSubscriptions {
 			return
 		}
-		ui.SearchField(c.Key("search"), &p.query).Placeholder(i18n.T("搜索节点")).Label(i18n.T("搜索节点")).Width(180).Bind(&p.search)
-		if ui.Segmented(c.Key("view"), &p.view, i18n.T("列表"), i18n.T("网格")).Label(i18n.T("视图")).Changed() {
-			p.persist()
-		}
+		ui.SearchField(c.Key("search"), &p.query).Placeholder(i18n.T("搜索节点")).Label(i18n.T("搜索节点")).Width(160).Bind(&p.search)
 		ui.MenuButton(c, i18n.T("排序"), func(m *ui.Menu) {
+			if m.Item(i18n.T("网格")).Radio(p.view == viewGrid).Chosen() && p.view != viewGrid {
+				p.view = viewGrid
+				p.persist()
+			}
+			if m.Item(i18n.T("列表")).Radio(p.view == viewList).Chosen() && p.view != viewList {
+				p.view = viewList
+				p.persist()
+			}
+			m.Separator()
 			for i, name := range []string{i18n.T("默认顺序"), i18n.T("按延迟"), i18n.T("按名称")} {
 				if m.Item(name).Radio(p.sort == i).Chosen() && p.sort != i {
 					p.sort = i
@@ -190,9 +197,8 @@ func (p *Page) View(c *ui.Context) {
 			if testingAll {
 				ui.Spinner(c).Size(12, 12)
 			} else {
-				k.Icon(c, "bolt", 13)
+				k.Icon(c, "bolt", 14)
 			}
-			ui.Text(c, i18n.T("全部测速")).SingleLine()
 		})
 		if b.Clicked() {
 			p.testAll()
@@ -227,7 +233,7 @@ func (p *Page) View(c *ui.Context) {
 	}
 
 	ui.Scroll(c).Grow(1).Children(func() {
-		body := ui.Column(c).Padding(0, 24, 20, 24).Gap(12)
+		body := ui.Column(c).Padding(0, 16, 16, 16).Gap(10)
 		body.Children(func() {
 			if st.Mode == model.ModeDirect {
 				k.Banner(c, "warn", i18n.T("当前为直连模式，节点选择不生效。"), func() {
@@ -314,11 +320,18 @@ func (p *Page) countMatches(g model.ProxyGroup) int {
 	return n
 }
 
-// filterNodes applies the search, the timeout filter and the sort.
+// filterNodes applies deduplication, search, timeout filter, and sort.
+// Deduplication keeps the first occurrence so groups combining explicit
+// proxies: with include-all-proxies: true never render duplicate widget keys.
 func (p *Page) filterNodes(g model.ProxyGroup, px model.ProxySnapshot) []string {
 	q := strings.ToLower(strings.TrimSpace(p.query))
+	seen := make(map[string]struct{}, len(g.All))
 	var nodes []string
 	for _, n := range g.All {
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
 		if q != "" && !strings.Contains(strings.ToLower(n), q) {
 			continue
 		}
@@ -366,21 +379,21 @@ func groupTypeName(t model.GroupType) string {
 	}
 }
 
-// isOpen returns whether a group is expanded: by default only the main
-// group is.
+// isOpen returns whether a group is expanded: by default all groups start
+// collapsed (matching Clash Party) except GLOBAL in global mode.
 func (p *Page) isOpen(g model.ProxyGroup, px model.ProxySnapshot) bool {
 	if !p.openInit[g.Name] {
 		p.openInit[g.Name] = true
-		p.open[g.Name] = g.Name == px.MainGroup || g.Name == "GLOBAL"
+		p.open[g.Name] = g.Name == "GLOBAL"
 	}
 	return p.open[g.Name]
 }
 
-// bigGroup is the member count from which the list view shows a group's
-// members in a virtual list bigGroupRows tall, which builds only the rows
-// in view.
+// bigGroup is the member count from which a group switches to a virtualized
+// inner list. Kept high (400) so normal 60–200 node groups scroll smoothly
+// inside the single outer page scroll without nested scrollbar fighting.
 const (
-	bigGroup        = 60
+	bigGroup        = 400
 	bigGroupRows    = 12
 	maxBigGroupRows = 30
 	nodeRowH        = 32
@@ -413,7 +426,7 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 	}
 	selectable := g.Type == model.GroupSelect
 
-	box := ui.Column(c.Key("group:"+g.Name)).Radius(10).Background(t.Surface).Border(1, t.Border).Clip()
+	box := ui.Column(c.Key("group:"+g.Name)).Radius(12).Background(t.Background).Border(1, t.Border.Alpha(0.75)).Clip()
 	if p.scrollTo == g.Name {
 		box.ScrollIntoView()
 		p.scrollTo = ""
@@ -422,21 +435,25 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 		var parts ui.CollapsibleParts
 		ui.Row(c).AlignItems(ui.Center).Gap(4).Padding(0, 8, 0, 0).Children(func() {
 			parts = ui.CollapsibleBase(c.Key("coll"), &o)
-			parts.Trigger.Grow(1).MinHeight(40).Padding(6, 12).Gap(8).AlignItems(ui.Center).Label(g.Name).Children(func() {
+			parts.Trigger.Grow(1).MinHeight(44).Padding(8, 12).Gap(8).AlignItems(ui.Center).Label(g.Name).Children(func() {
 				ui.Box(c).TextColor(t.TextMuted).Children(func() { k.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
 				p.groupIcon(c, g.Icon)
-				ui.Text(c, g.Name).FontSize(13).FontWeight(600).SingleLine().Shrink(1).Tooltip(g.Name)
+				ui.Text(c, g.Name).FontSize(14).FontWeight(600).SingleLine().Shrink(0).Tooltip(g.Name)
 				if g.Name == px.MainGroup {
 					k.Tag(c, i18n.T("主代理组"), "gray")
 				}
-				meta := groupTypeName(g.Type)
 				if now != "" {
-					meta = i18n.Tf("%s · 当前 %s", meta, now)
+					ui.Box(c).Padding(2, 8).Radius(6).Background(t.Accent.Alpha(0.10)).Shrink(1).Children(func() {
+						ui.Text(c, now).FontSize(12).FontWeight(500).TextColor(t.Accent).SingleLine().Tooltip(now)
+					})
 				}
+				meta := groupTypeName(g.Type)
 				if p.query != "" {
 					meta = i18n.Tn(matched, "%s · %d 个匹配", meta, matched)
+				} else if len(g.All) > 0 {
+					meta = fmt.Sprintf("%s · %d", meta, len(g.All))
 				}
-				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(meta)
+				ui.Text(c, meta).FontSize(11.5).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(meta)
 			})
 			if now != "" {
 				loc := ui.Button(c, "").Label(i18n.Tf("定位当前节点 %s", g.Name)).Tooltip(i18n.T("定位当前节点")).Children(func() {
@@ -473,6 +490,9 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 			p.persist()
 		}
 		parts.Panel(func() {
+			if nodes == nil {
+				nodes = p.filterNodes(g, px)
+			}
 			ui.Column(c).Padding(0, 6, 6, 6).Children(func() {
 				ui.Box(c).Height(1).Background(t.Border).Margin(0, 6, 4, 6)
 				if p.view == viewGrid {
@@ -537,7 +557,7 @@ func (p *Page) bigList(c *ui.Context, g model.ProxyGroup, nodes []string, now st
 
 // gridRowH is the height a row of tiles takes in a large group's virtual
 // grid: a tile's minimum height and the gap under it.
-const gridRowH = 56 + 6
+const gridRowH = 52 + 6
 
 // bigGrid is bigList for the grid view: a large group's tiles in a
 // virtual list of rows of cols tiles, which builds only the rows in view
@@ -593,74 +613,121 @@ func memberKind(n string, px model.ProxySnapshot, names map[string]bool) (proto 
 	return "", false, false
 }
 
-// cell draws one member as a compact grid tile: name on top, protocol and
-// delay below; the current member is tinted and gets the dot/标签 as in the
-// list.
+// cell draws one member as a Clash Party–style 2-row card with independent
+// sibling buttons: left area selects the node, right delay badge triggers
+// single-node latency test without conflicting with node selection.
 func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable bool, px model.ProxySnapshot, names map[string]bool) {
 	t := c.Theme()
 	k := p.e.Kit
 	pr := px.Proxies[n]
 	proto, _, builtin := memberKind(n, px, names)
 	cur := n == now
-	var tile ui.Element
-	if selectable {
-		tile = ui.ButtonBase(c.Key("cell:" + n)).Label(n).Cursor(ui.CursorPointer)
-		if tile.Hovered() {
-			tile.Background(t.SurfaceHover)
-		}
-	} else {
-		tile = ui.Column(c.Key("cell:" + n))
+
+	tip := n
+	if proto != "" {
+		tip = n + " · " + proto
 	}
-	// Column(): a ButtonBase lays its children out in a row, which put
-	// the protocol and delay beside the name instead of under it.
-	tile.Column().Padding(8, 10).Gap(4).Radius(8).Border(1, t.Border).AlignItems(ui.Start).MinHeight(56)
-	if cur {
-		tile.Background(t.Accent.Alpha(0.08)).Border(1, t.Accent.Alpha(0.5))
+
+	tile := ui.Row(c.Key("cell:" + n)).Radius(10).AlignItems(ui.Stretch).MinHeight(52).Clip()
+	selHovered := false
+	selClicked := false
+
+	tile.Children(func() {
+		if cur {
+			ui.Box(c).Width(3).Background(t.Accent).Shrink(0)
+		}
+		var sel ui.Element
+		if selectable {
+			sel = ui.ButtonBase(c.Key("sel")).Label(n).Cursor(ui.CursorPointer)
+			selHovered = sel.Hovered()
+		} else {
+			sel = ui.Column(c.Key("sel"))
+		}
+		sel.Column().Grow(1).Shrink(1).Padding(7, 4, 7, 10).Gap(3).Justify(ui.Center).AlignItems(ui.Start).Children(func() {
+			name := ui.Text(c, n).FontSize(13).FontWeight(500).SingleLine().Tooltip(tip)
+			if cur {
+				name.FontWeight(600)
+			}
+			ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+				if !selectable && cur {
+					k.Tag(c, i18n.T("当前"), "accent")
+				}
+				if proto != "" {
+					ui.Box(c).Padding(1, 5).Radius(4).Background(t.Background.Alpha(0.75)).Border(1, t.Border.Alpha(0.45)).Children(func() {
+						ui.Text(c, proto).FontSize(10.5).TextColor(t.TextMuted).SingleLine()
+					})
+				}
+			})
+		})
+		if selectable && sel.Clicked() {
+			selClicked = true
+		}
+
+		if builtin {
+			ui.Box(c).Padding(0, 10, 0, 6).AlignItems(ui.Center).Justify(ui.Center).Shrink(0).Children(func() {
+				ui.Text(c, "—").FontSize(12.5).TextColor(t.TextMuted)
+			})
+		} else {
+			ui.Box(c).Padding(0, 8, 0, 2).AlignItems(ui.Center).Justify(ui.Center).Shrink(0).Children(func() {
+				d := ui.ButtonBase(c.Key("delay")).MinWidth(44).Padding(4, 8).Radius(6).
+					AlignItems(ui.Center).Justify(ui.Center).
+					Label(i18n.Tf("重新测速 %s", n)).Tooltip(i18n.T("单击重新测速")).
+					Cursor(ui.CursorPointer)
+				if d.Hovered() {
+					d.Background(t.Accent.Alpha(0.14))
+				}
+				d.Children(func() { pillDelay(c, t, pr.Delay, pr.Testing) })
+				if d.Clicked() {
+					name := n
+					p.e.Run(func() error { return p.e.API.TestProxyDelay(name) }, "")
+				}
+			})
+		}
+
+		if cur {
+			ui.Box(c).Width(3).Background(t.Accent).Shrink(0)
+		}
+	})
+
+	switch {
+	case cur:
+		tile.Background(t.Accent.Alpha(0.13)).Border(1, t.Accent.Alpha(0.65))
+	case selHovered:
+		tile.Background(t.SurfaceHover).Border(1, t.Accent.Alpha(0.45))
+	default:
+		tile.Background(t.Surface).Border(1, t.Border.Alpha(0.45))
 	}
 	if reveal, tint := p.locating(c, g.Name, cur); tint {
-		tile.Background(t.Accent.Alpha(0.28))
+		tile.Background(t.Accent.Alpha(0.28)).Border(1.5, t.Accent)
 		if reveal {
 			tile.ScrollIntoView(ui.ScrollIntoViewOptions{Block: ui.ScrollCenter, Animation: &ui.Smooth})
 		}
 	}
-	tile.Children(func() {
-		ui.Row(c).Gap(6).AlignItems(ui.Center).FillWidth().Children(func() {
-			if selectable {
-				radio := ui.Box(c).Size(10, 10).Radius(5).Shrink(0)
-				if cur {
-					radio.Border(3, t.Accent).Background(t.Background)
-				} else {
-					radio.Border(1.5, t.TextMuted.Alpha(0.6))
-				}
-			}
-			ui.Text(c, n).FontSize(12).FontWeight(500).SingleLine().Shrink(1).Tooltip(n)
-			if !selectable && cur {
-				ui.Spacer(c)
-				k.Tag(c, i18n.T("当前"), "accent")
-			}
-		})
-		ui.Row(c).Gap(6).AlignItems(ui.Center).FillWidth().Children(func() {
-			if proto != "" {
-				ui.Text(c, proto).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(1)
-			}
-			ui.Spacer(c)
-			if builtin {
-				ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
-				return
-			}
-			d := ui.ButtonBase(c).Label(i18n.Tf("重新测速 %s", n)).Tooltip(i18n.T("单击重新测速")).Padding(1, 4).Radius(4)
-			if d.Hovered() {
-				d.Background(t.SurfaceHover)
-			}
-			d.Children(func() { k.Delay(c, pr.Delay, pr.Testing) })
-			if d.Clicked() {
-				name := n
-				p.e.Run(func() error { return p.e.API.TestProxyDelay(name) }, "")
-			}
-		})
-	})
-	if selectable && tile.Clicked() && !cur {
+	if selectable && selClicked && !cur {
 		p.pick(g.Name, n)
+	}
+}
+
+// pillDelay draws a compact Clash Party–style delay label: pure number without
+// "ms", accent "测速" when untested, danger "超时" on timeout.
+func pillDelay(c *ui.Context, t *ui.Theme, delay int, testing bool) {
+	if testing {
+		ui.Spinner(c).Size(12, 12).Label(i18n.T("测速中"))
+		return
+	}
+	switch {
+	case delay == 0:
+		ui.Text(c, i18n.T("测速")).FontSize(12.5).FontWeight(500).TextColor(t.Accent).SingleLine()
+	case delay < 0:
+		ui.Text(c, i18n.T("超时")).FontSize(12.5).TextColor(t.Danger).SingleLine()
+	default:
+		col := t.Success
+		if delay >= 600 {
+			col = t.Danger
+		} else if delay >= 300 {
+			col = t.Warning
+		}
+		ui.Text(c, fmt.Sprint(delay)).FontSize(12.5).FontWeight(500).TextColor(col).FontFeatures("tnum").SingleLine()
 	}
 }
 
@@ -768,25 +835,76 @@ func (p *Page) provider(c *ui.Context, pv model.ProxyProvider, px model.ProxySna
 	})
 }
 
-// node draws one member row.
+// node draws one member row with independent sibling buttons for node
+// selection (left) and single-node latency testing (right).
 func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable bool, px model.ProxySnapshot, names map[string]bool) {
 	t := c.Theme()
 	k := p.e.Kit
 	pr := px.Proxies[n]
 	proto, _, builtin := memberKind(n, px, names)
 	cur := n == now
-	var row ui.Element
-	if selectable {
-		row = ui.ButtonBase(c.Key("node:" + n)).Label(n).Cursor(ui.CursorPointer)
-		if row.Hovered() {
-			row.Background(t.SurfaceHover)
+
+	row := ui.Row(c.Key("node:" + n)).Height(nodeRowH).AlignItems(ui.Stretch).Radius(6).Clip()
+	selHovered := false
+	selClicked := false
+
+	row.Children(func() {
+		var sel ui.Element
+		if selectable {
+			sel = ui.ButtonBase(c.Key("sel")).Label(n).Cursor(ui.CursorPointer)
+			selHovered = sel.Hovered()
+		} else {
+			sel = ui.Row(c.Key("sel"))
 		}
-	} else {
-		row = ui.Row(c.Key("node:" + n))
-	}
-	row.Height(nodeRowH).Padding(0, 10, 0, 12).Gap(10).AlignItems(ui.Center).Radius(6)
-	if cur {
-		row.Background(t.Accent.Alpha(0.08))
+		sel.Row().Grow(1).Shrink(1).Padding(0, 6, 0, 12).Gap(10).AlignItems(ui.Center).Children(func() {
+			if selectable {
+				radio := ui.Box(c).Size(14, 14).Radius(7).Shrink(0)
+				if cur {
+					radio.Border(4, t.Accent).Background(t.Background)
+				} else {
+					radio.Border(1.5, t.TextMuted.Alpha(0.6))
+				}
+			} else {
+				ui.Box(c).Size(14, 14).Shrink(0)
+			}
+			ui.Text(c, n).FontSize(13).SingleLine().Shrink(1).Tooltip(n)
+			if !selectable && cur {
+				k.Tag(c, i18n.T("当前"), "accent")
+			}
+			if proto != "" {
+				ui.Text(c, proto).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(0)
+			}
+			ui.Spacer(c)
+		})
+		if selectable && sel.Clicked() {
+			selClicked = true
+		}
+
+		if builtin {
+			ui.Box(c).Padding(0, 10, 0, 6).AlignItems(ui.Center).Justify(ui.Center).Shrink(0).Children(func() {
+				ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
+			})
+			return
+		}
+		ui.Box(c).Padding(0, 8, 0, 2).AlignItems(ui.Center).Justify(ui.Center).Shrink(0).Children(func() {
+			d := ui.ButtonBase(c.Key("delay")).Label(i18n.Tf("重新测速 %s", n)).Tooltip(i18n.T("单击重新测速")).
+				Padding(2, 8).Radius(6).MinWidth(48).AlignItems(ui.Center).Justify(ui.End).Cursor(ui.CursorPointer)
+			if d.Hovered() {
+				d.Background(t.Accent.Alpha(0.14))
+			}
+			d.Children(func() { k.Delay(c, pr.Delay, pr.Testing) })
+			if d.Clicked() {
+				name := n
+				p.e.Run(func() error { return p.e.API.TestProxyDelay(name) }, "")
+			}
+		})
+	})
+
+	switch {
+	case cur:
+		row.Background(t.Accent.Alpha(0.10))
+	case selHovered:
+		row.Background(t.SurfaceHover)
 	}
 	if reveal, tint := p.locating(c, g.Name, cur); tint {
 		row.Background(t.Accent.Alpha(0.28))
@@ -794,40 +912,7 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 			row.ScrollIntoView(ui.ScrollIntoViewOptions{Block: ui.ScrollCenter, Animation: &ui.Smooth})
 		}
 	}
-	row.Children(func() {
-		if selectable {
-			radio := ui.Box(c).Size(14, 14).Radius(7).Shrink(0)
-			if cur {
-				radio.Border(4, t.Accent).Background(t.Background)
-			} else {
-				radio.Border(1.5, t.TextMuted.Alpha(0.6))
-			}
-		} else {
-			ui.Box(c).Size(14, 14).Shrink(0)
-		}
-		ui.Text(c, n).FontSize(13).SingleLine().Shrink(1).Tooltip(n)
-		if !selectable && cur {
-			k.Tag(c, i18n.T("当前"), "accent")
-		}
-		if proto != "" {
-			ui.Text(c, proto).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(0)
-		}
-		ui.Spacer(c)
-		if builtin {
-			ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
-			return
-		}
-		d := ui.ButtonBase(c).Label(i18n.Tf("重新测速 %s", n)).Tooltip(i18n.T("单击重新测速")).Padding(2, 6).Radius(4).MinWidth(56).Justify(ui.End)
-		if d.Hovered() {
-			d.Background(t.SurfaceHover)
-		}
-		d.Children(func() { k.Delay(c, pr.Delay, pr.Testing) })
-		if d.Clicked() {
-			name := n
-			p.e.Run(func() error { return p.e.API.TestProxyDelay(name) }, "")
-		}
-	})
-	if selectable && row.Clicked() && !cur {
+	if selectable && selClicked && !cur {
 		p.pick(g.Name, n)
 	}
 }

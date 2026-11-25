@@ -143,15 +143,15 @@ func (p *Page) Wants(t app.Topic) bool {
 }
 
 var columns = []ui.TableColumn{
-	{Title: "时间", ID: "time", Width: 84, Sortable: true},
-	{Title: "程序", ID: "process", Width: 110, Sortable: true},
-	{Title: "方法", ID: "method", Width: 58, Sortable: true},
-	{Title: "状态", ID: "status", Width: 50, Align: ui.End, Sortable: true},
-	{Title: "主机", ID: "host", MinWidth: 140, Sortable: true},
-	{Title: "路径", ID: "path", MinWidth: 140, Sortable: true},
-	{Title: "大小", ID: "size", Width: 70, Align: ui.End, Sortable: true},
-	{Title: "耗时", ID: "dur", Width: 62, Align: ui.End, Sortable: true},
-	{Title: "标记", ID: "flags", Width: 80},
+	{Title: "时间", ID: "time", Width: 76, Sortable: true},
+	{Title: "程序", ID: "process", Width: 96, Sortable: true},
+	{Title: "方法", ID: "method", Width: 52, Sortable: true},
+	{Title: "状态", ID: "status", Width: 48, Align: ui.End, Sortable: true},
+	{Title: "主机", ID: "host", MinWidth: 110, Sortable: true},
+	{Title: "路径", ID: "path", MinWidth: 90, Sortable: true},
+	{Title: "大小", ID: "size", Width: 64, Align: ui.End, Sortable: true},
+	{Title: "耗时", ID: "dur", Width: 56, Align: ui.End, Sortable: true},
+	{Title: "标记", ID: "flags", Width: 116},
 }
 
 // Remaining formats the time left before the automatic turn-off.
@@ -831,7 +831,17 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, f model.CaptureFlow, col string)
 		}
 		ui.Text(c, fmtDur(f.DurationMs)).FontFeatures("tnum").TextColor(muted).SingleLine()
 	case "flags":
-		ui.Row(c).Gap(4).Children(func() {
+		var tips []string
+		for _, fl := range f.Flags {
+			if txt, _ := flagText(fl); txt != "" {
+				tips = append(tips, txt)
+			}
+		}
+		row := ui.Row(c).Gap(4).AlignItems(ui.Center)
+		if len(tips) > 0 {
+			row.Tooltip(strings.Join(tips, " · "))
+		}
+		row.Children(func() {
 			for _, fl := range f.Flags {
 				if txt, kind := flagText(fl); txt != "" {
 					p.e.Kit.Tag(c, txt, kind)

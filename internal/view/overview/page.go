@@ -67,8 +67,8 @@ func (p *Page) View(c *ui.Context) {
 	rs := p.routes(time.Now())
 	p.e.PaneSize(env.SizeOverviewSide, &p.side)
 	side := p.sideShare()
-	ui.Column(c).Grow(1).Padding(0, 24, 20, 24).Gap(16).Clip().Children(func() {
-		p.switches(c, st)
+	ui.Column(c).Grow(1).Padding(0, 20, 16, 20).Gap(12).Clip().Children(func() {
+		p.statusAlerts(c, st)
 		// The divider between the map and the side column drags (or,
 		// focused, takes the arrows) to give either more room: long node
 		// names and merged groups in the route list, or a bigger globe.
@@ -77,14 +77,51 @@ func (p *Page) View(c *ui.Context) {
 		main.Children(func() {
 			p.exitCard(c, st, rs, 100-side)
 			p.sideDivider(c, total)
-			ui.Column(c).Grow(side).Basis(0).MinWidth(sideMinWidth).Gap(12).Children(func() {
+			ui.Column(c).Grow(side).Basis(0).MinWidth(sideMinWidth).Gap(10).Children(func() {
 				p.routeCard(c, st, rs)
-				p.subscriptionCard(c, st)
-				p.speedCard(c, st)
 				p.terminalRow(c, st)
 			})
 		})
 	})
+}
+
+// statusAlerts shows only actionable error/warning banners (core crashed,
+// core missing, or config sync error), since normal switches and traffic now
+// live permanently in the sidebar.
+func (p *Page) statusAlerts(c *ui.Context, st model.Status) {
+	k := p.e.Kit
+	if st.Core == model.CoreError {
+		msg := i18n.T("Mihomo 内核意外退出，自动重启也失败了。系统代理已自动关闭，避免断网。")
+		if st.CoreError != "" {
+			msg = i18n.Tf("Mihomo 内核意外退出：%s。系统代理已自动关闭，避免断网。", st.CoreError)
+		}
+		k.Banner(c, "error", msg, func() {
+			if ui.Button(c, i18n.T("查看日志")).Clicked() {
+				p.e.Navigate(env.Logs, "")
+			}
+			if ui.PrimaryButton(c, i18n.T("重新启动")).Clicked() {
+				p.run(func() error { return p.e.API.RestartCore() }, i18n.T("内核已重启"), nil)
+			}
+		})
+	}
+	if st.Core == model.CoreMissing {
+		p.missingBanner(c, st)
+	}
+	if cs := p.e.API.ConfigSyncStatus(); cs.Error != "" || len(cs.Conflicts) > 0 || cs.Locked {
+		msg := i18n.Tf("同步文件有冲突副本（%s），请选择保留哪一个。", strings.Join(cs.Conflicts, i18n.T("、")))
+		kind := "warn"
+		if len(cs.Conflicts) == 0 {
+			msg, kind = i18n.T("输入同步口令以解锁订阅链接。"), "info"
+		}
+		if cs.Error != "" {
+			msg, kind = i18n.Tf("同步文件的修改没有加载，配置保持不变：%s", cs.Error), "error"
+		}
+		k.Banner(c, kind, msg, func() {
+			if ui.Button(c, i18n.T("查看")).Clicked() {
+				p.e.Navigate(env.Settings, "general")
+			}
+		})
+	}
 }
 
 // emptyState is the first-run guide (no subscriptions yet).
@@ -222,24 +259,33 @@ func (p *Page) coreRows(c *ui.Context, st model.Status, pc, pp *bool, busy bool)
 		if port == 0 {
 			port = 7890
 		}
+		showHint := st.ShowProxyHint && !proxyOn
 		row(c, i18n.T("系统代理"), func() {
-			ui.Text(c, fmt.Sprintf("127.0.0.1:%d", port)).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum")
+			if showHint {
+				// First-run bubble after the first import + start (docs/design.md §8.1).
+				// Placed in the flexible middle slot (instead of the Shrink(0) control
+				// slot alongside the port) so it fits inside the half-width column and
+				// truncates gracefully on narrow windows instead of overflowing into
+				// the right column.
+				ui.Spacer(c)
+				ui.Row(c).Gap(0).AlignItems(ui.Center).Shrink(1).Children(func() {
+					tip := env.ClickableRow(c, i18n.T("打开以让系统流量走代理，点击关闭提示")).Gap(6).AlignItems(ui.Center).Padding(4, 10).Radius(8).Background(t.Accent).Shrink(1).Tooltip(i18n.T("打开以让系统流量走代理"))
+					tip.Children(func() {
+						ui.Text(c, i18n.T("打开以让系统流量走代理")).FontSize(12).TextColor(t.AccentText).SingleLine().Shrink(1)
+						ui.Box(c).TextColor(t.AccentText.Alpha(0.8)).Shrink(0).Children(func() { k.Icon(c, "close", 11) })
+					})
+					if tip.Clicked() {
+						p.e.Run(p.e.API.DismissProxyHint, "")
+					}
+					ui.Box(c).Width(0).Height(0).Margin(0, 3, 0, 0).Shrink(0).Children(func() {
+						ui.Box(c).Width(6).Height(6).Background(t.Accent).Rotate(45).Margin(0, 0, 0, -3)
+					})
+				})
+				return
+			}
+			ui.Text(c, fmt.Sprintf("127.0.0.1:%d", port)).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine().Shrink(1)
 		}, func() {
 			on := proxyOn
-			if st.ShowProxyHint && !on {
-				// First-run bubble after the first import + start (docs/design.md §8.1).
-				tip := env.ClickableRow(c, i18n.T("打开以让系统流量走代理，点击关闭提示")).Gap(6).AlignItems(ui.Center).Padding(4, 10).Radius(8).Background(t.Accent).Shrink(0)
-				tip.Children(func() {
-					ui.Text(c, i18n.T("打开以让系统流量走代理")).FontSize(12).TextColor(t.AccentText).SingleLine()
-					ui.Box(c).TextColor(t.AccentText.Alpha(0.8)).Children(func() { k.Icon(c, "close", 11) })
-				})
-				if tip.Clicked() {
-					p.e.Run(p.e.API.DismissProxyHint, "")
-				}
-				ui.Box(c).Width(0).Height(0).Margin(0, -3, 0, 0).Children(func() {
-					ui.Box(c).Width(6).Height(6).Background(t.Accent).Rotate(45).Margin(0, 0, 0, -3)
-				})
-			}
 			ui.Switch(c, &on).Label(i18n.T("系统代理开关")).Disabled(busy).OnChange(func() {
 				p.setPending(&p.pendingProxy, on)
 				msg := i18n.T("系统代理已关闭")
@@ -312,9 +358,10 @@ func row(c *ui.Context, label string, middle func(), control func()) {
 	ui.Row(c).MinHeight(40).Padding(6, 12).Gap(8).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, label).FontSize(13).MinWidth(72).Shrink(0).SingleLine()
 		if middle != nil {
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(1).Children(middle)
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Grow(1).Shrink(1).Basis(0).Children(middle)
+		} else {
+			ui.Spacer(c)
 		}
-		ui.Spacer(c)
 		if control != nil {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(control)
 		}

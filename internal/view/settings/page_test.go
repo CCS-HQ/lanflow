@@ -137,7 +137,7 @@ func TestTUNHelperFlow(t *testing.T) {
 	e, r := testEnv(f)
 	p := New(e)
 	tt := ui.NewTester(p.View, 1000, 800)
-	if err := tt.Click("代理"); err != nil {
+	if err := tt.Click("TUN"); err != nil {
 		t.Fatal(err)
 	}
 	clickRole(t, tt, ui.RoleSwitch, "TUN 模式（增强模式）")

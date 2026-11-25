@@ -462,7 +462,8 @@ func (tr *tray) setTitle(st model.Status) {
 	tr.mu.Lock()
 	node := tr.node
 	tr.mu.Unlock()
-	title := trayart.Title(st, node, tr.h.hostAPI().Settings())
+	set := tr.h.hostAPI().Settings()
+	title := trayart.TitleForBar(st, node, set, true)
 	tr.mu.Lock()
 	same := title == tr.title
 	tr.title = title
@@ -472,17 +473,23 @@ func (tr *tray) setTitle(st model.Status) {
 	}
 }
 
-// updateGraph refreshes the traffic graph in the icon (macOS, when turned
-// on in settings) and redraws the icon if anything it shows changed.
+// updateGraph refreshes the traffic graph and compact 2-line speed in the
+// icon (macOS) and redraws the icon if anything it shows changed.
 func (tr *tray) updateGraph() {
 	api := tr.h.hostAPI()
+	set := api.Settings()
 	var graph []float64
-	if tr.h.mac() && api.Settings().TrayGraph {
-		up, down := api.TrafficHistory()
-		graph = trayart.Graph(up, down)
+	var speed [2]string
+	if tr.h.mac() {
+		if set.TrayGraph {
+			up, down := api.TrafficHistory()
+			graph = trayart.Graph(up, down)
+		}
+		speed = trayart.SpeedLinesFor(api.Status(), set)
 	}
 	tr.mu.Lock()
 	tr.look.Graph = graph
+	tr.look.SpeedLines = speed
 	tr.mu.Unlock()
 	tr.drawIcon(false)
 }

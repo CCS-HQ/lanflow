@@ -61,7 +61,11 @@ func (p *Page) menuBarPreview(c *ui.Context, t *ui.Theme, s model.Settings) {
 			}
 		}
 	}
-	look := trayart.Look{State: trayart.StateOf(st), Capture: api.CaptureStatus().Enabled}
+	look := trayart.Look{
+		State:      trayart.StateOf(st),
+		Capture:    api.CaptureStatus().Enabled,
+		SpeedLines: trayart.SpeedLinesFor(st, s),
+	}
 	if s.TrayGraph {
 		up, down := api.TrafficHistory()
 		look.Graph = trayart.Graph(up, down)
@@ -73,7 +77,7 @@ func (p *Page) menuBarPreview(c *ui.Context, t *ui.Theme, s model.Settings) {
 			look.Graph = []float64{0.2, 0.35, 0.7, 0.9, 0.5, 0.3, 1, 0.6}
 		}
 	}
-	title := trayart.Title(st, node, s)
+	title := trayart.TitleForBar(st, node, s, true)
 	src, w := p.menuBar.icon(look, t.Dark)
 
 	bar := ui.RGB(236, 236, 236)

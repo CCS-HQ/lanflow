@@ -6,11 +6,8 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"math"
 	"os"
 	"testing"
-
-	"github.com/egoist/mygo/ui"
 
 	"lanflow/internal/model"
 )
@@ -116,24 +113,34 @@ func TestPreview(t *testing.T) {
 		t.Skip("set TRAY_PREVIEW to a .png path")
 	}
 	g := Graph([]int64{0, 0, 1e3, 5e3, 2e4, 8e4, 2e5, 4e5, 3e5, 9e4, 3e4, 1e5, 6e5, 2e5}, []int64{0, 1e3, 3e4, 9e4, 3e5, 9e5, 2e6, 1.5e6, 8e5, 2e5, 9e4, 5e5, 2.4e6, 1e6})
-	looks := []Look{{State: Off}, {State: Half}, {State: On}, {State: Error}, {State: On, Capture: true}, {State: On, Graph: g}, {State: Half, Capture: true, Graph: g}}
-	W := 1000
-	canvas := image.NewNRGBA(image.Rect(0, 0, W, 220))
+	looks := []Look{
+		{State: Off},
+		{State: Half},
+		{State: On},
+		{State: Error},
+		{State: On, Capture: true},
+		{State: On, SpeedLines: [2]string{"0 B/s", "0 B/s"}},
+		{State: On, SpeedLines: [2]string{"9.8 KB/s", "1.3 MB/s"}},
+		{State: On, SpeedLines: [2]string{"512 B/s", "45 MB/s"}},
+		{State: On, Graph: g},
+	}
+	W := 1100
+	canvas := image.NewNRGBA(image.Rect(0, 0, W, 160))
 	for i, dark := range []bool{false, true} {
-		bg, col := color.NRGBA{236, 236, 236, 255}, color.NRGBA{0, 0, 0, 255}
+		bg := color.NRGBA{236, 236, 236, 255}
 		if dark {
-			bg, col = color.NRGBA{40, 40, 42, 255}, color.NRGBA{255, 255, 255, 255}
+			bg = color.NRGBA{40, 40, 42, 255}
 		}
-		draw.Draw(canvas, image.Rect(0, i*110, W, i*110+110), &image.Uniform{bg}, image.Point{}, draw.Src)
+		draw.Draw(canvas, image.Rect(0, i*80, W, i*80+80), &image.Uniform{bg}, image.Point{}, draw.Src)
 		x := 20
 		for _, l := range looks {
-			w := 72
-			if l.Graph != nil {
-				w = int(math.Round((18 + 3 + graphW) * 4))
+			im, err := png.Decode(bytes.NewReader(PNG(l, Ink{Dark: dark})))
+			if err != nil {
+				t.Fatal(err)
 			}
-			im := ui.MustParseSVG([]byte(SVG(l))).Image(w, 72, col)
-			draw.Draw(canvas, image.Rect(x, i*110+19, x+w, i*110+91), im, image.Point{}, draw.Over)
-			x += w + 36
+			w := im.Bounds().Dx()
+			draw.Draw(canvas, image.Rect(x, i*80+22, x+w, i*80+58), im, image.Point{}, draw.Over)
+			x += w + 24
 		}
 	}
 	var buf bytes.Buffer

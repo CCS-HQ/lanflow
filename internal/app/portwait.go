@@ -21,9 +21,9 @@ func waitTCPPortFree(ctx context.Context, port int, lan bool) error {
 	if runtime.GOOS != "darwin" {
 		return errPortListening
 	}
-	ctx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	return waitPortRelease(ctx, 100*time.Millisecond,
+	return waitPortRelease(ctx, 50*time.Millisecond,
 		func() bool { return tcpPortInUse(port, lan) },
 		func() bool {
 			d := net.Dialer{Timeout: 200 * time.Millisecond}

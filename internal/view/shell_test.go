@@ -37,12 +37,12 @@ func click(t *testing.T, tt *ui.Tester, text string) {
 
 func TestSidebarNavigation(t *testing.T) {
 	_, s, tt := newTest(t)
-	if s.Page() != env.Overview || !tt.HasText("出口地图") {
+	if s.Page() != env.Proxies || !tt.HasText("节点选择") {
 		t.Fatalf("starts on %s: %q", s.Page(), tt.Texts())
 	}
-	click(t, tt, "代理")
-	if s.Page() != env.Proxies || !tt.HasText("节点选择") {
-		t.Fatalf("after clicking 代理: page %s, texts %q", s.Page(), tt.Texts())
+	click(t, tt, "概览")
+	if s.Page() != env.Overview || !tt.HasText("出口地图") {
+		t.Fatalf("after clicking 概览: page %s, texts %q", s.Page(), tt.Texts())
 	}
 	tt.Key(ui.Cmd, ui.Key3)
 	if s.Page() != env.Subs || !tt.HasText("我的机场") {
@@ -64,12 +64,7 @@ func TestSidebarNavigation(t *testing.T) {
 	if s.Page() != env.Settings {
 		t.Fatalf("after clicking 设置: page %s", s.Page())
 	}
-	// The status bar goes back to the overview.
-	click(t, tt, "运行中 · 规则")
-	if s.Page() != env.Overview {
-		t.Fatalf("status bar click: page %s", s.Page())
-	}
-	// The connection badge shows the count.
+	// The connection card shows the count.
 	if n := s.api.Status().Connections; n > 0 && !tt.HasText(strconv.Itoa(n)) {
 		t.Errorf("no badge for %d connections", n)
 	}
@@ -80,36 +75,36 @@ func TestOverviewSwitches(t *testing.T) {
 	if api.Status().Core != model.CoreRunning {
 		t.Fatal("fake should start running")
 	}
-	click(t, tt, "内核开关")
-	if st := api.Status(); st.Core != model.CoreStopped || st.SystemProxy {
-		t.Fatalf("after turning the core off: %+v", st)
+	if err := api.StopCore(); err != nil {
+		t.Fatal(err)
 	}
-	if !tt.HasText("未启动") || !tt.HasText("内核已停止") {
+	tt.Frame()
+	if !tt.HasText("未启动") {
 		t.Errorf("stopped state not shown: %q", tt.Texts())
 	}
-	// Turning the system proxy on starts the core first.
-	click(t, tt, "系统代理开关")
+	// Turning the system proxy on from the sidebar starts the core first.
+	click(t, tt, "快捷系统代理开关")
 	if st := api.Status(); st.Core != model.CoreRunning || !st.SystemProxy {
 		t.Fatalf("after turning the system proxy on: %+v", st)
 	}
 	if !tt.HasText("系统代理已开启") {
 		t.Errorf("toast missing: %q", tt.Texts())
 	}
-	// The overview switch area has 内核 / 系统代理 / TUN / 模式
-	// (docs/design.md §5.1).
-	if !tt.HasText("TUN 模式开关") {
-		t.Errorf("TUN switch missing on the overview: %q", tt.Texts())
+	if !tt.HasText("快捷 TUN 开关") || !tt.HasText("重启内核") {
+		t.Errorf("TUN switch or core restart missing in sidebar: %q", tt.Texts())
 	}
 }
 
 func TestModeChange(t *testing.T) {
-	api, _, tt := newTest(t)
+	api, s, tt := newTest(t)
+	s.navigate(env.Overview, "")
+	tt.Frame()
 	click(t, tt, "全局")
 	if api.Status().Mode != model.ModeGlobal {
 		t.Fatalf("mode %s after clicking 全局", api.Status().Mode)
 	}
-	if !tt.HasText("运行中 · 全局") {
-		t.Errorf("status bar not updated: %q", tt.Texts())
+	if !tt.HasText("已切换到全局模式") {
+		t.Errorf("mode toast missing: %q", tt.Texts())
 	}
 	click(t, tt, "直连")
 	if api.Status().Mode != model.ModeDirect {
@@ -125,7 +120,11 @@ func TestModeChange(t *testing.T) {
 }
 
 func TestProxySelection(t *testing.T) {
-	api, s, tt := newTest(t)
+	api := fake.NewInstant()
+	_ = api.SaveUIState(model.UIState{OpenGroups: map[string]bool{"节点选择": true}})
+	s := New(api, Options{Mac: true, Sync: true})
+	t.Cleanup(s.Close)
+	tt := ui.NewTester(s.View, DefaultWidth, DefaultHeight)
 	s.navigate(env.Proxies, "")
 	tt.Frame()
 	click(t, tt, "香港 01")
@@ -284,7 +283,7 @@ func TestDragRegionsTakeNoClick(t *testing.T) {
 	// Between the title and the tools of the 概览 header.
 	tt.ClickAt(600, 36)
 	tt.Frame()
-	if s.Page() != env.Overview || s.confirm != nil {
+	if s.Page() != env.Proxies || s.confirm != nil {
 		t.Fatalf("a press on the header changed state: page %s", s.Page())
 	}
 	if _, ok := tt.Access("标题栏"); ok {

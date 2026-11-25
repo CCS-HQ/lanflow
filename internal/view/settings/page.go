@@ -30,6 +30,7 @@ const appVersion = "0.1.11"
 const (
 	tabGeneral = iota
 	tabProxy
+	tabTUN
 	tabDNS
 	tabSniffer
 	tabOverride
@@ -38,9 +39,32 @@ const (
 )
 
 var (
-	tabNames = []string{"常规", "代理|设置", "DNS", "嗅探", "覆写", "内核", "高级"}
-	tabKeys  = []string{"general", "proxy", "dns", "sniffer", "override", "kernel", "advanced"}
+	tabNames = []string{"常规", "代理|设置", "TUN", "DNS", "嗅探", "覆写", "内核", "高级"}
+	tabKeys  = []string{"general", "proxy", "tun", "dns", "sniffer", "override", "kernel", "advanced"}
 )
+
+func tabDesc(tab int) string {
+	switch tab {
+	case tabGeneral:
+		return i18n.T("启动、外观、菜单栏与全局快捷键")
+	case tabProxy:
+		return i18n.T("代理端口、局域网共享、绕过地址与测速")
+	case tabTUN:
+		return i18n.T("虚拟网卡接管、协议栈与内网兼容")
+	case tabDNS:
+		return i18n.T("域名解析方式、上游服务器与防泄漏")
+	case tabSniffer:
+		return i18n.T("从流量中还原真实域名，改善规则分流")
+	case tabOverride:
+		return i18n.T("用 YAML 追加节点、策略组或规则")
+	case tabKernel:
+		return i18n.T("Mihomo 版本管理与地理数据库更新")
+	case tabAdvanced:
+		return i18n.T("独立端口、局域网认证与底层调优")
+	default:
+		return ""
+	}
+}
 
 // Page holds page-local UI state.
 type Page struct {
@@ -147,6 +171,14 @@ func New(e *env.Env) *Page {
 	return &Page{e: e, upd: mygoUpdater{}, relaunch: func() { mygo.App.Relaunch() }}
 }
 
+// ActiveTab returns the key of the currently selected settings tab.
+func (p *Page) ActiveTab() string {
+	if p.tab >= 0 && p.tab < len(tabKeys) {
+		return tabKeys[p.tab]
+	}
+	return tabKeys[0]
+}
+
 // View draws the whole content area including the header.
 func (p *Page) View(c *ui.Context) {
 	e, t := p.e, c.Theme()
@@ -163,18 +195,44 @@ func (p *Page) View(c *ui.Context) {
 	}
 
 	ui.Column(c).Fill().Children(func() {
-		e.Kit.Header(c, i18n.T("设置"), "", func() {
-			tab := p.tab
-			if ui.Segmented(c.Key("tabs"), &tab, i18n.Options(tabNames...)...).Label(i18n.T("设置分栏")).Changed() {
-				p.requestTab(tab)
-			}
+		e.Kit.Header(c, i18n.T("设置"), tabDesc(p.tab), nil)
+		// Dedicated full-width pill tab bar so all 7 tabs stay legible on
+		// compact windows without colliding with the page title.
+		ui.Box(c).Padding(0, 20, 10, 20).Shrink(0).Children(func() {
+			ui.Row(c.Key("tabs")).Padding(3).Gap(3).Radius(10).Background(t.Surface).
+				Border(1, t.Border.Alpha(0.6)).AlignItems(ui.Center).Label(i18n.T("设置分栏")).Children(func() {
+				labels := i18n.Options(tabNames...)
+				for i, lbl := range labels {
+					active := p.tab == i
+					btn := ui.ButtonBase(c.Key("tab:"+tabKeys[i])).Grow(1).Basis(0).Height(28).Radius(7).
+						AlignItems(ui.Center).Justify(ui.Center).Label(lbl).Cursor(ui.CursorPointer)
+					if active {
+						btn.Background(t.Accent)
+					} else if btn.Hovered() {
+						btn.Background(t.SurfaceHover)
+					}
+					btn.Children(func() {
+						txt := ui.Text(c, lbl).FontSize(12.5).FontWeight(500).SingleLine()
+						if active {
+							txt.TextColor(t.AccentText).FontWeight(600)
+						} else {
+							txt.TextColor(t.TextMuted)
+						}
+					})
+					if btn.Clicked() && !active {
+						p.requestTab(i)
+					}
+				}
+			})
 		})
-		ui.Scroll(c.Key(tabKeys[p.tab])).Grow(1).Padding(4, 24, 24).Gap(20).Children(func() {
+		ui.Scroll(c.Key(tabKeys[p.tab])).Grow(1).Padding(6, 22, 24).Gap(22).Children(func() {
 			switch p.tab {
 			case tabGeneral:
 				p.general(c, t, s)
 			case tabProxy:
 				p.proxy(c, t, s, st)
+			case tabTUN:
+				p.tunTab(c, t, s, st)
 			case tabDNS:
 				p.dnsTab(c, t, s)
 			case tabSniffer:
@@ -384,7 +442,7 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 	// Two columns at ≥1100 pt (docs/design.md §5.8): 常规 and the shortcuts
 	// on the left, data, backup and about on the right.
 	env.Columns(c, 20, func() {
-		e.Kit.Section(c, i18n.T("常规"), "", func() {
+		e.Kit.Section(c, i18n.T("启动与窗口"), "", func() {
 			p.switchRow(c, i18n.T("开机时启动"), "", s.OpenAtLogin, func(on bool) { s.OpenAtLogin = on; p.save(s, "", nil) })
 			p.switchRow(c, i18n.T("启动后自动开启系统代理"), "", s.AutoSystemProxy, func(on bool) { s.AutoSystemProxy = on; p.save(s, "", nil) })
 			where := i18n.T("通知区域")
@@ -398,6 +456,8 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 				closeVal = closeOpts[0]
 			}
 			p.selectRow(c, i18n.T("关闭窗口时"), "", closeVal, closeOpts, func(v string) { s.CloseToTray = v == closeOpts[0]; p.save(s, "", nil) })
+		})
+		e.Kit.Section(c, i18n.T("外观与语言"), "", func() {
 			appOpts := []string{i18n.T("跟随系统"), i18n.T("浅色"), i18n.T("深色")}
 			appVals := []string{"system", "light", "dark"}
 			p.selectRow(c, i18n.T("外观"), "", mapName(s.Appearance, appVals, appOpts), appOpts, func(v string) {
@@ -507,34 +567,6 @@ func (p *Page) proxy(c *ui.Context, t *ui.Theme, s model.Settings, st model.Stat
 					p.bypass.open = true
 				})
 			})
-			tunDesc := i18n.T("接管所有应用的流量，首次开启需要安装权限组件")
-			if st.TUNAvailable {
-				tunDesc = i18n.T("接管所有应用的流量，包括不遵守系统代理的程序")
-			}
-			p.switchRow(c, i18n.T("TUN 模式（增强模式）"), tunDesc, st.TUN, p.setTUN)
-			if st.HelperReinstall {
-				e.Kit.Banner(c, "warn", i18n.T("已安装的权限组件来自另一个版本的澜流，TUN 模式暂不可用，需要重新安装权限组件。"), func() {
-					ui.Button(c, i18n.T("重新安装…")).OnClick(func() { env.ReinstallHelper(p.e, s.TUN) })
-				})
-			}
-			if st.TUNAvailable || st.TUN {
-				stackOpts := []string{"mixed", "system", "gvisor"}
-				stack := s.TUNStack
-				if stack == "" {
-					stack = "mixed"
-				}
-				p.selectRow(c, i18n.T("TUN 协议栈"), i18n.T("一般保持 mixed；兼容性问题时可改为 system 或 gvisor"), stack, stackOpts, func(v string) {
-					s.TUNStack = v
-					p.save(s, "", nil)
-				})
-				if e.Mac {
-					p.switchRow(c, i18n.T("自动设置系统 DNS"), i18n.T("开启 TUN 时把系统 DNS 指向 223.5.5.5，让 DNS 查询经过澜流；关闭 TUN 或退出时恢复原设置"), s.TUNSetDNS, func(on bool) {
-						s.TUNSetDNS = on
-						p.save(s, "", nil)
-					})
-				}
-			}
-			p.atrustRow(c, s, st)
 			p.switchRow(c, i18n.T("实测节点出口位置"), i18n.T("经节点访问 www.cloudflare.com/cdn-cgi/trace，确定真实出口位置"), s.ProbeExits, func(on bool) {
 				s.ProbeExits = on
 				p.save(s, "", nil)
@@ -543,6 +575,47 @@ func (p *Page) proxy(c *ui.Context, t *ui.Theme, s model.Settings, st model.Stat
 	}, func() {
 		p.delaySection(c, t, s)
 		p.wifiSection(c, t, s) // 按 Wi-Fi 切换订阅 (wifi.go)
+	})
+}
+
+// ---- TUN ----
+
+func (p *Page) tunTab(c *ui.Context, t *ui.Theme, s model.Settings, st model.Status) {
+	e := p.e
+	e.Kit.Section(c, i18n.T("TUN 模式"), i18n.T("通过虚拟网卡接管系统全部流量，包括不遵守系统代理的终端与应用"), func() {
+		tunDesc := i18n.T("接管所有应用的流量，首次开启需要安装权限组件")
+		if st.TUNAvailable {
+			tunDesc = i18n.T("接管所有应用的流量，包括不遵守系统代理的程序")
+		}
+		p.switchRow(c, i18n.T("TUN 模式（增强模式）"), tunDesc, st.TUN, p.setTUN)
+		if st.HelperReinstall {
+			e.Kit.Banner(c, "warn", i18n.T("已安装的权限组件来自另一个版本的澜流，TUN 模式暂不可用，需要重新安装权限组件。"), func() {
+				ui.Button(c, i18n.T("重新安装…")).OnClick(func() { env.ReinstallHelper(p.e, s.TUN) })
+			})
+		}
+		if st.TUNAvailable || st.TUN {
+			stackOpts := []string{"mixed", "system", "gvisor"}
+			stack := s.TUNStack
+			if stack == "" {
+				stack = "mixed"
+			}
+			p.selectRow(c, i18n.T("TUN 协议栈"), i18n.T("一般保持 mixed；兼容性问题时可改为 system 或 gvisor"), stack, stackOpts, func(v string) {
+				s.TUNStack = v
+				p.save(s, "", nil)
+			})
+			if e.Mac {
+				p.switchRow(c, i18n.T("自动设置系统 DNS"), i18n.T("开启 TUN 时把系统 DNS 指向 223.5.5.5，让 DNS 查询经过澜流；关闭 TUN 或退出时恢复原设置"), s.TUNSetDNS, func(on bool) {
+					s.TUNSetDNS = on
+					p.save(s, "", nil)
+				})
+			}
+		}
+		p.atrustRow(c, s, st)
+	})
+	e.Kit.Section(c, i18n.T("进阶 TUN 参数"), "", func() {
+		e.Kit.Row(c, i18n.T("MTU、严格路由与排除网段"), i18n.T("在「高级」分栏中配置精细的虚拟网卡参数"), func() {
+			ui.Button(c, i18n.T("前往高级设置")).OnClick(func() { p.requestTab(tabAdvanced) })
+		})
 	})
 }
 

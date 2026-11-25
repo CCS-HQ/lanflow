@@ -37,11 +37,11 @@ import (
 // page's primary content without page-level scrolling; the minimum keeps
 // the sidebar's status bar and the pages' two-column layouts readable.
 const (
-	DefaultWidth  = 1180
-	DefaultHeight = 780
-	MinWidth      = 1000
-	MinHeight     = 600
-	SidebarWidth  = 200
+	DefaultWidth  = 1020
+	DefaultHeight = 580
+	MinWidth      = 800
+	MinHeight     = 500
+	SidebarWidth  = 250
 )
 
 // FitWorkArea returns the default window size clamped to the work area
@@ -84,7 +84,7 @@ type topicPage interface{ Topics() []app.Topic }
 // shellTopics are the topics the shell's own parts draw: the sidebar's
 // status bar and badge (Status), the queued notices (Notice) and the
 // language and appearance (Settings). They rebuild whatever page shows.
-var shellTopics = []app.Topic{app.TopicStatus, app.TopicNotice, app.TopicSettings, app.TopicCapture}
+var shellTopics = []app.Topic{app.TopicStatus, app.TopicNotice, app.TopicSettings, app.TopicCapture, app.TopicSubs}
 
 // toastReq is a queued toast, shown on the next build.
 type toastReq struct {
@@ -159,7 +159,7 @@ type Shell struct {
 
 // New builds the shell and all pages over api.
 func New(api app.API, opts Options) *Shell {
-	s := &Shell{api: api, opts: opts, page: env.Overview, args: map[env.Page]string{}}
+	s := &Shell{api: api, opts: opts, page: env.Proxies, args: map[env.Page]string{}}
 	s.keys = newKeys(s)
 	s.env = &env.Env{
 		API:      api,
@@ -656,19 +656,10 @@ func (s *Shell) View(c *ui.Context) {
 	bar := c.TitleBar()
 	root := ui.Row(c).Fill().AlignItems(ui.Stretch)
 	root.Children(func() {
-		side := ui.Column(c).Width(SidebarWidth).Shrink(0)
-		if !vib {
-			side.Background(t.Surface)
-		}
+		side := ui.Column(c).Width(SidebarWidth).Shrink(0).Background(t.Surface)
 		side.Children(func() {
-			// The strip around the window controls drags the window, as a
-			// title bar does (double-click zooms or minimizes per the system).
-			strip := ui.Box(c).Height(10).Shrink(0)
-			if bar.Height > 0 {
-				strip.Height(max(bar.Height, 52)).DragWindow().Label(i18n.T("标题栏"))
-			}
-			s.sidebar(c, st, vib)
-			s.statusBar(c, st)
+			s.sidebarHeader(c, st, bar.Height)
+			s.sidebar(c, st)
 		})
 		ui.Box(c).Width(1).Background(t.Border).Shrink(0)
 		ui.Column(c).Grow(1).Background(t.Background).Clip().Children(func() {
