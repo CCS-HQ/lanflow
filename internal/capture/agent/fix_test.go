@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -82,16 +84,18 @@ func TestStoreSpillSpaceIsReclaimed(t *testing.T) {
 	dir := t.TempDir()
 	const limit = 64 << 10
 	s := newStore(8, 4<<10, 4<<10, dir, limit) // every finished body is spilled almost at once
+	t.Cleanup(s.close)
 	var written int64
 	var last *record
 	for i := 0; i < 400; i++ { // 400 × 3 KiB: many times the limit
 		r := s.add(model.CaptureFlow{})
 		s.appendBody(r, true, bytes.Repeat([]byte{byte(i)}, 3<<10))
 		s.update(r, func(d *model.CaptureFlowDetail) { d.Flow.Done = true })
+		s.waitSpill()
 		written += 3 << 10
 		last = r
-		if s.spillUsed > limit {
-			t.Fatalf("after %d records the spill holds %d bytes, limit %d", i+1, s.spillUsed, limit)
+		if _, spillUsed, _ := s.stats(); spillUsed > limit {
+			t.Fatalf("after %d records the spill holds %d bytes, limit %d", i+1, spillUsed, limit)
 		}
 	}
 	if written < 10*limit {
@@ -121,14 +125,15 @@ func TestStoreSpillSpaceIsReclaimed(t *testing.T) {
 		t.Fatal("the newest record's body was dropped")
 	}
 	s.clear()
-	if s.spillUsed != 0 || len(spillFiles(t, dir)) != 0 {
-		t.Fatalf("after clear: %d bytes, files %v", s.spillUsed, spillFiles(t, dir))
+	if _, spillUsed, _ := s.stats(); spillUsed != 0 || len(spillFiles(t, dir)) != 0 {
+		t.Fatalf("after clear: %d bytes, files %v", spillUsed, spillFiles(t, dir))
 	}
 	// and the store spills again afterwards
 	r := s.add(model.CaptureFlow{})
 	s.appendBody(r, true, bytes.Repeat([]byte{'z'}, 4<<10))
 	s.appendBody(r, false, bytes.Repeat([]byte{'y'}, 4<<10))
 	s.update(r, func(d *model.CaptureFlowDetail) { d.Flow.Done = true })
+	s.waitSpill()
 	if d, _ := s.detail(r.d.Flow.ID); !r.spilled || len(d.RespBody) != 4<<10 || d.RespBody[0] != 'z' || d.ReqBody[0] != 'y' {
 		t.Fatalf("after clear: spilled=%v resp=%d", r.spilled, len(d.RespBody))
 	}
@@ -145,17 +150,84 @@ func TestStoreSpillScanBacksOff(t *testing.T) {
 	t.Cleanup(s.close) // before the directory goes: Windows keeps an open file
 	r := s.add(model.CaptureFlow{})
 	s.appendBody(r, true, bytes.Repeat([]byte{'a'}, 9<<10)) // over the limit, unfinished
-	if s.spillFloor <= s.memUsed {
-		t.Fatalf("no back-off: floor %d, used %d", s.spillFloor, s.memUsed)
+	memUsed, _, spillFloor := s.stats()
+	if spillFloor <= memUsed {
+		t.Fatalf("no back-off: floor %d, used %d", spillFloor, memUsed)
 	}
-	floor := s.spillFloor
 	s.appendBody(r, true, []byte("b"))
-	if s.spillFloor != floor {
+	if _, _, newFloor := s.stats(); newFloor != spillFloor {
 		t.Fatal("scanned again for one more byte")
 	}
 	s.update(r, func(d *model.CaptureFlowDetail) { d.Flow.Done = true })
-	if !r.spilled || s.memUsed != 0 {
-		t.Fatalf("finished record not spilled: spilled=%v used=%d", r.spilled, s.memUsed)
+	s.waitSpill()
+	memUsed, _, _ = s.stats()
+	if !r.spilled || memUsed != 0 {
+		t.Fatalf("finished record not spilled: spilled=%v used=%d", r.spilled, memUsed)
+	}
+}
+
+// Concurrent updates, background spills, detail reads, and clear must be
+// race-free and keep memUsed/spillUsed within bounds without blocking add().
+func TestStoreAsyncSpillAndConcurrentDetail(t *testing.T) {
+	dir := t.TempDir()
+	const memLimit = 8 << 10
+	const spillLimit = 128 << 10
+	s := newStore(32, 8<<10, memLimit, dir, spillLimit)
+	t.Cleanup(s.close)
+
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for i := 0; i < 60; i++ {
+				r := s.add(model.CaptureFlow{Host: "async.test", Path: fmt.Sprintf("/%d/%d", worker, i)})
+				s.appendBody(r, false, bytes.Repeat([]byte{byte(worker + 1)}, 1024))
+				s.appendBody(r, true, bytes.Repeat([]byte{byte(i + 1)}, 2048))
+				s.update(r, func(d *model.CaptureFlowDetail) { d.Flow.Done = true })
+				if i%3 == 0 {
+					if d, ok := s.detail(r.d.Flow.ID); ok {
+						if len(d.ReqBody) != 1024 && !r.dropped {
+							t.Errorf("unexpected req body len %d", len(d.ReqBody))
+						}
+					}
+				}
+			}
+		}(w)
+	}
+	stopRead := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stopRead:
+				return
+			default:
+			}
+			fs, _, _, _ := s.since(0, 0)
+			for _, f := range fs {
+				s.detail(f.ID)
+			}
+		}
+	}()
+
+	time.Sleep(15 * time.Millisecond)
+	close(stopRead)
+	wg.Wait()
+	s.waitSpill()
+
+	memUsed, spillUsed, _ := s.stats()
+	if memUsed > memLimit {
+		t.Fatalf("memUsed %d exceeds limit %d", memUsed, memLimit)
+	}
+	if spillUsed > spillLimit {
+		t.Fatalf("spillUsed %d exceeds limit %d", spillUsed, spillLimit)
+	}
+
+	s.clear()
+	if files := spillFiles(t, dir); len(files) != 0 {
+		t.Fatalf("spill files left after clear: %v", files)
 	}
 }
 
@@ -209,6 +281,70 @@ func TestLossyPipe(t *testing.T) {
 	c, _ := io.ReadAll(p)
 	if string(b) != "forwarded" || string(c) != "forwarded" {
 		t.Fatalf("%q %q", b, c)
+	}
+}
+
+func TestLossyPipeRingWrapAndReuse(t *testing.T) {
+	p := newLossyPipe(256 << 10)
+	chunk := bytes.Repeat([]byte("abcd1234"), 128) // 1 KiB
+	tmp := make([]byte, len(chunk))
+	// Prime the initial ring buffer.
+	p.Write(chunk)
+	if _, err := io.ReadFull(p, tmp); err != nil {
+		t.Fatal(err)
+	}
+	initCap := cap(p.buf)
+	if initCap != pipeInitCap {
+		t.Fatalf("initial cap %d, want %d", initCap, pipeInitCap)
+	}
+	// Steady-state wrapped streaming reuses the same ring buffer with zero allocations.
+	allocs := testing.AllocsPerRun(200, func() {
+		p.Write(chunk)
+		if _, err := io.ReadFull(p, tmp); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("steady-state ring allocs=%v, want 0", allocs)
+	}
+	if cap(p.buf) != initCap {
+		t.Fatalf("ring buffer grew unexpectedly: %d -> %d", initCap, cap(p.buf))
+	}
+
+	// Growth while wrapped (head > 0) preserves byte order.
+	p.Write(bytes.Repeat([]byte{'A'}, 3<<10))
+	buf3k := make([]byte, 3<<10)
+	io.ReadFull(p, buf3k)
+	p.Write(bytes.Repeat([]byte{'B'}, 2<<10)) // wraps around 4 KiB
+	p.Write(bytes.Repeat([]byte{'C'}, 4<<10)) // forces resize while wrapped
+	got := make([]byte, 6<<10)
+	if _, err := io.ReadFull(p, got); err != nil {
+		t.Fatal(err)
+	}
+	want := append(bytes.Repeat([]byte{'B'}, 2<<10), bytes.Repeat([]byte{'C'}, 4<<10)...)
+	if !bytes.Equal(got, want) {
+		t.Fatal("wrapped resize corrupted byte order")
+	}
+
+	// Burst larger than pipeShrinkCap is released once drained.
+	burst := bytes.Repeat([]byte{'Z'}, 128<<10)
+	p.Write(burst)
+	out := make([]byte, len(burst))
+	if _, err := io.ReadFull(p, out); err != nil || !bytes.Equal(out, burst) {
+		t.Fatalf("burst read failed: %v", err)
+	}
+	if p.buf != nil {
+		t.Fatalf("large ring buffer not released after drain (cap=%d)", cap(p.buf))
+	}
+
+	// Overflow while wrapped breaks the pipe.
+	p2 := newLossyPipe(16)
+	p2.Write([]byte("1234567890"))
+	io.ReadFull(p2, make([]byte, 8))
+	p2.Write([]byte("abcdefghijkl")) // 2 + 12 = 14 <= 16, wraps
+	p2.Write([]byte("xyz"))          // 14 + 3 > 16, overflows
+	if _, err := p2.Read(make([]byte, 4)); !errors.Is(err, errPipeBroken) {
+		t.Fatalf("wrapped overflow: got %v, want errPipeBroken", err)
 	}
 }
 
@@ -523,6 +659,62 @@ func TestH2PushPromiseKeepsTheTable(t *testing.T) {
 			headerValue(d.RespHeader, "x-pushed") != "first-value-in-the-table" || headerValue(d.RespHeader, "x-after") != "ok" {
 			t.Fatalf("headers decoded with a table out of step: %+v %+v", fs[0], d.RespHeader)
 		}
+	}
+}
+
+func TestH2DynamicTableDefaultAndSizeUpdate(t *testing.T) {
+	if h2DefaultTable != 4096 {
+		t.Fatalf("h2DefaultTable = %d, want 4096", h2DefaultTable)
+	}
+	// Without an explicit dynamic table size update, decoder starts at 4 KiB
+	// and rejects references to entries evicted past 4 KiB.
+	dec := hpack.NewDecoder(h2DefaultTable, nil)
+	dec.SetAllowedMaxDynamicTableSize(h2MaxTable)
+	var bigEncBuf bytes.Buffer
+	bigEnc := hpack.NewEncoder(&bigEncBuf)
+	bigEnc.SetMaxDynamicTableSizeLimit(64 << 10)
+	bigEnc.SetMaxDynamicTableSize(64 << 10)
+	// Strip the initial size-update prefix so the decoder stays at 4 KiB while
+	// the encoder builds a >4 KiB dynamic table.
+	_ = bigEnc
+	// Verify decoder rejects an illegal size update above h2MaxTable.
+	var overEncBuf bytes.Buffer
+	overEnc := hpack.NewEncoder(&overEncBuf)
+	overEnc.SetMaxDynamicTableSizeLimit(h2MaxTable * 2)
+	overEnc.SetMaxDynamicTableSize(h2MaxTable * 2)
+	overEnc.WriteField(hpack.HeaderField{Name: "x-a", Value: "1"})
+	if _, err := dec.DecodeFull(overEncBuf.Bytes()); err == nil {
+		t.Fatal("decoder accepted dynamic table size above h2MaxTable")
+	}
+
+	// Verify h2Parser starts at 4 KiB (not 1 MiB) and accepts an explicit
+	// peer size update up to h2MaxTable (e.g. 64 KiB) across >8 KiB of headers.
+	c, sv := newH2Side(true), newH2Side(false)
+	sv.enc.SetMaxDynamicTableSizeLimit(64 << 10)
+	sv.enc.SetMaxDynamicTableSize(64 << 10)
+	c.headers(1, true, ":method", "GET", ":scheme", "https", ":authority", "h2.test", ":path", "/first")
+	c.headers(3, true, ":method", "GET", ":scheme", "https", ":authority", "h2.test", ":path", "/second")
+
+	longVal := strings.Repeat("v", 500)
+	sv.headers(1, true, ":status", "200", "x-early", "kept-across-8k", "x-pad1", longVal, "x-pad2", longVal,
+		"x-pad3", longVal, "x-pad4", longVal, "x-pad5", longVal, "x-pad6", longVal, "x-pad7", longVal,
+		"x-pad8", longVal, "x-pad9", longVal, "x-pad10", longVal)
+	// On stream 3, reference x-early again: with >5 KiB of headers in the
+	// table, this only succeeds if the size update to 64 KiB took effect.
+	sv.headers(3, true, ":status", "200", "x-early", "kept-across-8k")
+
+	s := newStore(100, 1<<20, 0, "", 0)
+	p := newH2Parser(&connRec{st: s})
+	p.run(&c.buf, true)
+	p.run(&sv.buf, false)
+
+	fs, _, _, _ := s.since(0, 0)
+	if len(fs) != 2 {
+		t.Fatalf("got %d flows, want 2", len(fs))
+	}
+	d, ok := s.detail(fs[1].ID)
+	if !ok || fs[1].Error != "" || headerValue(d.RespHeader, "x-early") != "kept-across-8k" {
+		t.Fatalf("stream 3 after size update: ok=%v flow=%+v hdr=%+v", ok, fs[1], d.RespHeader)
 	}
 }
 

@@ -56,7 +56,7 @@ type bodyPreview struct {
 // makePreview builds the preview of body with headers h. It touches
 // nothing of the page: safe from any goroutine.
 func makePreview(body []byte, h []model.KV, reveal bool) *bodyPreview {
-	pv := &bodyPreview{enc: header(h, "content-encoding")}
+	pv := &bodyPreview{enc: headerJoined(h, "content-encoding")}
 	dec, ok := redact.Decode(body, pv.enc)
 	if !ok {
 		pv.failed = true

@@ -63,8 +63,9 @@ func newH2Parser(c *connRec) *h2Parser {
 }
 
 const (
-	h2MaxTable = 1 << 20
-	h2ParkMax  = 256 << 10
+	h2DefaultTable = 4096 // RFC 9113 §6.5.2 initial SETTINGS_HEADER_TABLE_SIZE
+	h2MaxTable     = 1 << 20
+	h2ParkMax      = 256 << 10
 )
 
 func (p *h2Parser) run(r io.Reader, client bool) {
@@ -77,7 +78,7 @@ func (p *h2Parser) run(r io.Reader, client bool) {
 	}
 	fr := http2.NewFramer(nil, br)
 	fr.SetMaxReadFrameSize(1<<24 - 1)
-	dec := hpack.NewDecoder(h2MaxTable, nil)
+	dec := hpack.NewDecoder(h2DefaultTable, nil)
 	dec.SetAllowedMaxDynamicTableSize(h2MaxTable)
 	fr.ReadMetaHeaders = dec
 	fr.MaxHeaderListSize = 1 << 20

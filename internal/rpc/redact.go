@@ -91,7 +91,13 @@ func captureStructure(d model.CaptureFlowDetail) any {
 		for _, kv := range h {
 			switch strings.ToLower(kv.Key) {
 			case "content-encoding":
-				enc = kv.Value
+				if v := strings.TrimSpace(kv.Value); v != "" {
+					if enc == "" {
+						enc = v
+					} else {
+						enc += ", " + v
+					}
+				}
 			case "content-type":
 				ct = kv.Value
 			}

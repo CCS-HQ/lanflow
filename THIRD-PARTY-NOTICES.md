@@ -39,9 +39,11 @@ This product includes GeoLite2 Data created by MaxMind, available from <https://
 | 模块 | 许可证 |
 | --- | --- |
 | [Go 标准库与运行时](https://go.dev) | BSD-3-Clause |
+| [github.com/andybalholm/brotli](https://github.com/andybalholm/brotli) | MIT |
 | [github.com/egoist/mygo](https://github.com/egoist/mygo) | MIT |
 | [github.com/Microsoft/go-winio](https://github.com/microsoft/go-winio)（仅 Windows） | MIT |
 | [github.com/coder/websocket](https://github.com/coder/websocket) | ISC |
+| [github.com/klauspost/compress](https://github.com/klauspost/compress) | BSD-3-Clause（含 Apache-2.0 与 MIT 组件） |
 | [github.com/oschwald/maxminddb-golang/v2](https://github.com/oschwald/maxminddb-golang) | ISC |
 | [github.com/ebitengine/purego](https://github.com/ebitengine/purego) | Apache-2.0 |
 | [github.com/go-text/typesetting](https://github.com/go-text/typesetting) | Unlicense OR BSD-3-Clause |

@@ -85,7 +85,7 @@ func (r *replayState) fill(d model.CaptureFlowDetail) {
 	r.binary, r.body, r.note, r.tab = nil, "", "", 0
 	hdr := d.ReqHeader
 	body := d.ReqBody
-	if enc := header(hdr, "content-encoding"); enc != "" {
+	if enc := headerJoined(hdr, "content-encoding"); enc != "" {
 		// a compressed request body is edited as text and sent plain
 		if dec, ok := redact.Decode(body, enc); ok {
 			body = dec

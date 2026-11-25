@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
+
 	"lanflow/internal/model"
 )
 
@@ -48,29 +51,65 @@ func TestBuild(t *testing.T) {
 	}
 }
 
-// Request bodies that are not text, or whose Content-Encoding cannot be
-// undone here, are exported as base64 of the bytes: as a string they would
-// lose every byte that is not UTF-8, or come out empty without a word.
+// Request bodies that are not text are exported as base64 of the decoded
+// bytes; compressed bodies (gzip, deflate, br, zstd, including layered
+// encodings) are decoded and masked; undecodable Content-Encodings are
+// omitted rather than exported unredacted as raw base64.
 func TestRequestBodyEncodings(t *testing.T) {
 	binary := []byte{0x0a, 0x03, 0xff, 0xfe, 0x80, 0x00, 0x12}
-	var gz bytes.Buffer
-	zw := gzip.NewWriter(&gz)
-	zw.Write([]byte(`{"password":"gzipped-secret-value","q":1}`))
-	zw.Close()
+	gzBytes := func(in []byte) []byte {
+		var buf bytes.Buffer
+		w := gzip.NewWriter(&buf)
+		w.Write(in)
+		w.Close()
+		return buf.Bytes()
+	}
+	brBytes := func(in []byte) []byte {
+		var buf bytes.Buffer
+		w := brotli.NewWriter(&buf)
+		w.Write(in)
+		w.Close()
+		return buf.Bytes()
+	}
+	zsBytes := func(in []byte) []byte {
+		var buf bytes.Buffer
+		w, err := zstd.NewWriter(&buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Write(in)
+		w.Close()
+		return buf.Bytes()
+	}
+
+	gz := gzBytes([]byte(`{"password":"gzipped-secret-value","q":1}`))
+	br := brBytes([]byte(`{"password":"brotli-secret-value","q":2}`))
+	zs := zsBytes([]byte(`{"token":"zstd-secret-value","q":3}`))
+	layered := brBytes(gzBytes([]byte(`{"client_secret":"layered-secret-value","q":4}`)))
+	rawSecret := []byte(`{"password":"raw-secret-payload"}`)
+
 	cases := []struct {
 		name            string
 		hdr             []model.KV
 		body            []byte
 		size            int64
 		text, enc, note string
+		secret          string
+		kept            string
 	}{
-		{"binary", []model.KV{{Key: "content-type", Value: "application/grpc"}}, binary, 7, base64.StdEncoding.EncodeToString(binary), "base64", ""},
-		{"brotli is not decoded", []model.KV{{Key: "content-type", Value: "application/json"}, {Key: "content-encoding", Value: "br"}},
-			[]byte{0x1b, 0x03, 0x00}, 3, base64.StdEncoding.EncodeToString([]byte{0x1b, 0x03, 0x00}), "base64", "content-encoding br not decoded"},
+		{"binary", []model.KV{{Key: "content-type", Value: "application/grpc"}}, binary, 7, base64.StdEncoding.EncodeToString(binary), "base64", "", "", ""},
+		{"unknown encoding omits body", []model.KV{{Key: "content-type", Value: "application/json"}, {Key: "content-encoding", Value: "lz4"}},
+			rawSecret, int64(len(rawSecret)), "", "", "content-encoding lz4 not decoded; body omitted", "raw-secret-payload", ""},
 		{"gzip is decoded and masked", []model.KV{{Key: "content-type", Value: "application/json"}, {Key: "content-encoding", Value: "gzip"}},
-			gz.Bytes(), int64(gz.Len()), "", "", ""},
-		{"truncated binary", []model.KV{{Key: "content-type", Value: "application/octet-stream"}}, binary, 4096, base64.StdEncoding.EncodeToString(binary), "base64", "truncated"},
-		{"text", []model.KV{{Key: "content-type", Value: "text/plain"}}, []byte("héllo"), 6, "héllo", "", ""},
+			gz, int64(len(gz)), "", "", "", "gzipped-secret-value", `"q": 1`},
+		{"brotli is decoded and masked", []model.KV{{Key: "content-type", Value: "application/json"}, {Key: "content-encoding", Value: "br"}},
+			br, int64(len(br)), "", "", "", "brotli-secret-value", `"q": 2`},
+		{"zstd is decoded and masked", []model.KV{{Key: "content-type", Value: "application/json"}, {Key: "content-encoding", Value: "zstd"}},
+			zs, int64(len(zs)), "", "", "", "zstd-secret-value", `"q": 3`},
+		{"layered headers are decoded and masked", []model.KV{{Key: "content-type", Value: "application/json"}, {Key: "content-encoding", Value: "gzip"}, {Key: "Content-Encoding", Value: "br"}},
+			layered, int64(len(layered)), "", "", "", "layered-secret-value", `"q": 4`},
+		{"truncated binary", []model.KV{{Key: "content-type", Value: "application/octet-stream"}}, binary, 4096, base64.StdEncoding.EncodeToString(binary), "base64", "truncated", "", ""},
+		{"text", []model.KV{{Key: "content-type", Value: "text/plain"}}, []byte("héllo"), 6, "héllo", "", "", "", ""},
 	}
 	for _, c := range cases {
 		d := model.CaptureFlowDetail{Flow: model.CaptureFlow{Method: "POST", Host: "a.test", Port: 443, Path: "/", Flags: []string{model.FlowDecrypted}},
@@ -92,11 +131,16 @@ func TestRequestBodyEncodings(t *testing.T) {
 			t.Fatalf("%s: %v\n%s", c.name, err, b)
 		}
 		pd := doc.Log.Entries[0].Request.PostData
-		if c.name == "gzip is decoded and masked" {
-			if strings.Contains(pd.Text, "gzipped-secret-value") || !strings.Contains(pd.Text, `"q": 1`) || pd.Encoding != "" {
+		if c.secret != "" {
+			if strings.Contains(string(b), c.secret) || strings.Contains(string(b), base64.StdEncoding.EncodeToString(c.body)) {
+				t.Errorf("%s: secret leaked in %s", c.name, b)
+			}
+			if c.kept != "" && (!strings.Contains(pd.Text, c.kept) || pd.Encoding != "") {
 				t.Errorf("%s: %+v", c.name, pd)
 			}
-			continue
+			if c.kept != "" {
+				continue
+			}
 		}
 		if pd.Text != c.text || pd.Encoding != c.enc || pd.Comment != c.note {
 			t.Errorf("%s: %+v", c.name, pd)

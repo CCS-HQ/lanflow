@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/klauspost/compress/zstd"
 
 	"lanflow/internal/app/fake"
 	"lanflow/internal/model"
@@ -22,6 +24,27 @@ func gz(t *testing.T, b []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	w := gzip.NewWriter(&buf)
+	w.Write(b)
+	w.Close()
+	return buf.Bytes()
+}
+
+func br(t *testing.T, b []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := brotli.NewWriter(&buf)
+	w.Write(b)
+	w.Close()
+	return buf.Bytes()
+}
+
+func zs(t *testing.T, b []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
 	w.Write(b)
 	w.Close()
 	return buf.Bytes()
@@ -63,8 +86,14 @@ func TestMakePreview(t *testing.T) {
 		{"gzip", gz(t, json), hdr("Content-Type", "application/json", "Content-Encoding", "gzip"), true, func(pv *bodyPreview) bool {
 			return !pv.failed && pv.size == len(json) && strings.Contains(pv.text, "hunter2hunter2")
 		}},
-		{"unknown encoding", []byte("xx"), hdr("Content-Encoding", "br"), false, func(pv *bodyPreview) bool {
-			return pv.failed && pv.enc == "br" && pv.text == ""
+		{"brotli", br(t, json), hdr("Content-Type", "application/json", "Content-Encoding", "br"), false, func(pv *bodyPreview) bool {
+			return !pv.failed && pv.size == len(json) && !strings.Contains(pv.text, "hunter2hunter2") && strings.Contains(pv.text, "user")
+		}},
+		{"zstd", zs(t, json), hdr("Content-Type", "application/json", "Content-Encoding", "zstd"), true, func(pv *bodyPreview) bool {
+			return !pv.failed && pv.size == len(json) && strings.Contains(pv.text, "hunter2hunter2")
+		}},
+		{"unknown encoding", []byte("xx"), hdr("Content-Encoding", "lz4"), false, func(pv *bodyPreview) bool {
+			return pv.failed && pv.enc == "lz4" && pv.text == ""
 		}},
 		{"form on lines", []byte("a=1&password=secretsecret"), hdr("Content-Type", "application/x-www-form-urlencoded"), false, func(pv *bodyPreview) bool {
 			return pv.kind == "form" && strings.Contains(pv.text, "a=1\n") && !strings.Contains(pv.text, "secretsecret")

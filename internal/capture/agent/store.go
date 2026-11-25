@@ -7,7 +7,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +26,8 @@ import (
 // on exit. The spill is written in segments: records leave the ring oldest
 // first, which is the order their bodies were spilled in, so a segment
 // whose records are all gone is deleted and its space used again.
+// Encryption and disk I/O run outside mu so parsers and detail reads never
+// stall on each other.
 type store struct {
 	mu       sync.Mutex
 	recs     []*record // oldest first
@@ -50,16 +51,29 @@ type store struct {
 	segs       []*spillSeg // oldest first; the last one is written to
 	segSeq     int
 	spillUsed  int64 // bytes in all segments
-	aead       cipher.AEAD
 	onChange   func()
+
+	// background spill / reclaim state (guarded by mu)
+	spillCond    *sync.Cond
+	spillWG      sync.WaitGroup
+	spillStarted bool
+	spillPending bool
+	spillActive  bool
+	spillClosed  bool
+	spillGen     uint64
+	deadSegs     []*spillSeg
 }
 
-// spillSeg is one spill file.
+// spillSeg is one spill file. Once detached from s.segs it is closed and
+// deleted when its active lock-free I/O count (io) reaches zero.
 type spillSeg struct {
-	f    *os.File
-	path string
-	size int64
-	live int // records whose bodies are in it
+	f      *os.File
+	path   string
+	aead   cipher.AEAD
+	size   int64
+	live   int // records whose bodies are in it
+	io     int // concurrent ReadAt/WriteAt operations outside mu
+	zombie bool
 }
 
 type record struct {
@@ -71,6 +85,7 @@ type record struct {
 	evicted bool
 	// spilled bodies
 	spilled         bool
+	spilling        bool // currently being encrypted/written by spillLoop
 	seg             *spillSeg
 	spillAt, spillN int64
 	dropped         bool // bodies lost (spill file full)
@@ -89,8 +104,10 @@ func newStore(maxFlows int, bodyCap, memLimit int64, spillDir string, spillLimit
 	if spillLimit <= 0 {
 		spillLimit = 512 << 20
 	}
-	return &store{byID: map[int64]*record{}, maxFlows: maxFlows, bodyCap: bodyCap, memLimit: memLimit,
+	s := &store{byID: map[int64]*record{}, maxFlows: maxFlows, bodyCap: bodyCap, memLimit: memLimit,
 		spillDir: spillDir, spillLimit: spillLimit, segSize: max(spillLimit/spillSegments, 1), epoch: time.Now().UnixNano()}
+	s.spillCond = sync.NewCond(&s.mu)
+	return s
 }
 
 // spillSegments is how many segments a full spill is made of: the space of
@@ -162,8 +179,66 @@ func (s *store) update(r *record, fn func(d *model.CaptureFlowDetail)) {
 		s.spillFloor = 0 // its bodies can be spilled now
 	}
 	if s.memUsed > s.memLimit && s.memUsed >= s.spillFloor {
-		s.spillLocked()
+		if s.spillDir == "" {
+			s.dropLocked()
+		} else if s.hasSpillableLocked() {
+			s.spillFloor = 0
+			s.signalSpillLocked()
+		} else {
+			s.spillFloor = s.memUsed + s.memLimit/16
+		}
 	}
+}
+
+func (s *store) hasSpillableLocked() bool {
+	for _, r := range s.recs {
+		if r.d.Flow.Done && !r.spilled && !r.spilling && !r.dropped && len(r.d.ReqBody)+len(r.d.RespBody) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *store) dropLocked() {
+	target := s.memLimit * 3 / 4
+	s.spillFloor = 0
+	for _, r := range s.recs {
+		if s.memUsed <= target {
+			return
+		}
+		if !r.d.Flow.Done || r.spilled || r.spilling || r.dropped || len(r.d.ReqBody)+len(r.d.RespBody) == 0 {
+			continue
+		}
+		s.dropRecordLocked(r)
+	}
+	if s.memUsed > target {
+		s.spillFloor = s.memUsed + s.memLimit/16
+	}
+}
+
+func (s *store) dropRecordLocked(r *record) {
+	n := int64(len(r.d.ReqBody) + len(r.d.RespBody))
+	r.dropped = true
+	r.d.ReqBody, r.d.RespBody = nil, nil
+	s.memUsed -= n
+}
+
+func (s *store) ensureSpillWorkerLocked() {
+	if s.spillStarted || s.spillClosed || s.spillDir == "" {
+		return
+	}
+	s.spillStarted = true
+	s.spillWG.Add(1)
+	go s.spillLoop()
+}
+
+func (s *store) signalSpillLocked() {
+	if s.spillClosed || s.spillDir == "" {
+		return
+	}
+	s.ensureSpillWorkerLocked()
+	s.spillPending = true
+	s.spillCond.Broadcast()
 }
 
 // appendBody adds p to a body, keeping at most bodyCap bytes and counting
@@ -192,82 +267,240 @@ func (s *store) appendBody(r *record, resp bool, p []byte) {
 	})
 }
 
-// spillLocked moves bodies of the oldest finished records to the spill
-// file until memory use is under three quarters of the limit.
-func (s *store) spillLocked() {
-	target := s.memLimit * 3 / 4
-	s.spillFloor = 0
-	for _, r := range s.recs {
-		if s.memUsed <= target {
+func (s *store) spillLoop() {
+	defer s.spillWG.Done()
+	var workerAEAD cipher.AEAD
+	var workerGen uint64
+	for {
+		s.mu.Lock()
+		for !s.spillClosed && !s.spillPending && len(s.deadSegs) == 0 {
+			s.spillCond.Wait()
+		}
+		if s.spillClosed {
+			s.mu.Unlock()
 			return
 		}
-		if !r.d.Flow.Done || r.spilled || r.dropped || len(r.d.ReqBody)+len(r.d.RespBody) == 0 {
-			continue
-		}
-		n := int64(len(r.d.ReqBody) + len(r.d.RespBody))
-		if err := s.sealLocked(r); err != nil {
-			r.dropped = true // no room / no file: the bodies are lost
-		}
-		r.d.ReqBody, r.d.RespBody = nil, nil
-		s.memUsed -= n
-	}
-	if s.memUsed > target {
-		s.spillFloor = s.memUsed + s.memLimit/16
+		s.spillPending = false
+		s.spillActive = true
+		s.mu.Unlock()
+
+		s.runSpillPass(&workerAEAD, &workerGen)
+
+		s.mu.Lock()
+		s.spillActive = false
+		s.spillCond.Broadcast()
+		s.mu.Unlock()
 	}
 }
 
-func (s *store) sealLocked(r *record) error {
-	if s.spillDir == "" {
-		return errors.New("no spill directory")
-	}
-	if s.aead == nil {
-		key := make([]byte, 32)
-		if _, err := rand.Read(key); err != nil {
-			return err
+func (s *store) runSpillPass(workerAEAD *cipher.AEAD, workerGen *uint64) {
+	target := s.memLimit * 3 / 4
+	for {
+		s.mu.Lock()
+		if len(s.deadSegs) > 0 {
+			dead := s.deadSegs
+			s.deadSegs = nil
+			s.mu.Unlock()
+			closeAndRemoveSegs(dead)
+			continue
 		}
-		blk, _ := aes.NewCipher(key)
-		s.aead, _ = cipher.NewGCM(blk)
-	}
-	plain := make([]byte, 4, 4+len(r.d.ReqBody)+len(r.d.RespBody))
-	binary.BigEndian.PutUint32(plain, uint32(len(r.d.ReqBody)))
-	plain = append(append(plain, r.d.ReqBody...), r.d.RespBody...)
-	nonce := make([]byte, s.aead.NonceSize())
-	rand.Read(nonce)
-	sealed := s.aead.Seal(nonce, nonce, plain, nil)
-	n := int64(len(sealed))
-	if s.spillUsed+n > s.spillLimit {
-		return errors.New("spill file full")
-	}
-	var seg *spillSeg
-	if len(s.segs) > 0 {
-		seg = s.segs[len(s.segs)-1]
-	}
-	if seg == nil || (seg.size > 0 && seg.size+n > s.segSize) {
-		if err := os.MkdirAll(s.spillDir, 0o700); err != nil {
-			return err
+		if s.spillClosed {
+			s.mu.Unlock()
+			return
 		}
+		var cand *record
+		if s.memUsed > target {
+			for _, r := range s.recs {
+				if !r.d.Flow.Done || r.spilled || r.spilling || r.dropped || len(r.d.ReqBody)+len(r.d.RespBody) == 0 {
+					continue
+				}
+				cand = r
+				break
+			}
+			if cand == nil {
+				s.spillFloor = s.memUsed + s.memLimit/16
+			} else {
+				s.spillFloor = 0
+			}
+		}
+		if cand == nil {
+			s.mu.Unlock()
+			return
+		}
+		// Clip capacity to length so any concurrent append allocates a new backing array.
+		req := cand.d.ReqBody[:len(cand.d.ReqBody):len(cand.d.ReqBody)]
+		resp := cand.d.RespBody[:len(cand.d.RespBody):len(cand.d.RespBody)]
+		cand.d.ReqBody, cand.d.RespBody = req, resp
+		cand.spilling = true
+		gen := s.spillGen
+		s.mu.Unlock()
+
+		if *workerAEAD == nil || *workerGen != gen {
+			key := make([]byte, 32)
+			if _, err := rand.Read(key); err != nil {
+				s.abortSpillRecord(cand, gen)
+				continue
+			}
+			blk, _ := aes.NewCipher(key)
+			*workerAEAD, _ = cipher.NewGCM(blk)
+			*workerGen = gen
+		}
+
+		plain := make([]byte, 4, 4+len(req)+len(resp))
+		binary.BigEndian.PutUint32(plain, uint32(len(req)))
+		plain = append(append(plain, req...), resp...)
+		nonce := make([]byte, (*workerAEAD).NonceSize())
+		if _, err := rand.Read(nonce); err != nil {
+			s.abortSpillRecord(cand, gen)
+			continue
+		}
+		sealed := (*workerAEAD).Seal(nonce, nonce, plain, nil)
+		n := int64(len(sealed))
+
+		s.mu.Lock()
+		if s.spillClosed || s.spillGen != gen || cand.evicted {
+			cand.spilling = false
+			s.mu.Unlock()
+			continue
+		}
+		if len(cand.d.ReqBody) != len(req) || len(cand.d.RespBody) != len(resp) {
+			cand.spilling = false
+			s.mu.Unlock()
+			continue
+		}
+		if s.spillUsed+n > s.spillLimit {
+			s.dropRecordLocked(cand)
+			cand.spilling = false
+			s.mu.Unlock()
+			continue
+		}
+
+		var seg *spillSeg
+		if len(s.segs) > 0 {
+			seg = s.segs[len(s.segs)-1]
+		}
+		if seg != nil && (seg.size == 0 || seg.size+n <= s.segSize) {
+			seg.live++
+			seg.io++
+			writeAt := seg.size
+			seg.size += n
+			s.spillUsed += n
+			s.mu.Unlock()
+
+			_, werr := seg.f.WriteAt(sealed, writeAt)
+
+			s.mu.Lock()
+			seg.io--
+			var zombieSeg *spillSeg
+			if seg.io == 0 && seg.zombie {
+				seg.zombie = false
+				zombieSeg = seg
+			}
+			if s.spillClosed || s.spillGen != gen {
+				cand.spilling = false
+				s.mu.Unlock()
+				closeAndRemoveSeg(zombieSeg)
+				continue
+			}
+			bodyChanged := len(cand.d.ReqBody) != len(req) || len(cand.d.RespBody) != len(resp)
+			if werr != nil || cand.evicted || bodyChanged {
+				seg.live--
+				if werr != nil && !seg.zombie && slices.Contains(s.segs, seg) && seg.size == writeAt+n {
+					seg.size -= n
+					s.spillUsed -= n
+				}
+				var deadSeg *spillSeg
+				if seg.live == 0 {
+					if idx := slices.Index(s.segs, seg); idx >= 0 {
+						s.spillUsed -= seg.size
+						seg.size = 0
+						s.segs = slices.Delete(s.segs, idx, idx+1)
+						if seg.io == 0 {
+							deadSeg = seg
+						} else {
+							seg.zombie = true
+						}
+					}
+				}
+				if werr != nil && !cand.evicted {
+					s.dropRecordLocked(cand)
+				}
+				cand.spilling = false
+				s.mu.Unlock()
+				closeAndRemoveSeg(zombieSeg)
+				closeAndRemoveSeg(deadSeg)
+				continue
+			}
+			cand.spilled, cand.spilling, cand.seg, cand.spillAt, cand.spillN = true, false, seg, writeAt, n
+			s.memUsed -= int64(len(cand.d.ReqBody) + len(cand.d.RespBody))
+			cand.d.ReqBody, cand.d.RespBody = nil, nil
+			s.mu.Unlock()
+			closeAndRemoveSeg(zombieSeg)
+			continue
+		}
+
+		// Allocate a new segment file outside mu.
 		s.segSeq++
-		p := filepath.Join(s.spillDir, fmt.Sprintf("session-%d-%d.bin", time.Now().UnixNano(), s.segSeq))
-		f, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
-			return err
+		seq := s.segSeq
+		s.mu.Unlock()
+
+		var newFile *os.File
+		var newPath string
+		var ferr error
+		if ferr = os.MkdirAll(s.spillDir, 0o700); ferr == nil {
+			newPath = filepath.Join(s.spillDir, fmt.Sprintf("session-%d-%d.bin", time.Now().UnixNano(), seq))
+			newFile, ferr = os.OpenFile(newPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+			if ferr == nil {
+				if _, ferr = newFile.WriteAt(sealed, 0); ferr != nil {
+					newFile.Close()
+					os.Remove(newPath)
+					newFile = nil
+				}
+			}
 		}
-		seg = &spillSeg{f: f, path: p}
-		s.segs = append(s.segs, seg)
+
+		s.mu.Lock()
+		if ferr != nil {
+			if !cand.evicted && !s.spillClosed && s.spillGen == gen {
+				s.dropRecordLocked(cand)
+			}
+			cand.spilling = false
+			s.mu.Unlock()
+			continue
+		}
+		bodyChanged := len(cand.d.ReqBody) != len(req) || len(cand.d.RespBody) != len(resp)
+		if s.spillClosed || s.spillGen != gen || cand.evicted || s.spillUsed+n > s.spillLimit || bodyChanged {
+			if !cand.evicted && !s.spillClosed && s.spillGen == gen && s.spillUsed+n > s.spillLimit && !bodyChanged {
+				s.dropRecordLocked(cand)
+			}
+			cand.spilling = false
+			s.mu.Unlock()
+			newFile.Close()
+			os.Remove(newPath)
+			continue
+		}
+		newSeg := &spillSeg{f: newFile, path: newPath, aead: *workerAEAD, size: n, live: 1}
+		s.segs = append(s.segs, newSeg)
+		s.spillUsed += n
+		cand.spilled, cand.spilling, cand.seg, cand.spillAt, cand.spillN = true, false, newSeg, 0, n
+		s.memUsed -= int64(len(cand.d.ReqBody) + len(cand.d.RespBody))
+		cand.d.ReqBody, cand.d.RespBody = nil, nil
+		s.mu.Unlock()
 	}
-	if _, err := seg.f.WriteAt(sealed, seg.size); err != nil {
-		return err
+}
+
+func (s *store) abortSpillRecord(r *record, gen uint64) {
+	s.mu.Lock()
+	if !r.evicted && !s.spillClosed && s.spillGen == gen {
+		s.dropRecordLocked(r)
 	}
-	r.spilled, r.seg, r.spillAt, r.spillN = true, seg, seg.size, n
-	seg.size += n
-	seg.live++
-	s.spillUsed += n
-	return nil
+	r.spilling = false
+	s.mu.Unlock()
 }
 
 // unspillLocked gives back the spill space of a record. A segment none
-// of whose records is left is removed (the one being written to is
-// emptied instead).
+// of whose records is left is detached and scheduled for background
+// deletion once any in-flight lock-free I/O completes.
 func (s *store) unspillLocked(r *record) {
 	if !r.spilled {
 		return
@@ -279,21 +512,38 @@ func (s *store) unspillLocked(r *record) {
 	}
 	s.spillUsed -= seg.size
 	seg.size = 0
-	if i := slices.Index(s.segs, seg); i >= 0 && i < len(s.segs)-1 {
-		seg.f.Close()
-		os.Remove(seg.path)
+	if i := slices.Index(s.segs, seg); i >= 0 {
 		s.segs = slices.Delete(s.segs, i, i+1)
+	}
+	if seg.io > 0 {
+		seg.zombie = true
 		return
 	}
-	seg.f.Truncate(0)
+	s.deadSegs = append(s.deadSegs, seg)
+	s.signalSpillLocked()
 }
 
-// detail returns a copy of the record with its bodies.
+func closeAndRemoveSeg(seg *spillSeg) {
+	if seg == nil {
+		return
+	}
+	seg.f.Close()
+	os.Remove(seg.path)
+}
+
+func closeAndRemoveSegs(segs []*spillSeg) {
+	for _, seg := range segs {
+		closeAndRemoveSeg(seg)
+	}
+}
+
+// detail returns a copy of the record with its bodies. Spilled bodies are
+// read from disk and decrypted outside mu.
 func (s *store) detail(id int64) (model.CaptureFlowDetail, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	r, ok := s.byID[id]
 	if !ok {
+		s.mu.Unlock()
 		return model.CaptureFlowDetail{}, false
 	}
 	d := r.d
@@ -303,18 +553,38 @@ func (s *store) detail(id int64) (model.CaptureFlowDetail, bool) {
 	d.WSFrames = append([]model.CaptureWSFrame(nil), r.d.WSFrames...)
 	d.ReqBody = append([]byte(nil), r.d.ReqBody...)
 	d.RespBody = append([]byte(nil), r.d.RespBody...)
-	if r.spilled {
-		buf := make([]byte, r.spillN)
-		if _, err := r.seg.f.ReadAt(buf, r.spillAt); err == nil {
-			ns := s.aead.NonceSize()
-			if plain, err := s.aead.Open(nil, buf[:ns], buf[ns:], nil); err == nil && len(plain) >= 4 {
-				n := int(binary.BigEndian.Uint32(plain))
-				if 4+n <= len(plain) {
-					d.ReqBody = plain[4 : 4+n]
-					d.RespBody = plain[4+n:]
+	var seg *spillSeg
+	var at, n int64
+	var aead cipher.AEAD
+	if r.spilled && r.seg != nil {
+		seg, at, n, aead = r.seg, r.spillAt, r.spillN, r.seg.aead
+		seg.io++
+	}
+	s.mu.Unlock()
+
+	if seg != nil {
+		buf := make([]byte, n)
+		if _, err := seg.f.ReadAt(buf, at); err == nil && aead != nil {
+			ns := aead.NonceSize()
+			if len(buf) >= ns {
+				if plain, err := aead.Open(nil, buf[:ns], buf[ns:], nil); err == nil && len(plain) >= 4 {
+					rn := int(binary.BigEndian.Uint32(plain))
+					if 4+rn <= len(plain) {
+						d.ReqBody = plain[4 : 4+rn]
+						d.RespBody = plain[4+rn:]
+					}
 				}
 			}
 		}
+		s.mu.Lock()
+		seg.io--
+		var zombieSeg *spillSeg
+		if seg.io == 0 && seg.zombie {
+			seg.zombie = false
+			zombieSeg = seg
+		}
+		s.mu.Unlock()
+		closeAndRemoveSeg(zombieSeg)
 	}
 	return d, true
 }
@@ -411,7 +681,7 @@ func bodyContains(raw []byte, hs []model.KV, fallbackCT string, qBytes []byte) b
 	if len(raw) == 0 {
 		return false
 	}
-	b, ok := redact.Decode(raw, headerVal(hs, "Content-Encoding"))
+	b, ok := redact.Decode(raw, headerValJoin(hs, "Content-Encoding"))
 	if !ok || len(b) == 0 {
 		return false
 	}
@@ -437,36 +707,92 @@ func headerVal(hs []model.KV, name string) string {
 	return ""
 }
 
-// clear forgets everything and deletes the spill file.
+func headerValJoin(hs []model.KV, name string) string {
+	var vals []string
+	for _, kv := range hs {
+		if strings.EqualFold(kv.Key, name) {
+			if v := strings.TrimSpace(kv.Value); v != "" {
+				vals = append(vals, v)
+			}
+		}
+	}
+	return strings.Join(vals, ", ")
+}
+
+// clear forgets everything and deletes the spill files.
 func (s *store) clear() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, r := range s.recs {
 		r.evicted = true // connections still running hold these
 		r.d.ReqBody, r.d.RespBody, r.d.WSFrames = nil, nil, nil
 	}
-	s.closeSpillLocked()
+	toClose := s.detachSpillLocked()
 	s.recs, s.byID, s.memUsed, s.spillFloor = nil, map[int64]*record{}, 0, 0
 	s.epoch++
 	s.seq++
 	s.changed()
+	s.mu.Unlock()
+	closeAndRemoveSegs(toClose)
+	s.waitSpillIdle()
 }
 
 func (s *store) close() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.closeSpillLocked()
+	s.spillClosed = true
+	toClose := s.detachSpillLocked()
+	if s.spillStarted {
+		s.spillCond.Broadcast()
+	}
+	s.mu.Unlock()
+	closeAndRemoveSegs(toClose)
+	s.spillWG.Wait()
+	s.mu.Lock()
+	rem := s.detachSpillLocked()
+	s.mu.Unlock()
+	closeAndRemoveSegs(rem)
 }
 
-func (s *store) closeSpillLocked() {
+func (s *store) detachSpillLocked() []*spillSeg {
+	s.spillGen++
+	var toClose []*spillSeg
 	for _, seg := range s.segs {
-		seg.f.Close()
-		os.Remove(seg.path)
+		if seg.io > 0 {
+			seg.zombie = true
+		} else {
+			toClose = append(toClose, seg)
+		}
 	}
-	s.segs, s.spillUsed, s.aead = nil, 0, nil
+	toClose = append(toClose, s.deadSegs...)
+	s.segs, s.deadSegs, s.spillUsed = nil, nil, 0
 	for _, r := range s.recs {
 		if r.spilled {
 			r.spilled, r.seg, r.dropped = false, nil, true
 		}
 	}
+	return toClose
+}
+
+func (s *store) waitSpillIdle() {
+	s.mu.Lock()
+	for s.spillActive {
+		s.spillCond.Wait()
+	}
+	s.mu.Unlock()
+}
+
+// waitSpill blocks until pending background spill and segment reclamation
+// work has finished (tests).
+func (s *store) waitSpill() {
+	s.mu.Lock()
+	for (s.spillPending || s.spillActive || len(s.deadSegs) > 0) && !s.spillClosed {
+		s.spillCond.Wait()
+	}
+	s.mu.Unlock()
+}
+
+// stats returns current memory and spill usage under mu (tests).
+func (s *store) stats() (memUsed, spillUsed, spillFloor int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.memUsed, s.spillUsed, s.spillFloor
 }
