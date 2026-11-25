@@ -131,6 +131,11 @@ func (s *Service) stopStray() bool {
 		return false
 	}
 	s.alog.Infof("stopped the previous run's core (tun=%v)", tun)
+	if tun {
+		s.mu.Lock()
+		s.state.rootStoppedAt = s.d.now()
+		s.mu.Unlock()
+	}
 	return true
 }
 

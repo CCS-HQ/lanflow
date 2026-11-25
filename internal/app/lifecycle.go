@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"lanflow/internal/core"
@@ -38,7 +39,7 @@ type composeArgs struct {
 	ovs *[]model.Override
 	// subOverrides, when set, is the subscription's override selection for
 	// this composition instead of the stored one.
-	subOverrides *[]string
+	subOverrides   *[]string
 	custom         []model.CustomRule
 	useRules       bool               // custom is authoritative even when nil
 	manualNodes    []model.ManualNode // overrides stored manual nodes when useManualNodes
@@ -275,12 +276,28 @@ func (s *Service) startLocked() (err error) {
 	if prev != model.CoreRunning && s.d.portInUse(set.MixedPort, set.AllowLAN) {
 		// A core of ours the previous run left may hold it (takeover.go).
 		s.stopStray()
-		if s.d.portInUse(set.MixedPort, set.AllowLAN) {
+		busy := s.d.portInUse(set.MixedPort, set.AllowLAN)
+		if busy && set.TUN && helperOK && runtime.GOOS == "darwin" {
+			// The probe runs as this user; a root core binds over the
+			// TIME_WAIT sockets that make it fail, so only a real listener
+			// is a conflict. (Should launchLocked fall back to a plain
+			// proxy because another TUN runs, the core logs the bind error.)
+			if s.d.portListening != nil && s.d.portListening(set.MixedPort) {
+				return fail(s.portTaken(set.MixedPort), model.CoreError)
+			}
+		} else if busy {
 			if s.d.waitPortFree == nil {
 				return fail(s.portTaken(set.MixedPort), model.CoreError)
 			}
-			s.alog.Infof("waiting for proxy port %d to become reusable", set.MixedPort)
-			err := s.d.waitPortFree(s.rootCtx, set.MixedPort, set.AllowLAN)
+			s.mu.Lock()
+			timeout := portWaitTimeout(s.d.now(), s.state.rootStoppedAt)
+			s.mu.Unlock()
+			s.alog.Infof("waiting up to %v for proxy port %d to become reusable", timeout.Round(time.Second), set.MixedPort)
+			if timeout > portWaitShort {
+				s.notify(Notice{Kind: "toast", Title: i18n.T("正在等待系统释放代理端口"),
+					Detail: i18n.Tf("TUN 模式下的连接刚关闭，系统要再占用端口 %d 最多约 %d 秒。", set.MixedPort, int(timeout.Round(time.Second)/time.Second))})
+			}
+			err := s.d.waitPortFree(s.rootCtx, set.MixedPort, set.AllowLAN, timeout)
 			if errors.Is(err, errPortListening) {
 				return fail(s.portTaken(set.MixedPort), model.CoreError)
 			}
@@ -386,6 +403,16 @@ func (s *Service) tunLogFile() string {
 	return p
 }
 
+// noteCoreStopped records when a helper-run (root) core went away, so the
+// next start waits long enough for its TIME_WAIT sockets (portwait.go).
+func (s *Service) noteCoreStopped() {
+	s.mu.Lock()
+	if s.state.tunRunner {
+		s.state.rootStoppedAt = s.d.now()
+	}
+	s.mu.Unlock()
+}
+
 // runnerFor picks the exec or helper runner and remembers which one is active.
 func (s *Service) runnerFor(tun bool) core.Runner {
 	s.mu.Lock()
@@ -429,6 +456,9 @@ func (s *Service) stopLocked() (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	err = s.d.mgr.Stop(ctx)
 	cancel()
+	if err == nil {
+		s.noteCoreStopped()
+	}
 	s.mu.Lock()
 	st := &s.state.st
 	st.Core = model.CoreStopped
@@ -506,6 +536,9 @@ func (s *Service) restartLocked() (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	serr := s.d.mgr.Stop(ctx)
 	cancel()
+	if serr == nil {
+		s.noteCoreStopped()
+	}
 	if serr != nil {
 		// The old core may still own the TUN, sockets and DNS. Do not
 		// replace its runner or start a second core over it.
@@ -742,6 +775,11 @@ func (s *Service) handleCrash(cause error) {
 	s.recordCoreExit(cause)
 
 	g := s.coreGoneCleanupLocked() // the restart below sets the DNS again when TUN comes back
+	if g.tun {
+		s.mu.Lock()
+		s.state.rootStoppedAt = s.d.now()
+		s.mu.Unlock()
+	}
 	if errors.Is(cause, core.ErrStateUnknown) && s.d.stray != nil {
 		// The helper went silent: the core may well still run and hold
 		// its ports, which would fail the restart below.
