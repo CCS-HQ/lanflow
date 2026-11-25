@@ -77,6 +77,10 @@ var methodLevels = map[string]Level{
 	"SaveManualNode":   LevelWrite,
 	"DeleteManualNode": LevelWrite,
 
+	// ---- proxy chains: change traffic paths like the manual nodes ----
+	"ProxyChains":    LevelRead, // names only, no secrets
+	"SetProxyChains": LevelWrite,
+
 	// ---- connections & logs ----
 	"CloseConnection":     LevelWrite,
 	"CloseAllConnections": LevelWrite,

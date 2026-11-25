@@ -572,6 +572,7 @@ type fakeStore struct {
 	ovs         []model.Override
 	rules       []model.CustomRule
 	manualNodes []model.ManualNode
+	chains      []model.ProxyChain
 	nextID      int
 }
 
@@ -783,6 +784,24 @@ func (s *fakeStore) ManualNodes() []model.ManualNode {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]model.ManualNode(nil), s.manualNodes...)
+}
+func (s *fakeStore) ProxyChains() []model.ProxyChain {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return model.CloneProxyChains(s.chains)
+}
+func (s *fakeStore) SetProxyChains(chains []model.ProxyChain) ([]model.ProxyChain, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := model.CloneProxyChains(chains)
+	for i := range out {
+		if out[i].ID == "" {
+			s.nextID++
+			out[i].ID = fmt.Sprintf("c%d", s.nextID)
+		}
+	}
+	s.chains = out
+	return model.CloneProxyChains(out), nil
 }
 func (s *fakeStore) SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, error) {
 	s.mu.Lock()

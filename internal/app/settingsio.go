@@ -155,6 +155,17 @@ func (s *Service) ImportSettings(path string) (summary string, err error) {
 		skipped = append(skipped, errs...)
 	}
 
+	// chains before the rules, which may target them
+	if len(ex.ProxyChains) > 0 {
+		n, err := s.mergeProxyChains(ex.ProxyChains)
+		switch {
+		case err != nil:
+			skipped = append(skipped, i18n.Tf("链式代理（%s）", err.Error()))
+		case n > 0:
+			done = append(done, fmt.Sprintf(i18n.T("%d 条链式代理"), n))
+		}
+	}
+
 	if len(ex.CustomRules) > 0 {
 		n, err := s.mergeCustomRules(ex.CustomRules)
 		switch {
@@ -270,4 +281,35 @@ func (s *Service) mergeCustomRules(in []model.CustomRule) (int, error) {
 		return 0, err
 	}
 	return added, nil
+}
+
+// mergeProxyChains adds the imported chains whose names this machine does
+// not have yet, keeping their IDs where free.
+func (s *Service) mergeProxyChains(in []model.ProxyChain) (int, error) {
+	cur := s.ProxyChains()
+	names, ids := map[string]bool{}, map[string]bool{}
+	for _, c := range cur {
+		names[c.Name], ids[c.ID] = true, true
+	}
+	next := model.CloneProxyChains(cur)
+	n := 0
+	for _, c := range model.CloneProxyChains(in) {
+		c.Name = strings.TrimSpace(c.Name)
+		if names[c.Name] {
+			continue
+		}
+		if ids[c.ID] {
+			c.ID = ""
+		}
+		names[c.Name], ids[c.ID] = true, true
+		next = append(next, c)
+		n++
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if _, err := s.SetProxyChains(next); err != nil {
+		return 0, err
+	}
+	return n, nil
 }

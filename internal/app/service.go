@@ -74,6 +74,10 @@ type Service struct {
 	probeMu    sync.Mutex // debounces the automatic main-exit probe
 	selMu      sync.Mutex // guards selections (selections.go)
 	selections map[string]map[string]string
+	// selPrev is each group's selection before the current one, per
+	// subscription, for this run only: a chain deleted while selected
+	// gives the group back its previous member (chains.go).
+	selPrev    map[string]map[string]string
 	probeTimer *time.Timer
 
 	recheckMu    sync.Mutex // debounces the wake / network-change recheck (watch.go)
@@ -126,6 +130,8 @@ type state struct {
 	rulesBusy    bool      // a refreshRules runs
 	custom       []model.CustomRule
 	manualNodes  []model.ManualNode
+	chains       []model.ProxyChain
+	chainWarns   []string // what the last committed composition said of the chains (chains.go)
 	provs        []model.RuleProvider
 	provUpdating map[string]bool
 
@@ -538,6 +544,7 @@ type storeView struct {
 	ovs         []model.Override
 	custom      []model.CustomRule
 	manualNodes []model.ManualNode
+	chains      []model.ProxyChain
 }
 
 // readStore reads the store's lists; call without mu.
@@ -547,6 +554,7 @@ func (s *Service) readStore() storeView {
 		ovs:         s.d.store.Overrides(),
 		custom:      s.d.store.CustomRules(),
 		manualNodes: s.d.store.ManualNodes(),
+		chains:      s.d.store.ProxyChains(),
 	}
 	v.cur, v.hasCur = s.d.store.Current()
 	return v
@@ -570,6 +578,7 @@ func (s *Service) applyStoreLocked(v storeView) {
 	s.state.overrides = overridesSnapshot(v.ovs, subs)
 	s.state.custom = v.custom
 	s.state.manualNodes = v.manualNodes
+	s.state.chains = v.chains
 }
 
 // refreshStore reloads the store caches and emits. The store and the

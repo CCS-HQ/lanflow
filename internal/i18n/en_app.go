@@ -223,8 +223,27 @@ func init() {
 
 		// internal/app/manual_nodes.go
 		"已存在名为「%s」的手动节点，请换一个名称。": "A manual node named “%s” already exists; choose another name.",
-		"保存手动节点失败：%v":               "Failed to save the manual node: %v",
-		"手动节点已撤销：%v":                "Manual node reverted: %v",
+		"保存手动节点失败：%v":            "Failed to save the manual node: %v",
+		"手动节点已撤销：%v":             "Manual node reverted: %v",
+
+		// internal/app/chains.go
+		"第 %d 条":    "No. %d",
+		"链路「%s」：%v": "Chain “%s”: %v",
+		"链路「%s」的 ID 只能由字母、数字、- 和 _ 组成":            "The ID of chain “%s” may only contain letters, digits, - and _",
+		"已有名为「%s」的链路，请换一个名称。":                     "A chain named “%s” already exists; choose another name.",
+		"链路 ID「%s」重复":                             "Duplicate chain ID “%s”",
+		"「%s」是链路总组的名字，请换一个名称。":                    "“%s” is the name of the group holding the chains; choose another name.",
+		"「%s」与当前配置中的节点或代理组重名，请换一个名称。":             "“%s” is already the name of a node or group in the configuration; choose another name.",
+		"链路「%s」被自定义规则「%s,%s」使用，请先修改这条规则，或改为停用链路。": "Chain “%s” is used by the custom rule “%s,%s”; change that rule first, or disable the chain instead.",
+		"保存链式代理失败：%v":                             "Failed to save the proxy chains: %v",
+		"链式代理已撤销：%v":                              "Proxy chains reverted: %v",
+		"「%s」改回「%s」":                              "“%s” back to “%s”",
+		"链路已移除，相关代理组已改回之前的选择":                     "Chain removed; the groups that used it are back on their previous choice",
+		"链式代理有需要注意的地方":                            "Proxy chains need attention",
+
+		// internal/app/settingsio.go (chains)
+		"链式代理（%s）": "proxy chains (%s)",
+		"%d 条链式代理": "%d proxy chains",
 
 		// internal/app/mirror.go
 		"镜像地址须是以 http:// 或 https:// 开头的完整地址": "The mirror must be a full URL starting with http:// or https://",

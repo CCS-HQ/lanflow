@@ -47,6 +47,9 @@ const (
 	// matches each `filter` regex (regexp2) against the configuration's
 	// node names, and the negative lookahead refuses ours.
 	chainCloneFilter = "^(?!" + ChainClonePrefix + ")"
+
+	// ChainWarningPrefix starts every composition warning about chains.
+	ChainWarningPrefix = layerChains + "："
 )
 
 // ChainCloneName is the name of the clone of hop i (1-based, i >= 2) of

@@ -137,6 +137,14 @@ type API interface {
 	SaveManualNode(n model.ManualNode) (model.ManualNode, error)
 	DeleteManualNode(id string) error
 
+	// ---- proxy chains (docs/chain-proxy.md) ----
+	ProxyChains() []model.ProxyChain
+	// SetProxyChains replaces the chain list (empty ID = new) and applies
+	// it. A renamed chain takes the custom rules and group selections
+	// that pointed at its old name along; groups that had a deleted or
+	// disabled chain selected go back to their previous member.
+	SetProxyChains(chains []model.ProxyChain) ([]model.ProxyChain, error)
+
 	// ---- connections & logs ----
 	CloseConnection(id string) error
 	CloseAllConnections() error

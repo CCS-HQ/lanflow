@@ -38,11 +38,13 @@ type composeArgs struct {
 	ovs *[]model.Override
 	// subOverrides, when set, is the subscription's override selection for
 	// this composition instead of the stored one.
-	subOverrides *[]string
+	subOverrides   *[]string
 	custom         []model.CustomRule
 	useRules       bool               // custom is authoritative even when nil
 	manualNodes    []model.ManualNode // overrides stored manual nodes when useManualNodes
 	useManualNodes bool
+	chains         []model.ProxyChain // overrides stored proxy chains when useChains
+	useChains      bool
 	settings       *model.Settings // nil = current settings
 	content        []byte          // nil = stored content of subID
 }
@@ -95,6 +97,7 @@ func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, 
 		Overrides:    profile.Layers(substituteOverride(list, a.ov), layerSub),
 		CustomRules:  s.d.store.CustomRules(),
 		ManualNodes:  manualNodes,
+		ProxyChains:  s.d.store.ProxyChains(),
 		DNS:          set.DNS,
 		Sniffer:      set.Sniffer,
 		Geo:          mirroredGeo(set), // the download mirror applies to geox-url (mirror.go)
@@ -114,6 +117,9 @@ func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, 
 	in.Capture = s.captureInput(set) // capture.go
 	if a.useRules {
 		in.CustomRules = a.custom
+	}
+	if a.useChains {
+		in.ProxyChains = a.chains
 	}
 	return in, sub, nil
 }
@@ -225,6 +231,7 @@ func (s *Service) commit(p prepared) error {
 	s.state.runtimeLines = nil // annotated on demand (RuntimeConfig): one entry per line adds up
 	s.state.groupIcons = icons
 	s.mu.Unlock()
+	s.noteChainWarnings(p.out.Warnings)
 	return nil
 }
 

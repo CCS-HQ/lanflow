@@ -44,6 +44,7 @@ type Fake struct {
 	rules              []model.Rule
 	custom             []model.CustomRule
 	manualNodes        []model.ManualNode
+	chains             []model.ProxyChain
 	provs              []model.RuleProvider
 	pprovs             []model.ProxyProvider
 	set                model.Settings
@@ -362,6 +363,15 @@ func (f *Fake) ManualNodes() []model.ManualNode {
 	for i, n := range f.manualNodes {
 		n.ALPN = append([]string(nil), n.ALPN...)
 		out[i] = n
+	}
+	return out
+}
+func (f *Fake) ProxyChains() []model.ProxyChain {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := model.CloneProxyChains(f.chains)
+	if out == nil {
+		out = []model.ProxyChain{}
 	}
 	return out
 }
@@ -1168,6 +1178,62 @@ func (f *Fake) DeleteManualNode(id string) error {
 		f.syncManualGroupLocked()
 		return nil
 	}, app.TopicProxies, app.TopicStatus)
+}
+func (f *Fake) SetProxyChains(chains []model.ProxyChain) ([]model.ProxyChain, error) {
+	var out []model.ProxyChain
+	err := f.do(func() error {
+		next := make([]model.ProxyChain, 0, len(chains))
+		seen := map[string]bool{}
+		for i, ch := range chains {
+			v, err := profile.NormalizeProxyChain(ch)
+			if err != nil {
+				return err
+			}
+			if seen[v.Name] {
+				return fmt.Errorf(i18n.T("已有名为「%s」的链路，请换一个名称。"), v.Name)
+			}
+			seen[v.Name] = true
+			if v.ID == "" {
+				v.ID = fmt.Sprintf("c%d%d", time.Now().UnixNano(), i)
+			}
+			next = append(next, v)
+		}
+		// drop what the old chains put into the snapshot
+		var groups []model.ProxyGroup
+		for _, g := range f.px.Groups {
+			if g.Name == profile.ChainGroupName || slices.ContainsFunc(f.chains, func(c model.ProxyChain) bool { return c.Name == g.Name }) {
+				delete(f.px.Proxies, g.Name)
+				continue
+			}
+			groups = append(groups, g)
+		}
+		for name := range f.px.Proxies {
+			if profile.IsChainClone(name) {
+				delete(f.px.Proxies, name)
+			}
+		}
+		f.chains = next
+		var names []string
+		for _, ch := range next {
+			if !ch.Enabled {
+				continue
+			}
+			clone := profile.ChainCloneName(ch.ID, len(ch.Hops))
+			last := f.px.Proxies[ch.Hops[len(ch.Hops)-1]]
+			f.px.Proxies[clone] = model.Proxy{Name: clone, Type: last.Type, UDP: last.UDP, Delay: last.Delay + 120}
+			f.px.Proxies[ch.Name] = model.Proxy{Name: ch.Name, Type: string(model.GroupSelect)}
+			groups = append(groups, model.ProxyGroup{Name: ch.Name, Type: model.GroupSelect, Now: clone, All: []string{clone}})
+			names = append(names, ch.Name)
+		}
+		if len(names) > 0 {
+			f.px.Proxies[profile.ChainGroupName] = model.Proxy{Name: profile.ChainGroupName, Type: string(model.GroupSelect)}
+			groups = append(groups, model.ProxyGroup{Name: profile.ChainGroupName, Type: model.GroupSelect, Now: names[0], All: names})
+		}
+		f.px.Groups = groups
+		out = model.CloneProxyChains(next)
+		return nil
+	}, app.TopicProxies)
+	return out, err
 }
 func (f *Fake) syncManualGroupLocked() {
 	if f.px.Proxies == nil {

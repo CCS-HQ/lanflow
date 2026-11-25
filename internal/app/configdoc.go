@@ -26,10 +26,11 @@ const (
 
 // localState is the configuration a document is built from.
 type localState struct {
-	set   model.Settings
-	ovs   []model.Override
-	rules []model.CustomRule
-	subs  []model.Subscription
+	set    model.Settings
+	ovs    []model.Override
+	rules  []model.CustomRule
+	chains []model.ProxyChain
+	subs   []model.Subscription
 }
 
 // snapshotLocal reads the configuration (the store from disk; call
@@ -38,7 +39,7 @@ func (s *Service) snapshotLocal() localState {
 	s.mu.Lock()
 	set := copySettings(s.state.settings)
 	s.mu.Unlock()
-	return localState{set: set, ovs: s.d.store.Overrides(), rules: s.d.store.CustomRules(), subs: s.d.store.List()}
+	return localState{set: set, ovs: s.d.store.Overrides(), rules: s.d.store.CustomRules(), chains: s.d.store.ProxyChains(), subs: s.d.store.List()}
 }
 
 // buildDoc turns st into lanflow.yaml's document.
@@ -73,6 +74,10 @@ func buildDoc(st localState, links docLinks) syncfile.Doc {
 	}
 	for _, r := range st.rules {
 		doc.CustomRules = append(doc.CustomRules, syncfile.Rule{Type: r.Type, Payload: r.Payload, Target: r.Target})
+	}
+	doc.ProxyChains = []syncfile.Chain{} // always written: a file without the key keeps each machine's chains
+	for _, c := range st.chains {
+		doc.ProxyChains = append(doc.ProxyChains, syncfile.Chain{ID: c.ID, Name: c.Name, Hops: append([]string(nil), c.Hops...), Enabled: c.Enabled})
 	}
 	for _, sub := range st.subs {
 		if !synced[sub.ID] {
@@ -110,6 +115,7 @@ func docToExport(doc syncfile.Doc, resolve func(ref string) string) (model.Setti
 	for _, r := range doc.CustomRules {
 		ex.CustomRules = append(ex.CustomRules, model.CustomRule{Type: r.Type, Payload: r.Payload, Target: r.Target})
 	}
+	ex.ProxyChains = chainsFromDoc(doc.ProxyChains)
 	var missing []string
 	for _, sub := range doc.Subscriptions {
 		u := sub.URL
@@ -192,4 +198,16 @@ func (s *Service) parseImport(data []byte) (ex model.SettingsExport, notes []str
 		}
 	}
 	return ex, notes, nil
+}
+
+// chainsFromDoc converts the file's chains (nil stays nil: no key).
+func chainsFromDoc(in []syncfile.Chain) []model.ProxyChain {
+	if in == nil {
+		return nil
+	}
+	out := make([]model.ProxyChain, 0, len(in))
+	for _, c := range in {
+		out = append(out, model.ProxyChain{ID: c.ID, Name: c.Name, Hops: append([]string(nil), c.Hops...), Enabled: c.Enabled})
+	}
+	return out
 }
