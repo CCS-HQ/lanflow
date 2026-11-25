@@ -110,6 +110,10 @@ func (s *Service) saveSettingsWith(edit func(cur model.Settings) model.Settings,
 	if in.LogLevel != old.LogLevel && running {
 		s.restartLogStream(in.LogLevel)
 	}
+	if old.CaptureEnabled && !in.CaptureEnabled {
+		// captureOffLocked reloads the core, which takes opMu: not here.
+		s.goBackground(func() { _ = s.SetCapture(false) })
+	}
 	coexistChanged := (in.ATrustCompat != old.ATrustCompat && s.detectCoexist()) || s.coexistSettingsChanged(old, in)
 	if !running {
 		return nil // a stopped core picks the new settings up at its next start

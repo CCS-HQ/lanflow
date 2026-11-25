@@ -503,6 +503,9 @@ func (s *Service) captureOnLocked() error {
 	if enabled {
 		return nil
 	}
+	if !s.Settings().CaptureEnabled {
+		return i18n.Error("抓包未启用，请先在「设置 › 常规」中开启抓包。")
+	}
 	if !set.Acknowledged {
 		return i18n.Error("首次开启解密前，请先在「抓包」页阅读说明并勾选确认。")
 	}

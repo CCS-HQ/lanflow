@@ -195,7 +195,8 @@ var patchLocked = []string{
 //     and the outbound interface;
 //   - which subscription is in use by Wi-Fi network (UseSubscription is
 //     a high-impact write) and where the geo databases the rules match
-//     against are downloaded from.
+//     against are downloaded from;
+//   - whether HTTPS decryption (抓包) is available at all.
 //
 // A new setting is a plain write until it is listed here or in
 // patchLocked; TestPatchFieldClasses holds the list of plain ones, so
@@ -207,6 +208,7 @@ var patchHigh = []string{
 	"DNS", "Advanced.DNS*",
 	"AutoSystemProxy", "Advanced.PAC*",
 	"SSIDRules", "SSIDDefaultSub",
+	"CaptureEnabled",
 	"Geo.GeoIP", "Geo.GeoSite", "Geo.MMDB", "Geo.ASN",
 }
 

@@ -478,6 +478,9 @@
             "null"
           ]
         },
+        "captureEnabled": {
+          "type": "boolean"
+        },
         "closeToTray": {
           "type": "boolean"
         },

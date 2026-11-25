@@ -137,6 +137,13 @@ func TestCaptureLifecycle(t *testing.T) {
 	if st := s.CaptureStatus(); st.CA != model.CANone || st.Enabled {
 		t.Fatalf("initial %+v", st)
 	}
+	if s.Settings().CaptureEnabled {
+		t.Fatal("抓包 enabled by default")
+	}
+	if err := s.SetCapture(true); err == nil || !strings.Contains(err.Error(), "抓包未启用") {
+		t.Fatalf("turned on although 抓包 is off: %v", err)
+	}
+	enableCapture(t, h)
 	if err := s.SetCapture(true); err == nil {
 		t.Fatal("turned on without acknowledgement")
 	}
@@ -228,6 +235,23 @@ func TestCaptureLifecycle(t *testing.T) {
 		t.Fatal("LastDisabled not recorded")
 	}
 
+	// turning 抓包 off in the settings turns decryption off
+	if err := s.SetCapture(true); err != nil {
+		t.Fatal(err)
+	}
+	set0 := s.Settings()
+	set0.CaptureEnabled = false
+	if err := s.SaveSettings(set0); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(func() bool { return !s.CaptureStatus().Enabled }) {
+		t.Fatal("decryption still on after 抓包 was turned off")
+	}
+	if err := s.SetCapture(true); err == nil {
+		t.Fatal("turned on although 抓包 is off")
+	}
+	enableCapture(t, h)
+
 	// auto off by time
 	if err := s.SetCapture(true); err != nil {
 		t.Fatal(err)
@@ -255,6 +279,16 @@ func TestCaptureLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(h.dir, "capture", "ca.pem")); err == nil {
 		t.Fatal("certificate left behind")
+	}
+}
+
+// enableCapture turns 抓包 on in the settings (it is off by default).
+func enableCapture(t testingT, h *harness) {
+	t.Helper()
+	set := h.s.Settings()
+	set.CaptureEnabled = true
+	if err := h.s.SaveSettings(set); err != nil {
+		t.Fatalf("enable capture: %v", err)
 	}
 }
 
