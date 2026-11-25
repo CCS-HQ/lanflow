@@ -232,7 +232,7 @@ func (realCore) HelperRunner() core.Runner { return helper.NewRunner() }
 type realStray struct{}
 
 func (realStray) Find(ctx context.Context, workDir string) (bool, bool) {
-	if running, err := helper.CoreRunning(ctx); err == nil && running {
+	if running, err := helper.CoreRunning(ctx, workDir); err == nil && running {
 		return true, true
 	}
 	return core.OrphanRunning(workDir), false

@@ -187,7 +187,15 @@ func TestSupervisorUnexpectedExit(t *testing.T) {
 	if st := s.Status(); !st.Running || st.ExitError != "" || st.PID != 1001 {
 		t.Fatalf("status after restart: %+v", st)
 	}
+	// Status names the user's work directory of the run, so a Lanflow of
+	// another data directory can tell the core is not its own.
+	if st := s.Status(); st.WorkDir == "" || filepath.Base(st.WorkDir) != filepath.Base(f.spec.WorkDir) {
+		t.Fatalf("status work dir = %q, spec %q", st.WorkDir, f.spec.WorkDir)
+	}
 	_ = s.StopCore(ctx)
+	if st := s.Status(); st.Running || st.WorkDir != "" {
+		t.Fatalf("status after stop: %+v", st)
+	}
 }
 
 func TestSupervisorRefusesInvalidSpec(t *testing.T) {

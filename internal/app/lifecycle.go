@@ -746,32 +746,55 @@ func (s *Service) handleCrash(cause error) {
 		// The helper went silent: the core may well still run and hold
 		// its ports, which would fail the restart below.
 		sctx, scancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := s.d.stray.Stop(sctx, s.workDir, g.tun); err != nil {
-			s.alog.Warnf("stop the core of unknown state: %v", err)
-		}
+		err := s.d.stray.Stop(sctx, s.workDir, g.tun)
 		scancel()
+		if err != nil {
+			// Still silent, so the core cannot be stopped either: a start
+			// now would find its ports held and blame another program.
+			// Wait for the helper instead.
+			s.alog.Warnf("stop the core of unknown state: %v; restarting once the helper answers", err)
+			s.awaitHelperLocked(msg, g)
+			return
+		}
 	}
-	// What to tell the user about the system proxy when it is not restored.
-	proxyOff := i18n.T("系统代理已关闭，请在需要时重新打开。")
-	if g.proxyErr != nil {
-		proxyOff = i18n.Tf("关闭系统代理失败（%v），请在系统设置中手动关闭代理。", g.proxyErr)
-	}
-
 	if s.rootCtx.Err() == nil && (last.IsZero() || now.Sub(last) > autoRestartGap) {
 		s.mu.Lock()
 		s.state.lastAutoStart = now
 		s.mu.Unlock()
-		if err := s.startLocked(); err == nil {
-			detail := proxyOff
-			if g.ours {
-				if err := s.setSystemProxyLocked(true); err == nil {
-					detail = i18n.T("系统代理已恢复。")
-				}
-			}
-			s.notify(Notice{Kind: "toast", Title: i18n.T("内核意外退出，已自动重新启动"), Detail: detail, System: true}) // docs/design.md §8.4: system notification
+		if s.restartAfterCrashLocked(g) {
 			return
 		}
 	}
+	s.crashedLocked(msg, g)
+}
+
+// proxyOffText is what to tell the user about the system proxy when it is
+// not restored after the core went away.
+func proxyOffText(g coreGone) string {
+	if g.proxyErr != nil {
+		return i18n.Tf("关闭系统代理失败（%v），请在系统设置中手动关闭代理。", g.proxyErr)
+	}
+	return i18n.T("系统代理已关闭，请在需要时重新打开。")
+}
+
+// restartAfterCrashLocked starts the core again after it went away and
+// says so; false when the start failed. opMu must be held.
+func (s *Service) restartAfterCrashLocked(g coreGone) bool {
+	if err := s.startLocked(); err != nil {
+		return false
+	}
+	detail := proxyOffText(g)
+	if g.ours {
+		if err := s.setSystemProxyLocked(true); err == nil {
+			detail = i18n.T("系统代理已恢复。")
+		}
+	}
+	s.notify(Notice{Kind: "toast", Title: i18n.T("内核意外退出，已自动重新启动"), Detail: detail, System: true}) // docs/design.md §8.4: system notification
+	return true
+}
+
+// crashedLocked leaves the core in the error state and tells the user.
+func (s *Service) crashedLocked(msg string, g coreGone) {
 	s.mu.Lock()
 	s.state.st.Core = model.CoreError
 	s.state.st.CoreError = msg
@@ -779,7 +802,68 @@ func (s *Service) handleCrash(cause error) {
 	s.em.emit(TopicStatus)
 	detail := i18n.Tf("%s。系统代理已关闭。可在「日志」中查看原因，或重新启动内核。", msg)
 	if g.proxyErr != nil {
-		detail = i18n.Tf("%s。%s可在「日志」中查看原因，或重新启动内核。", msg, proxyOff)
+		detail = i18n.Tf("%s。%s可在「日志」中查看原因，或重新启动内核。", msg, proxyOffText(g))
 	}
 	s.notify(Notice{Kind: "core-crash", Title: i18n.T("Mihomo 内核意外退出"), Detail: detail, System: true})
+}
+
+// How long and how often a silent helper is asked again (tests shorten).
+var (
+	helperRecoverEvery  = 5 * time.Second
+	helperRecoverWindow = 10 * time.Minute
+)
+
+// awaitHelperLocked handles a core of unknown state that could not be
+// stopped because the helper still does not answer (a starved machine;
+// the helper and the core it runs stall together). It tells the user and
+// keeps asking the helper to stop the core; once that works the core is
+// started again. It gives up when the user starts or stops the core
+// meanwhile, or after helperRecoverWindow. opMu must be held.
+func (s *Service) awaitHelperLocked(msg string, g coreGone) {
+	s.notify(Notice{Kind: "core-crash", Title: i18n.T("权限组件没有应答"),
+		Detail: i18n.Tf("%s。%s澜流会在权限组件恢复应答后自动重新启动内核。", msg, proxyOffText(g)), System: true})
+	deadline := time.Now().Add(helperRecoverWindow)
+	s.goBackground(func() {
+		for {
+			select {
+			case <-s.rootCtx.Done():
+				return
+			case <-time.After(helperRecoverEvery):
+			}
+			if s.recoverFromSilentHelper(msg, g) {
+				return
+			}
+			if time.Now().After(deadline) {
+				s.alog.Warnf("the helper did not answer for %s; the core stays stopped", helperRecoverWindow)
+				return
+			}
+		}
+	})
+}
+
+// recoverFromSilentHelper is one attempt of awaitHelperLocked; true when
+// there is nothing left to try.
+func (s *Service) recoverFromSilentHelper(msg string, g coreGone) bool {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	waiting := s.state.st.Core == model.CoreError && s.state.st.CoreError == msg
+	s.mu.Unlock()
+	if !waiting || s.d.mgr.Running() || s.rootCtx.Err() != nil {
+		return true // started or stopped by the user meanwhile
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err := s.d.stray.Stop(ctx, s.workDir, g.tun)
+	cancel()
+	if err != nil {
+		return false
+	}
+	s.alog.Infof("the helper answers again: stopped the core of unknown state, starting it")
+	s.mu.Lock()
+	s.state.lastAutoStart = s.d.now()
+	s.mu.Unlock()
+	if !s.restartAfterCrashLocked(g) {
+		s.crashedLocked(msg, g)
+	}
+	return true
 }
