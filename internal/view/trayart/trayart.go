@@ -210,10 +210,13 @@ func getSpeedFace() font.Face {
 			ft, _ = opentype.Parse(gobold.TTF)
 		}
 		if ft != nil {
+			// Render at 2× supersampling (Size 36 on a 72px buffer, then 2×2
+			// box-downsampled to 36px) with HintingNone for smooth macOS-grade
+			// anti-aliasing matching Clash Party's Canvas rendering.
 			face, err := opentype.NewFace(ft, &opentype.FaceOptions{
-				Size:    18,
+				Size:    36,
 				DPI:     72,
-				Hinting: font.HintingFull,
+				Hinting: font.HintingNone,
 			})
 			if err == nil {
 				speedFace = face
@@ -286,29 +289,46 @@ func PNG(l Look, ink Ink) []byte {
 		dst := image.NewNRGBA(image.Rect(0, 0, totalW, 36))
 		draw.Draw(dst, img.Bounds(), img, image.Point{}, draw.Src)
 		if face := getSpeedFace(); face != nil {
+			// Draw text into a 2× supersampled buffer (speedPx*2 × 72) and
+			// box-downsample 2×2 into dst for crisp, even anti-aliased stems.
+			hiW, hiH := speedPx*2, 72
+			hi := image.NewAlpha(image.Rect(0, 0, hiW, hiH))
 			speedFaceMu.Lock()
 			d := &font.Drawer{
-				Dst:  dst,
-				Src:  image.NewUniform(col),
+				Dst:  hi,
+				Src:  image.Opaque,
 				Face: face,
 			}
 			for i, line := range l.SpeedLines {
 				if line == "" {
 					continue
 				}
-				y := 15
+				y := 30
 				if i == 1 {
-					y = 33
+					y = 66
 				}
 				adv := d.MeasureString(line)
-				x := fixed.I(totalW-2) - adv
-				if x < fixed.I(iconPx+2) {
-					x = fixed.I(iconPx + 2)
+				x := fixed.I(hiW-4) - adv
+				if x < fixed.I(4) {
+					x = fixed.I(4)
 				}
 				d.Dot = fixed.Point26_6{X: x, Y: fixed.I(y)}
 				d.DrawString(line)
 			}
 			speedFaceMu.Unlock()
+			for y := 0; y < 36; y++ {
+				for x := 0; x < speedPx; x++ {
+					a := (int(hi.AlphaAt(x*2, y*2).A) +
+						int(hi.AlphaAt(x*2+1, y*2).A) +
+						int(hi.AlphaAt(x*2, y*2+1).A) +
+						int(hi.AlphaAt(x*2+1, y*2+1).A) + 2) / 4
+					if a > 0 {
+						c := col
+						c.A = uint8((int(col.A) * a) / 255)
+						dst.SetNRGBA(iconPx+x, y, c)
+					}
+				}
+			}
 		}
 		out = dst
 	}
