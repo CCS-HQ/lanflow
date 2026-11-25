@@ -158,9 +158,10 @@ type CaptureStatus struct {
 	Flows       int
 	// FindProcess is false when app selections exist but the core cannot
 	// tell processes apart (find-process-mode off).
-	FindProcess bool
-	Error       string
-	Settings    CaptureSettings
+	FindProcess   bool
+	LeftoverRoots []string `json:",omitempty"`
+	Error         string
+	Settings      CaptureSettings
 }
 
 // Flow flags.

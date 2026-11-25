@@ -3,9 +3,14 @@ package agent
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
+	"context"
 	"crypto/tls"
+	"encoding/json"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -298,5 +303,87 @@ func TestWebSocketFrames(t *testing.T) {
 	}
 	if len(d.WSFrames) != 5 || !strings.Contains(strings.Join(texts, "|"), "hello server") || !strings.Contains(strings.Join(texts, "|"), strings.Repeat("x", 300)) {
 		t.Fatalf("frames %+v", d.WSFrames)
+	}
+}
+
+func TestStoreSearchBodies(t *testing.T) {
+	dir := t.TempDir()
+	s := newStore(20, 1<<20, 1024, dir, 1<<20) // small memLimit forces spill to AES-256-GCM segments
+	defer s.close()
+
+	var gzBuf bytes.Buffer
+	gw := gzip.NewWriter(&gzBuf)
+	gw.Write([]byte(`{"msg":"hello Needle-Gzip world"}`))
+	gw.Close()
+
+	r1 := s.add(model.CaptureFlow{Host: "a.test", ContentType: "application/json"})
+	s.update(r1, func(d *model.CaptureFlowDetail) {
+		d.RespHeader = []model.KV{{Key: "Content-Encoding", Value: "gzip"}, {Key: "Content-Type", Value: "application/json"}}
+		d.Flow.Done = true
+	})
+	s.appendBody(r1, true, gzBuf.Bytes())
+
+	// Binary/image bodies must be skipped.
+	r2 := s.add(model.CaptureFlow{Host: "img.test", ContentType: "image/png"})
+	s.update(r2, func(d *model.CaptureFlowDetail) {
+		d.RespHeader = []model.KV{{Key: "Content-Type", Value: "image/png"}}
+		d.Flow.Done = true
+	})
+	s.appendBody(r2, true, append([]byte{0x89, 'P', 'N', 'G'}, []byte("needle-png-hidden")...))
+
+	// Headers + request body.
+	r3 := s.add(model.CaptureFlow{Host: "api.test", ContentType: "application/json"})
+	s.update(r3, func(d *model.CaptureFlowDetail) {
+		d.ReqHeader = []model.KV{{Key: "X-Trace-ID", Value: "Trace-Needle-42"}}
+		d.Flow.Done = true
+	})
+	s.appendBody(r3, false, []byte(`{"payload":"needle-req"}`))
+
+	// WebSocket text frame.
+	r4 := s.add(model.CaptureFlow{Host: "ws.test"})
+	s.update(r4, func(d *model.CaptureFlowDetail) {
+		d.WSFrames = []model.CaptureWSFrame{{Opcode: 1, Text: "socket-needle-frame"}}
+		d.Flow.Done = true
+	})
+
+	// Force spilling of r1..r3 with a large finished body.
+	r5 := s.add(model.CaptureFlow{Host: "pad.test"})
+	s.appendBody(r5, true, bytes.Repeat([]byte{'z'}, 2048))
+	s.update(r5, func(d *model.CaptureFlowDetail) { d.Flow.Done = true })
+
+	ctx := context.Background()
+	if got := s.searchBodies(ctx, ""); got != nil {
+		t.Fatalf("empty query = %v", got)
+	}
+	if got := s.searchBodies(ctx, "needle-gzip"); len(got) != 1 || got[0] != r1.d.Flow.ID {
+		t.Fatalf("gzip spilled search = %v, want [%d]", got, r1.d.Flow.ID)
+	}
+	if got := s.searchBodies(ctx, "needle-png-hidden"); len(got) != 0 {
+		t.Fatalf("image body matched unexpectedly: %v", got)
+	}
+	if got := s.searchBodies(ctx, "trace-needle"); len(got) != 1 || got[0] != r3.d.Flow.ID {
+		t.Fatalf("header search = %v", got)
+	}
+	if got := s.searchBodies(ctx, "needle-req"); len(got) != 1 || got[0] != r3.d.Flow.ID {
+		t.Fatalf("req body search = %v", got)
+	}
+	if got := s.searchBodies(ctx, "socket-needle"); len(got) != 1 || got[0] != r4.d.Flow.ID {
+		t.Fatalf("ws search = %v", got)
+	}
+
+	// Control GET /search route.
+	a := &Agent{st: s}
+	ctl := &Control{a: a}
+	req := httptest.NewRequest("GET", "/search?q=needle", nil)
+	rec := httptest.NewRecorder()
+	ctl.search(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("HTTP %d", rec.Code)
+	}
+	var out struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || len(out.IDs) != 3 {
+		t.Fatalf("/search response %s err=%v", rec.Body.String(), err)
 	}
 }

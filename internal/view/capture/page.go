@@ -79,8 +79,21 @@ type Page struct {
 		onlyDec bool
 		paused  bool
 		sort    ui.SortOrder
+		bsGen   uint64
 		all     []model.CaptureFlow // records, then connections
 		rows    []model.CaptureFlow
+	}
+
+	// background body search
+	bodySearch struct {
+		sync.Mutex
+		gen     uint64
+		query   string
+		running bool
+		active  bool
+		ids     map[int64]bool
+		count   int
+		err     string
 	}
 
 	det struct {
@@ -230,9 +243,79 @@ func (p *Page) View(c *ui.Context) {
 	p.replayModal(c, t)
 }
 
+func (p *Page) clearBodySearch() {
+	p.bodySearch.Lock()
+	changed := p.bodySearch.running || p.bodySearch.active || p.bodySearch.err != "" || p.bodySearch.query != ""
+	p.bodySearch.query = ""
+	p.bodySearch.running = false
+	p.bodySearch.active = false
+	p.bodySearch.ids = nil
+	p.bodySearch.count = 0
+	p.bodySearch.err = ""
+	if changed {
+		p.bodySearch.gen++
+	}
+	p.bodySearch.Unlock()
+}
+
+func (p *Page) startBodySearch(query string) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return
+	}
+	p.bodySearch.Lock()
+	p.bodySearch.gen++
+	p.bodySearch.query = q
+	p.bodySearch.running = true
+	p.bodySearch.active = false
+	p.bodySearch.ids = nil
+	p.bodySearch.count = 0
+	p.bodySearch.err = ""
+	p.bodySearch.Unlock()
+
+	api, redraw := p.e.API, p.e.Redraw
+	p.spawn(func() {
+		ids, err := api.SearchCaptureBodies(q)
+		p.bodySearch.Lock()
+		if p.bodySearch.query == q {
+			p.bodySearch.running = false
+			p.bodySearch.gen++
+			if err != nil {
+				p.bodySearch.err = err.Error()
+			} else {
+				m := make(map[int64]bool, len(ids))
+				for _, id := range ids {
+					m[id] = true
+				}
+				p.bodySearch.ids = m
+				p.bodySearch.count = len(ids)
+				p.bodySearch.active = true
+			}
+		}
+		p.bodySearch.Unlock()
+		if redraw != nil {
+			redraw()
+		}
+	})
+}
+
 func (p *Page) tools(c *ui.Context, st model.CaptureStatus) {
 	e := p.e
 	ui.SearchField(c.Key("search"), &p.query).Placeholder(i18n.T("搜索")).Label(i18n.T("搜索请求")).Width(150)
+	qNorm := strings.ToLower(strings.TrimSpace(p.query))
+	p.bodySearch.Lock()
+	bsRunning, bsActive, bsErr, bsQuery := p.bodySearch.running, p.bodySearch.active, p.bodySearch.err, p.bodySearch.query
+	p.bodySearch.Unlock()
+	if (bsActive || bsErr != "") && !bsRunning && qNorm != bsQuery {
+		p.clearBodySearch()
+	}
+	bsLabel := i18n.T("搜正文")
+	if bsRunning {
+		bsLabel = i18n.T("搜索中…")
+	}
+	ui.Button(c, bsLabel).Disabled(!st.Enabled || qNorm == "" || bsRunning).
+		Tooltip(i18n.T("在后台扫描请求/响应头、已解码正文和 WebSocket 文本消息")).
+		OnClick(func() { p.startBodySearch(p.query) })
 	rec := !st.Settings.NoRecord
 	recLabel, recTip := i18n.T("暂停记录"), i18n.T("暂停后不再跟踪连接、不再解密和保存请求，节省资源")
 	if !rec {
@@ -283,6 +366,7 @@ func (p *Page) tools(c *ui.Context, st model.CaptureStatus) {
 		m.Separator()
 		if m.Item(i18n.T("清空记录")).Disabled(st.Flows == 0).Chosen() {
 			p.sel = 0
+			p.clearBodySearch()
 			e.Run(e.API.ClearCaptureFlows, "")
 		}
 		m.Separator()
@@ -328,6 +412,43 @@ func (p *Page) banners(c *ui.Context, st model.CaptureStatus) {
 	}
 	if st.Error != "" {
 		e.Kit.Banner(c, "error", st.Error, nil)
+	}
+	if len(st.LeftoverRoots) > 0 {
+		n := len(st.LeftoverRoots)
+		e.Kit.Banner(c, "warn", i18n.Tn(n, "检测到 %d 个旧版澜流根证书仍留在系统信任库中（之前安装的残留）。", n), func() {
+			ui.Button(c, i18n.T("清理旧证书")).OnClick(func() {
+				e.Confirm(i18n.T("清理旧版根证书？"),
+					i18n.T("会从当前用户的系统信任库中移除不再使用的旧版澜流根证书（系统可能弹窗要求确认）。"),
+					i18n.T("清理"), true, func() {
+						e.Run(e.API.RemoveCaptureLeftoverRoots, i18n.T("已清理旧根证书"))
+					})
+			})
+		})
+	}
+	if !p.editing {
+		if !st.Enabled {
+			p.bodySearch.Lock()
+			hasBS := !p.bodySearch.running && (p.bodySearch.active || p.bodySearch.err != "")
+			p.bodySearch.Unlock()
+			if hasBS {
+				p.clearBodySearch()
+			}
+		}
+		p.bodySearch.Lock()
+		bsRunning, bsActive, bsCount, bsErr, bsQ := p.bodySearch.running, p.bodySearch.active, p.bodySearch.count, p.bodySearch.err, p.bodySearch.query
+		p.bodySearch.Unlock()
+		switch {
+		case bsRunning:
+			e.Kit.Banner(c, "info", i18n.Tf("正在后台搜索正文“%s”…", bsQ), nil)
+		case bsErr != "":
+			e.Kit.Banner(c, "error", i18n.Tf("正文搜索失败：%s", bsErr), func() {
+				ui.Button(c, i18n.T("清除正文搜索")).OnClick(func() { p.clearBodySearch() })
+			})
+		case bsActive:
+			e.Kit.Banner(c, "info", i18n.Tf("正文搜索“%s”：命中 %d 条记录（同时保留地址匹配项）。", bsQ, bsCount), func() {
+				ui.Button(c, i18n.T("清除正文搜索")).OnClick(func() { p.clearBodySearch() })
+			})
+		}
 	}
 }
 
@@ -652,6 +773,12 @@ func (p *Page) spawn(fn func()) {
 func (p *Page) rows(paused bool) []model.CaptureFlow {
 	sh := &p.shown
 	q := strings.ToLower(strings.TrimSpace(p.query))
+	p.bodySearch.Lock()
+	bsActive := p.bodySearch.active && !p.bodySearch.running && p.bodySearch.query == q
+	bsIDs := p.bodySearch.ids
+	bsGen := p.bodySearch.gen
+	p.bodySearch.Unlock()
+
 	withConns := !p.onlyDec && !paused
 	fresh := p.data.Take()
 	if fresh || !sh.ok || withConns != (!sh.onlyDec && !sh.paused) {
@@ -661,17 +788,21 @@ func (p *Page) rows(paused bool) []model.CaptureFlow {
 		}
 		fresh = true
 	}
-	if !fresh && sh.query == q && sh.onlyDec == p.onlyDec && sh.paused == paused && sh.sort == p.sort {
+	if !fresh && sh.query == q && sh.onlyDec == p.onlyDec && sh.paused == paused && sh.sort == p.sort && sh.bsGen == bsGen {
 		return sh.rows
 	}
-	sh.ok, sh.query, sh.onlyDec, sh.paused, sh.sort = true, q, p.onlyDec, paused, p.sort
+	sh.ok, sh.query, sh.onlyDec, sh.paused, sh.sort, sh.bsGen = true, q, p.onlyDec, paused, p.sort, bsGen
 	out := make([]model.CaptureFlow, 0, len(sh.all))
 	for _, f := range sh.all {
 		if p.onlyDec && !f.Has(model.FlowDecrypted) {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(f.Host+" "+f.Path+" "+f.Method+" "+f.Process+" "+strconv.Itoa(f.Status)+" "+f.Error), q) {
-			continue
+		if q != "" {
+			sumHit := strings.Contains(strings.ToLower(f.Host+" "+f.Path+" "+f.Method+" "+f.Process+" "+strconv.Itoa(f.Status)+" "+f.Error), q)
+			bodyHit := bsActive && f.ID > 0 && bsIDs[f.ID]
+			if !sumHit && !bodyHit {
+				continue
+			}
 		}
 		out = append(out, f)
 	}

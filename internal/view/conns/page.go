@@ -220,14 +220,14 @@ func (p *Page) lists(st model.Status) (active, closed []model.Connection, nActiv
 	}
 	if needActive {
 		if !p.frozen.hasActive {
-			p.frozen.active, p.frozen.hasActive = displayChains(e.API.Connections(), e.API.ProxyChains()), true
+			p.frozen.active, p.frozen.hasActive = displayChains(foldCaptureConns(e.API.Connections()), e.API.ProxyChains()), true
 			p.gen++
 		}
 		active = p.frozen.active
 	}
 	if needClosed {
 		if !p.frozen.hasClosed {
-			p.frozen.closed, p.frozen.hasClosed = displayChains(e.API.ClosedConnections(), e.API.ProxyChains()), true
+			p.frozen.closed, p.frozen.hasClosed = displayChains(foldCaptureConns(e.API.ClosedConnections()), e.API.ProxyChains()), true
 			p.gen++
 		}
 		closed = p.frozen.closed
@@ -522,8 +522,12 @@ func (p *Page) addRuleForProcess(cn model.Connection) {
 // defaultTarget prefills the rule's target with the connection's first
 // hop when it is a group, else the main group.
 func (p *Page) defaultTarget(cn model.Connection) string {
-	if len(cn.Chains) > 0 && cn.Chains[0] != "DIRECT" && cn.Chains[0] != "REJECT" {
-		return cn.Chains[0]
+	chains := cn.Chains
+	if cn.CaptureLeg && len(cn.CaptureReturnChains) > 0 {
+		chains = cn.CaptureReturnChains
+	}
+	if len(chains) > 0 && chains[0] != "DIRECT" && chains[0] != "REJECT" {
+		return chains[0]
 	}
 	return p.e.API.Proxies().MainGroup
 }
@@ -559,7 +563,7 @@ func (p *Page) filter(src []model.Connection) []model.Connection {
 		h, ok := p.hay[cn.ID]
 		if !ok || !h.of(cn) {
 			if h, ok = old[cn.ID]; !ok || !h.of(cn) {
-				h = hayText{host: cn.Host, process: cn.Process, chains: len(cn.Chains), text: strings.ToLower(haystack(cn))}
+				h = hayText{host: cn.Host, process: cn.Process, chains: len(cn.Chains), retChains: len(cn.CaptureReturnChains), text: strings.ToLower(haystack(cn))}
 			}
 			p.hay[cn.ID] = h
 		}
@@ -576,11 +580,12 @@ func (p *Page) filter(src []model.Connection) []model.Connection {
 type hayText struct {
 	host, process string
 	chains        int
+	retChains     int
 	text          string
 }
 
 func (h hayText) of(cn model.Connection) bool {
-	return h.host == cn.Host && h.process == cn.Process && h.chains == len(cn.Chains)
+	return h.host == cn.Host && h.process == cn.Process && h.chains == len(cn.Chains) && h.retChains == len(cn.CaptureReturnChains)
 }
 
 // haystack is the text the search matches: host, process, rule with its
@@ -689,6 +694,29 @@ func ruleName(cn model.Connection) string {
 	return strings.ToUpper(b.String())
 }
 
+// foldCaptureConns drops the return legs of HTTPS decryption
+// (lanflow-mitm-up): their outbound chains are folded onto the
+// client-to-agent connections (docs/capture.md §9).
+func foldCaptureConns(conns []model.Connection) []model.Connection {
+	hasRet := false
+	for _, cn := range conns {
+		if cn.CaptureReturn {
+			hasRet = true
+			break
+		}
+	}
+	if !hasRet {
+		return conns
+	}
+	out := make([]model.Connection, 0, len(conns))
+	for _, cn := range conns {
+		if !cn.CaptureReturn {
+			out = append(out, cn)
+		}
+	}
+	return out
+}
+
 // displayChains names the nodes a chain generates (profile.ChainClonePrefix)
 // by the nodes they clone, in copies; conns itself is left as it is (the
 // service's client may hold it).
@@ -697,18 +725,28 @@ func displayChains(conns []model.Connection, chains []model.ProxyChain) []model.
 		return conns
 	}
 	var out []model.Connection
+	mapNames := func(src []string) []string {
+		names := make([]string, len(src))
+		for j, n := range src {
+			names[j] = profile.DisplayName(n, chains)
+		}
+		return names
+	}
 	for i, cn := range conns {
-		if !slices.ContainsFunc(cn.Chains, profile.IsChainClone) {
+		c1 := slices.ContainsFunc(cn.Chains, profile.IsChainClone)
+		c2 := slices.ContainsFunc(cn.CaptureReturnChains, profile.IsChainClone)
+		if !c1 && !c2 {
 			continue
 		}
 		if out == nil {
 			out = slices.Clone(conns)
 		}
-		names := make([]string, len(cn.Chains))
-		for j, n := range cn.Chains {
-			names[j] = profile.DisplayName(n, chains)
+		if c1 {
+			out[i].Chains = mapNames(cn.Chains)
 		}
-		out[i].Chains = names
+		if c2 {
+			out[i].CaptureReturnChains = mapNames(cn.CaptureReturnChains)
+		}
 	}
 	if out == nil {
 		return conns
@@ -717,6 +755,12 @@ func displayChains(conns []model.Connection, chains []model.ProxyChain) []model.
 }
 
 func chain(cn model.Connection) string {
+	if cn.CaptureLeg && !cn.CaptureReturn {
+		if len(cn.CaptureReturnChains) > 0 {
+			return i18n.Tf("已解密 · 回流经 %s", strings.Join(cn.CaptureReturnChains, " › "))
+		}
+		return i18n.T("已解密")
+	}
 	if len(cn.Chains) == 0 {
 		return "—"
 	}

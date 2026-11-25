@@ -220,7 +220,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | 叶子 | SAN = SNI，精确名不签通配；`now-1h ~ now+7d`；会话内单独 P-256 叶子密钥；LRU 1024 张，按主机 singleflight |
 | 信任安装 | macOS `security add-trusted-cert -r trustRoot -p ssl -k ~/Library/Keychains/login.keychain-db`（用户域，只在 GUI 进程调用；helper 不新增证书命令）；Windows `CertAddEncodedCertificateToStore(CurrentUser\Root)`（系统强制确认框） |
 | 信任状态 | 用 CA 签 `trust-check.lanflow.invalid` 叶子，按系统根 `Verify` 的结果为准，**不看命令退出码**（MDM 拒绝、GPO 关闭用户根时调用可能「成功」但不生效）。这张信任叶子的有效期与根证书一致（`ca.TrustLeaf`，不是普通叶子的 7 天）：它存在 `<DataDir>/capture/` 下，在根的整个有效期内反复拿来验证，先于根过期会被误报为「根证书未受信任」。agent 每次启动回报 Ready 时都重签一张，服务换上最新的并重新判定；存着的叶子缺失或已过期（旧版本签的 7 天叶子）而判定为未信任时，先让 agent 重签再判 |
-| 旧证书扫描 | 只有服务层方法：`CaptureLeftoverRoots`（`trust.Leftovers`）列出用户信任库里除当前根以外的澜流根证书的 SHA-1。**界面尚未接线**：它不在 `app.API` 里，没有页面调用，也就还没有「提示清理」。已做的是替换时的清理：根证书被新根取代（重新生成，或旧根将过期时 agent 自动新建）时，旧根的信任与私钥随即移除 |
+| 旧证书扫描 | `trust.Leftovers` 列出用户信任库里除当前根以外的澜流根证书 SHA-1。服务在启动、每小时检查及安装/重签/移除根证书后刷新缓存到 `CaptureStatus.LeftoverRoots`（避免每帧重扫描外部信任库），抓包页检测到非空即显示警告横幅，点击「清理旧证书」确认后调用 `RemoveCaptureLeftoverRoots`（`trust.RemoveByHash`，危险级）逐一删除；替换根证书（重新生成或将过期自动新建）时也会自动移除旧根的信任与私钥 |
 | 自动移除 | **关闭解密 7 天后自动移除信任并销毁私钥**；下次开启重新生成（多一次授权弹窗）。移除失败（系统每次可能要授权，用户可能拒绝）按退避重试：2、4、8、16 小时，之后每天一次 |
 | 重新生成 | 新 CA → 安装信任 → 移除旧信任与私钥 → 清空叶子缓存 → 断开解密连接 |
 | 卸载 | macOS 设置页「移除根证书并删除私钥」；Windows 卸载程序调用 `lanflow ca-remove`，但提权安装程序的 CurrentUser 可能是管理员，故提示用户先在应用内移除，或下次登录时清理 |
@@ -410,7 +410,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 - **V1 TUN 下回流可达**：VM 中开 TUN（`auto-detect-interface: true`），抓包选中 `example.com`，`curl https://example.com` → 应解密（证书颁发者为 Lanflow Local CA，`/connections` 有 `inboundName=lanflow-mitm-up` 的回流连接且最终出口为订阅节点）；`tcpdump -i utun1700 host 127.0.0.1` 应无回环流量进入 TUN。
 - **V2 TUN 下 reload 20 次**：开 TUN 后连续开关解密 20 次（窗口里点，或 `lanflow ctl call SetCapture true/false`，危险级每次要在窗口确认），期间后台 `while curl -sf https://www.apple.com -o /dev/null; do :; done` 统计失败次数；记录每次 `PUT /configs` 是否重建 utun（`ifconfig` 设备序号是否变化）。
 - **V3 钥匙串信任根与名称约束**：在「抓包」页「安装根证书」→ 登录钥匙串出现「Lanflow Local CA」且信任为「始终信任（SSL）」；用该 CA（导出私钥只在测试 VM 中做）签 `www.paypal.com` 与 IP 叶子，起本地 TLS 服务，Safari / Chrome / `security verify-cert -c leaf -p ssl`（不带 `-r`）分别访问，记录是否拒绝。
-- **V4 QUIC 拒绝**（规则 ① 尚未实现，先手写一条规则）：TUN 下选中一个支持 HTTP/3 的站点，规则 ① `REJECT` 与 `REJECT-DROP` 各测一次，Chrome DevTools 看首次请求回落 TCP 的耗时。
+- **V4 QUIC 拒绝**：TUN 下选中一个支持 HTTP/3 的站点（含 443 端口时自动生成 UDP 443 `REJECT`），Chrome DevTools 看首次请求回落 TCP 的耗时。
 - **V5 Chrome 预连接 / 固定误判**：Chrome 打开 10 个常用站点（只选中其中 3 个），1 小时内统计「零数据关闭」与证书 alert 次数，确认 5 分钟 2 次的阈值不误判。
 - **V6 TUN + 共享 / 网关**：VM 开「互联网共享」，另一台虚拟机经它上网，访问选中域名应拿到原证书（agent 记录 `not-local`），据此确定规则 ② 的排除写法。
 - **V7 ECH 安全降级**：Chrome / Firefox 访问 `crypto.cloudflare.com/cdn-cgi/trace`（`sni=encrypted`）时为 public name 签证书，看客户端是否关闭 ECH 重试；结论决定是否做「降级后解密」。
@@ -422,19 +422,19 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 
 | 位置 | 内容 |
 | --- | --- |
-| `internal/profile/capture.go` | 抓包层组装、`scrubCaptureRefs`、`exclude-filter` 追加、有程序选择时把 `find-process-mode: off` 改为 `strict`；黄金测试 `compose_capture_test.go`（经 `mihomo -t`） |
+| `internal/profile/capture.go` | 抓包层组装（含 443 端口时在 TCP 捕获规则前生成选中目标 UDP 443 `REJECT` 迫使 QUIC 回落）、`scrubCaptureRefs`、`exclude-filter` 追加、有程序选择时把 `find-process-mode: off` 改为 `strict`；黄金测试 `compose_capture_test.go`（经 `mihomo -t`） |
 | `internal/capture/ca` | 根证书（ECDSA P-256、90 天、`pathlen:0`、excluded 约束含全部 IP）、叶子 LRU 1024 + singleflight；`SecretKeys`（macOS 登录钥匙串，服务名 `Lanflow Capture CA`）、`keys_windows.go`（CNG 不可导出密钥） |
-| `internal/capture/agent` | `lanflow capture-agent`：CONNECT 口令（常量时间）、ClientHello 解析（含模糊测试）、选择集自检、本机来源与进程归属（内核 `/connections`）、域名还原、ECH / GREASE 判定、证书固定临时跳过、首包指纹回环熔断 + 速率兜底、上游证书无效 / 要求客户端证书 / 任何上游握手失败时重放透传、h1 / h2 / WebSocket 旁路解析、环形缓冲 + 加密溢写、控制接口（127.0.0.1 + 随机 token） |
-| `internal/capture/trust` | macOS `security add-trusted-cert -r trustRoot -p ssl -k login.keychain-db` / `remove-trusted-cert` / `delete-certificate`；Windows `CurrentUser\Root`；信任状态一律以叶子验证为准 |
+| `internal/capture/agent` | `lanflow capture-agent`：CONNECT 口令（常量时间）、ClientHello 解析（含模糊测试）、选择集自检、本机来源与进程归属（内核 `/connections`）、域名还原、ECH / GREASE 判定、证书固定临时跳过、首包指纹回环熔断 + 速率兜底、上游证书无效 / 要求客户端证书 / 任何上游握手失败时重放透传、h1 / h2 / WebSocket 旁路解析、环形缓冲 + 加密溢写、正文搜索（`GET /search`，扫描头、解压非二进制正文与 WebSocket 文本）、控制接口（127.0.0.1 + 随机 token） |
+| `internal/capture/trust` | macOS `security add-trusted-cert -r trustRoot -p ssl -k login.keychain-db` / `remove-trusted-cert` / `delete-certificate`（支持按证书与 SHA-1 移除）；Windows `CurrentUser\Root`；信任状态一律以叶子验证为准 |
 | `internal/capture/redact`、`har` | 显示、HAR 与 agent 共用的打码；HAR 1.2（默认不含正文，`_lanflow` 扩展） |
-| `internal/app/capture.go` | 选择项文件 `<DataDir>/capture/settings.json`（不进同步、不进备份）、agent 生命周期（崩溃按原端口重启，1 分钟内第 4 次退出则关闭解密并恢复分流）、开关顺序（agent 置透传 → reload → 关闭解密出站上的连接 → 停 agent）、30 分钟自动关闭（按墙钟，睡眠唤醒后立即关闭）、关闭 7 天或根证书过期后自动移除信任与私钥、GLOBAL 选中解密出站时重置为 DIRECT、代理页隐藏解密出站、诊断包隐藏选择项与内核日志中的解密行 |
-| `internal/view/capture`、`conns`、`tray.go`、`shell*.go` | 「抓包」页（首次说明与确认、根证书横幅、选择编辑、列表 + 详情页签、正文查看器、默认打码、HAR 导出）；连接页行菜单「解密此主机… / 解密此程序…」；侧栏「解密中」徽标与状态行、托盘「HTTPS 解密」开关与标题、窗口标题「· 解密中」 |
+| `internal/app/capture.go`、`streams.go`、`stats.go`、`exits.go` | 选择项文件 `<DataDir>/capture/settings.json`（不进同步、不进备份）、agent 生命周期（崩溃按原端口重启，1 分钟内第 4 次退出则关闭解密并恢复分流）、开关顺序、30 分钟自动关闭、关闭 7 天或根证书过期后自动移除信任与私钥、旧版根证书缓存检测与 `RemoveCaptureLeftoverRoots` 清理、GLOBAL 选中解密出站时重置为 DIRECT、代理页隐藏解密出站、诊断包隐藏选择项与内核日志中的解密行、回流连接（`lanflow-mitm-up`）1:1 折叠到解密入口连接并将流量/速率/统计/拓扑与出口归因到真实出站链路 |
+| `internal/view/capture`、`conns`、`tray.go`、`shell*.go` | 「抓包」页（首次说明与确认、根证书与旧证书残留横幅、选择编辑、列表 + 详情页签、正文查看器、「搜正文」后台检索、默认打码、HAR 导出）；连接页折叠显示「已解密 · 回流经 …」及真实节点链路与默认规则目标、行菜单「解密此主机… / 解密此程序…」；侧栏「解密中」徽标与状态行、托盘「HTTPS 解密」开关与标题、窗口标题「· 解密中」 |
 
 测试：`internal/capture/agent/e2e_test.go` 用真实 `bin/mihomo`（127.0.0.1 随机端口、临时 `-d`）覆盖：未选中主机拿到原证书且不进 agent；选中主机 h1 / h2 解密与记录（正文、TLS、归属）且上游收到的字节与客户端逐字节相同；覆写引用解密出站被清除；回流 listener 指向解密出站时第 3 个 accept 即熔断；局域网来源被规则拦下，去掉规则的来源条件后由 agent 二次拒绝；关闭后在途解密请求被断开、新连接拿到原证书、内核中无残留解密连接；上游证书无效时原样透传；按程序选择时本进程与 `curl` 分别归属到各自的选择项；真实 ECH 透传、GREASE 照常解密。`internal/app/capture_test.go` 以测试二进制充当 agent 子进程（文件密钥库，不碰钥匙串）覆盖安装、开关、崩溃重启、关闭断连、自动关闭、7 天移除。
 
 未做 / 与设计的差异：
 
-- M2 未做：订阅中 `PROCESS-*` 规则对回流连接的改写（§9，解密连接的出口可能与未解密时不同）、连接页折叠回流连接与统计按 inbound 去重、选中目标 UDP 443 拒绝（规则 ①）、正文搜索与复制原值确认、multipart / 十六进制以外的更多查看器。
+- M2 未做：订阅中 `PROCESS-*` 规则对回流连接的改写（§9，解密连接的出口可能与未解密时不同）、复制原值确认、multipart / 十六进制以外的更多查看器。
 - M3 未做：cURL（按 §10 永不提供给 agent，窗口内也暂不做）、mTLS PKCS#12 导入、「严格模式」、加密会话保存、uTLS。
 - 「证书固定」只按明确 alert 计数；「零数据关闭」未单独计数。
 - `pprof`：agent 不开 pprof；GUI 的 `LANFLOW_PPROF` 在抓包期间未禁止（§8 表中一项）。

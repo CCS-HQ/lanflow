@@ -175,6 +175,14 @@ type Connection struct {
 	// capture agent or the agent's connection back into the core. The
 	// 抓包 page lists the decrypted requests instead.
 	CaptureLeg bool `json:",omitempty"`
+	// CaptureReturn marks the agent's return leg back into the core
+	// (inboundName == lanflow-mitm-up). Its bytes are already counted on
+	// the client-to-agent leg.
+	CaptureReturn bool `json:",omitempty"`
+	// CaptureReturnChains holds the real outbound chain of the paired
+	// return leg (e.g. ["节点选择", "东京 03"]), attached to the
+	// client-to-agent leg when folded.
+	CaptureReturnChains []string `json:",omitempty"`
 }
 
 // InnerType is the inbound type of the connection the core opens for a

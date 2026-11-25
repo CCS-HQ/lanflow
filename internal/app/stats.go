@@ -112,8 +112,8 @@ func (s *statsStore) record(conns []model.Connection, now time.Time) bool {
 	var day *statsDay
 	hour := now.Hour()
 	for _, c := range conns {
-		if c.IsInner() {
-			continue // a chain's front hop: its bytes are the outer connection's
+		if c.IsInner() || c.CaptureReturn {
+			continue // chain front hop or capture return leg: counted once on the outer/client connection
 		}
 		p, seen := s.prev[c.ID]
 		next[c.ID] = statsSample{up: c.Upload, down: c.Download}
@@ -165,9 +165,13 @@ type statsKey struct {
 func (s *statsStore) keysOf(c model.Connection) []statsKey {
 	host := statsHost(c.Host)
 	domain := registrableDomain(host)
+	chains := c.Chains
+	if c.CaptureLeg && len(c.CaptureReturnChains) > 0 {
+		chains = c.CaptureReturnChains
+	}
 	group, node := "", ""
-	if len(c.Chains) > 0 {
-		group, node = c.Chains[0], c.Chains[len(c.Chains)-1]
+	if len(chains) > 0 {
+		group, node = chains[0], chains[len(chains)-1]
 	}
 	proxyKey := group
 	if node != group {

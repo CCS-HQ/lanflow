@@ -65,11 +65,16 @@ func each(fn func(c *windows.CertContext, der []byte) bool) error {
 	}
 }
 
-func remove(der []byte) error {
-	want := SHA1(der)
+func remove(der []byte) error { return removeByHash(SHA1(der)) }
+
+func removeByHash(hash string) error {
+	want := strings.ToUpper(strings.TrimSpace(hash))
+	if want == "" {
+		return nil
+	}
 	var derr error
 	if err := each(func(c *windows.CertContext, d []byte) bool {
-		if SHA1(d) != want {
+		if !strings.EqualFold(SHA1(d), want) {
 			return true
 		}
 		dup := windows.CertDuplicateCertificateContext(c)
