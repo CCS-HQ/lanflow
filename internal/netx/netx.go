@@ -15,7 +15,7 @@ import (
 
 // UserAgent is the default User-Agent for subscription downloads; it makes
 // providers return Clash/Mihomo YAML.
-const UserAgent = "clash.meta/mihomo Lanflow/0.1"
+const UserAgent = "clash.meta/v1.19.33 Lanflow/0.1"
 
 func transport(proxy func(*http.Request) (*url.URL, error)) *http.Transport {
 	return &http.Transport{

@@ -1,5 +1,10 @@
-// The sidebar: the page groups, the status bar under them and the page
-// shortcuts.
+// The sidebar: always-visible control center combining Lanflow's native
+// styling with Clash Party's high-frequency card ergonomics — brand header
+// with core status dot + settings gear, full-width mode pill, clickable
+// System Proxy & TUN quick cards, current subscription card, bento nav cards
+// (including Overrides), full-width Connections card with live traffic wave,
+// full-width Core card (version, memory & one-click restart), and a compact
+// secondary tools strip.
 
 package view
 
@@ -12,119 +17,666 @@ import (
 	"lanflow/internal/model"
 	"lanflow/internal/view/capture"
 	"lanflow/internal/view/env"
+	"lanflow/internal/view/settings"
 )
 
-// sidebarGroups are the sidebar's groups of destinations (docs/design.md
-// §4): daily use, what the core is doing, and diagnosis; 设置 sits apart
-// at the bottom.
-var sidebarGroups = [][]env.Page{
-	{env.Overview, env.Proxies, env.Subs},
-	{env.Conns, env.Capture, env.Logs, env.Rules},
-	{env.Net, env.Stats, env.Probe},
+var sidebarModes = []model.Mode{model.ModeRule, model.ModeGlobal, model.ModeDirect}
+
+var sidebarSecondaryPages = []env.Page{env.Net, env.Stats, env.Probe}
+
+// settingsTab returns the active settings tab key when on env.Settings, "" otherwise.
+func (s *Shell) settingsTab() string {
+	if s.page != env.Settings {
+		return ""
+	}
+	if sp, ok := s.pages[env.Settings].(*settings.Page); ok {
+		return sp.ActiveTab()
+	}
+	return "general"
 }
 
-// sidebar draws the groups of destinations.
-func (s *Shell) sidebar(c *ui.Context, st model.Status, vib bool) {
-	t := c.Theme()
-	page := string(s.page)
-	item := func(p env.Page) ui.Element {
-		e := ui.SidebarItem(c, string(p), icons[pageIcons[string(p)]], env.Title(p))
-		if p == env.Conns && st.Connections > 0 && st.Core == model.CoreRunning {
-			e.Children(func() {
-				ui.Badge(c, fmt.Sprint(st.Connections)).FontFeatures("tnum")
-			})
-		}
-		if p == env.Capture && s.env.API.CaptureStatus().Enabled {
-			e.Children(func() { ui.Badge(c, i18n.T("解密中")) }) // docs/capture.md §7.2 指示
-		}
-		return e
-	}
-	divider := func() {
-		ui.Box(c).Height(1).Background(t.Border).Margin(6, 8).Shrink(0)
-	}
-	main := ui.Sidebar(c, &page, func() {
-		for i, group := range sidebarGroups {
-			if i > 0 {
-				divider()
-			}
-			for _, p := range group {
-				item(p)
-			}
-		}
-	}).Grow(1).Label(i18n.T("页面"))
-	if vib {
-		main.Background(ui.Transparent)
-	}
-	if main.Changed() {
-		s.navigate(env.Page(page), "")
-	}
-	divider()
-	bottom := ui.Sidebar(c, &page, func() { item(env.Settings) }).Shrink(0).Label(i18n.T("更多"))
-	if vib {
-		bottom.Background(ui.Transparent)
-	}
-	if bottom.Changed() {
-		s.navigate(env.Page(page), "")
-	}
-}
-
-// statusBar is the sidebar's bottom status (docs/design.md §4 table).
-func (s *Shell) statusBar(c *ui.Context, st model.Status) {
+// sidebarHeader draws the macOS traffic-light drag strip and the brand row
+// (Lanflow title + live core dot on the left, settings gear on the right).
+func (s *Shell) sidebarHeader(c *ui.Context, st model.Status, barH float32) {
 	t := c.Theme()
 	k := s.env.Kit
-	bar := env.ClickableColumn(c, i18n.T("状态：回到概览")).Padding(10, 18, 14, 18).Gap(3).Shrink(0)
-	bar.Children(func() {
-		ui.Box(c).Height(1).Background(t.Border).Margin(0, -8, 8, -8)
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			switch st.Core {
-			case model.CoreRunning:
-				k.Dot(c, "green")
-				ui.Text(c, i18n.Tf("运行中 · %s", env.ModeName(st.Mode))).FontSize(12).SingleLine()
-			case model.CoreStarting:
-				ui.Spinner(c).Size(12, 12).Label(i18n.T("启动中"))
-				ui.Text(c, i18n.T("启动中…")).FontSize(12)
-			case model.CoreError:
-				k.Dot(c, "red")
-				ui.Text(c, i18n.T("内核异常")).FontSize(12).TextColor(t.Danger)
-			case model.CoreMissing:
-				k.Dot(c, "red")
-				ui.Text(c, i18n.T("未找到内核")).FontSize(12).TextColor(t.Danger)
-			default:
-				k.Dot(c, "gray")
-				ui.Text(c, i18n.T("未启动")).FontSize(12).TextColor(t.TextMuted)
+	stab := s.settingsTab()
+	// Highlight the gear when on general / dns / sniffer / advanced (tabs
+	// that don't have their own dedicated sidebar card).
+	gearActive := s.page == env.Settings && stab != "proxy" && stab != "tun" && stab != "override" && stab != "kernel"
+
+	ui.Column(c).Shrink(0).Children(func() {
+		if barH > 0 {
+			ui.Box(c).Height(max(barH-24, 26)).FillWidth().DragWindow().Label(i18n.T("标题栏"))
+		}
+		ui.Row(c).Height(40).Padding(0, 10, 4, 14).Gap(6).AlignItems(ui.Center).Children(func() {
+			brand := ui.Row(c).Grow(1).FillHeight().AlignItems(ui.Center).Gap(7)
+			if barH > 0 {
+				brand.DragWindow()
+			}
+			brand.Children(func() {
+				ui.Text(c, "Lanflow").FontSize(18).FontWeight(700).SingleLine()
+				switch st.Core {
+				case model.CoreRunning:
+					k.Dot(c, "green")
+				case model.CoreStarting:
+					ui.Spinner(c).Size(10, 10).Label(i18n.T("启动中"))
+				case model.CoreError, model.CoreMissing:
+					k.Dot(c, "red")
+				default:
+					k.Dot(c, "gray")
+				}
+			})
+
+			setBtn := ui.ButtonBase(c.Key("sb:settings")).Size(32, 32).Radius(8).
+				AlignItems(ui.Center).Justify(ui.Center).
+				Label(i18n.T("设置")).Tooltip(i18n.T("设置 (⌘,)")).Cursor(ui.CursorPointer)
+			if gearActive {
+				setBtn.Background(t.Accent).TextColor(t.AccentText)
+			} else {
+				setBtn.TextColor(t.Text)
+				if setBtn.Hovered() {
+					setBtn.Background(t.SurfaceHover)
+				}
+			}
+			setBtn.Children(func() { k.Icon(c, "settings", 19) })
+			if setBtn.Clicked() {
+				s.navigate(env.Settings, "general")
 			}
 		})
-		if cs := s.env.API.CaptureStatus(); cs.Enabled {
-			// HTTPS decryption on: impossible to miss (docs/capture.md §7.2)
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				k.Dot(c, "orange")
-				// Paused with a reason, hosts, apps and time left run past
-				// the 200 pt sidebar (more so in English): two lines, and
-				// the whole text on hover.
-				txt := capture.StatusText(cs)
-				ui.Text(c, txt).FontSize(11).TextColor(t.Warning).MaxLines(2).Shrink(1).Tooltip(txt)
-			})
+	})
+}
+
+// sidebar draws the scrollable control center.
+func (s *Shell) sidebar(c *ui.Context, st model.Status) {
+	t := c.Theme()
+	k := s.env.Kit
+	busy := st.Core == model.CoreStarting || st.Core == model.CoreMissing
+	stab := s.settingsTab()
+
+	px := s.api.Proxies()
+	subs := s.api.Subscriptions()
+	rules := s.api.Rules()
+	ovs := s.api.OverrideList()
+
+	groupCount := 0
+	for _, g := range px.Groups {
+		if !g.Hidden && g.Name != "GLOBAL" {
+			groupCount++
 		}
-		if st.Core == model.CoreRunning {
-			if st.SystemProxy {
-				ui.Text(c, i18n.T("系统代理已开启")).FontSize(11).TextColor(t.TextMuted).Margin(0, 0, 0, 14)
+	}
+	var curSub *model.Subscription
+	for i := range subs {
+		if subs[i].Current {
+			curSub = &subs[i]
+			break
+		}
+	}
+
+	ui.Scroll(c).Grow(1).Shrink(1).Children(func() {
+		ui.Column(c).Padding(4, 10, 12, 10).Gap(10).Children(func() {
+			// 1. Full-width 3-column pill mode switcher
+			s.modeSwitcher(c, st.Mode)
+
+			// 2. Clickable quick toggle cards: 系统代理 + TUN (click card → 代理设置)
+			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
+				proxyOn := st.Core == model.CoreRunning && st.SystemProxy
+				s.quickToggleCard(c, "sb:sysproxy", "proxies", i18n.T("系统代理"), i18n.T("快捷系统代理开关"), proxyOn, busy, stab == "proxy", func(on bool) {
+					msg := i18n.T("系统代理已关闭")
+					if on {
+						msg = i18n.T("系统代理已开启")
+					}
+					s.env.Run(func() error { return s.api.SetSystemProxy(on) }, msg)
+				}, func() {
+					s.navigate(env.Settings, "proxy")
+				})
+				s.quickToggleCard(c, "sb:tun", "tun", i18n.T("TUN"), i18n.T("快捷 TUN 开关"), st.TUN, busy, stab == "tun", func(on bool) {
+					env.SetTUN(s.env, on)
+				}, func() {
+					s.navigate(env.Settings, "tun")
+				})
+			})
+
+			// 3. Current subscription card
+			if curSub != nil {
+				s.subCard(c, *curSub)
 			}
-			// The active core on one line; a long custom build string is
-			// cut there, its whole text on hover.
-			if v := st.CoreVersion; v != "" {
-				ui.Text(c, "Mihomo "+v).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine().Margin(0, 0, 0, 14).Tooltip("Mihomo " + v)
+
+			// 4. Primary 2-column bento cards: 代理 + 规则
+			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
+				gb := ""
+				if groupCount > 0 {
+					gb = fmt.Sprint(groupCount)
+				}
+				rb := ""
+				if len(rules) > 0 {
+					rb = fmt.Sprint(len(rules))
+				}
+				s.bentoNavCard(c, env.Proxies, gb, t, k)
+				s.bentoNavCard(c, env.Rules, rb, t, k)
+			})
+
+			// 5. 2-column bento cards: 覆写 (Settings › override) + 概览 (3D Exit Globe)
+			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
+				ob := ""
+				if len(ovs) > 0 {
+					ob = fmt.Sprint(len(ovs))
+				}
+				s.bentoActionCard(c, "nav:override", "doc", i18n.T("覆写"), ob, stab == "override", t, k, func() {
+					s.navigate(env.Settings, "override")
+				})
+				s.bentoNavCard(c, env.Overview, "", t, k)
+			})
+
+			// 6. Full-width live-speed Connections card with wave chart
+			s.connsSpeedCard(c, st, t, k)
+
+			// 7. Full-width Core card (version, live memory, one-click restart → Settings › kernel)
+			s.coreCard(c, st, stab == "kernel", busy, t, k)
+
+			// 8. 2-column bento cards: 日志 + 抓包
+			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
+				cb := ""
+				if s.api.CaptureStatus().Enabled {
+					cb = i18n.T("解密中")
+				}
+				s.bentoNavCard(c, env.Logs, "", t, k)
+				s.bentoNavCard(c, env.Capture, cb, t, k)
+			})
+
+			// 9. Capture active warning banner (if decrypting)
+			if cs := s.env.API.CaptureStatus(); cs.Enabled {
+				ui.Row(c).Gap(6).Padding(6, 8).Radius(8).Background(t.Warning.Alpha(0.12)).AlignItems(ui.Center).Children(func() {
+					k.Dot(c, "orange")
+					txt := capture.StatusText(cs)
+					ui.Text(c, txt).FontSize(11.5).TextColor(t.Warning).MaxLines(2).Shrink(1).Tooltip(txt)
+				})
 			}
-			ui.Text(c, "↑ "+env.FmtSpeed(st.Up)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Margin(0, 0, 0, 14)
-			ui.Text(c, "↓ "+env.FmtSpeed(st.Down)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Margin(0, 0, 0, 14)
+
+			// 10. Compact 3-pill strip for lower-frequency diagnostic tools: 网络 / 统计 / 检测
+			ui.Row(c).Gap(6).AlignItems(ui.Stretch).Children(func() {
+				for _, p := range sidebarSecondaryPages {
+					s.compactToolPill(c, p, t, k)
+				}
+			})
+		})
+	})
+}
+
+// modeSwitcher is a full-width 3-equal-column segmented pill.
+func (s *Shell) modeSwitcher(c *ui.Context, cur model.Mode) {
+	t := c.Theme()
+	labels := [3]string{i18n.T("规则"), i18n.T("全局"), i18n.T("直连")}
+	ui.Row(c.Key("sb:mode")).Padding(3).Gap(3).Radius(12).
+		Background(t.Background).Border(1, t.Border.Alpha(0.55)).
+		AlignItems(ui.Center).Children(func() {
+		for i, m := range sidebarModes {
+			active := cur == m
+			btn := ui.ButtonBase(c.Key("sb:mode:"+string(m))).Grow(1).Basis(0).Height(32).Radius(9).
+				AlignItems(ui.Center).Justify(ui.Center).
+				Label(labels[i]).Cursor(ui.CursorPointer)
+			if active {
+				btn.Background(t.Accent)
+			} else if btn.Hovered() {
+				btn.Background(t.SurfaceHover)
+			}
+			btn.Children(func() {
+				txt := ui.Text(c, labels[i]).FontSize(13.5).FontWeight(500).SingleLine()
+				if active {
+					txt.TextColor(t.AccentText).FontWeight(600)
+				} else {
+					txt.TextColor(t.TextMuted)
+				}
+			})
+			if btn.Clicked() && !active {
+				mode := m
+				s.env.Run(func() error { return s.api.SetMode(mode) }, i18n.Tf("已切换到%s模式", env.ModeName(mode)))
+			}
 		}
 	})
-	if bar.Clicked() {
-		s.navigate(env.Overview, "")
+}
+
+func (s *Shell) quickToggleCard(c *ui.Context, key, icon, title, switchLabel string, on, busy, active bool, onToggle func(bool), onOpen func()) {
+	t := c.Theme()
+	k := s.env.Kit
+	card := ui.ButtonBase(c.Key(key)).Column().Grow(1).Basis(0).
+		Padding(10, 12).Gap(10).Radius(14).
+		AlignItems(ui.Start).Label(title).Cursor(ui.CursorPointer)
+	if active {
+		card.Background(t.Accent).Border(1, t.Accent)
+	} else if on {
+		card.Background(t.Accent.Alpha(0.08)).Border(1.5, t.Accent.Alpha(0.80))
+		if card.Hovered() {
+			card.Background(t.Accent.Alpha(0.13))
+		}
+	} else {
+		card.Background(t.Background).Border(1, t.Border.Alpha(0.55))
+		if card.Hovered() {
+			card.Background(t.SurfaceHover)
+		}
+	}
+	card.Children(func() {
+		ui.Row(c).AlignItems(ui.Center).FillWidth().Children(func() {
+			ic := ui.Box(c).TextColor(t.Text)
+			if active {
+				ic.TextColor(t.AccentText)
+			} else if on {
+				ic.TextColor(t.Accent)
+			}
+			ic.Children(func() { k.Icon(c, icon, 22) })
+			ui.Spacer(c)
+			swWrap := ui.Box(c).Radius(999)
+			if active {
+				if on {
+					swWrap.Padding(1).Border(1.5, t.AccentText.Alpha(0.92))
+				} else {
+					swWrap.Padding(1).Border(1.5, t.AccentText.Alpha(0.45))
+				}
+			}
+			swWrap.Children(func() {
+				v := on
+				ui.Switch(c, &v).Label(switchLabel).Disabled(busy).OnChange(func() { onToggle(v) })
+			})
+		})
+		lbl := ui.Text(c, title).FontSize(14.5).FontWeight(600).SingleLine()
+		if active {
+			lbl.TextColor(t.AccentText)
+		}
+	})
+	if card.Clicked() && onOpen != nil {
+		onOpen()
 	}
 }
 
-// shortcuts are ⌘1–⌘9 for the nine pages of the sidebar's groups and ⌘,
-// for settings.
+func (s *Shell) subCard(c *ui.Context, sub model.Subscription) {
+	t := c.Theme()
+	k := s.env.Kit
+	active := s.page == env.Subs
+	card := env.ClickableColumn(c.Key("sb:sub:"+sub.ID), i18n.Tf("当前订阅 %s，点击管理订阅", sub.Name)).
+		Padding(11, 12).Gap(8).Radius(14)
+	if active {
+		card.Background(t.Accent).Border(1, t.Accent)
+	} else {
+		card.Background(t.Background).Border(1, t.Border.Alpha(0.55))
+		if card.Hovered() {
+			card.Background(t.SurfaceHover)
+		}
+	}
+	card.Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Gap(6).FillWidth().Children(func() {
+			name := ui.Text(c, sub.Name).FontSize(15).FontWeight(700).SingleLine().Grow(1).Shrink(1).Tooltip(sub.Name)
+			if active {
+				name.TextColor(t.AccentText)
+			}
+			if sub.Source == "url" {
+				ref := ui.ButtonBase(c.Key("sb:sub:refresh")).Size(26, 26).Radius(6).
+					AlignItems(ui.Center).Justify(ui.Center).
+					Label(i18n.T("更新当前订阅")).Tooltip(i18n.T("更新当前订阅")).
+					Cursor(ui.CursorPointer)
+				if active {
+					ref.TextColor(t.AccentText)
+					if ref.Hovered() {
+						ref.Background(t.AccentText.Alpha(0.20))
+					}
+				} else {
+					ref.TextColor(t.Text)
+					if ref.Hovered() {
+						ref.Background(t.Accent.Alpha(0.15))
+					}
+				}
+				ref.Children(func() {
+					if sub.Updating {
+						ui.Spinner(c).Size(13, 13)
+					} else {
+						k.Icon(c, "refresh", 16)
+					}
+				})
+				if ref.Clicked() && !sub.Updating {
+					id := sub.ID
+					s.env.Run(func() error { return s.api.UpdateSubscription(id) }, i18n.T("订阅已更新"))
+				}
+			}
+		})
+		if sub.Total > 0 {
+			used := sub.Upload + sub.Download
+			frac := min(1.0, float64(used)/float64(sub.Total))
+			ui.Row(c).AlignItems(ui.Center).Gap(4).FillWidth().Children(func() {
+				u := ui.Text(c, fmt.Sprintf("%s / %s GB", env.FmtGB(used), env.FmtGB(sub.Total))).
+					FontSize(12).FontFeatures("tnum").SingleLine().Grow(1).Shrink(1)
+				if active {
+					u.TextColor(t.AccentText.Alpha(0.85))
+				} else {
+					u.TextColor(t.TextMuted)
+				}
+				if !sub.Expire.IsZero() {
+					ex := ui.Text(c, sub.Expire.Format("01-02")).FontSize(11).FontFeatures("tnum").SingleLine().Shrink(0)
+					if active {
+						ex.TextColor(t.AccentText.Alpha(0.85))
+					} else {
+						ex.TextColor(t.TextMuted)
+					}
+				}
+			})
+			ui.Progress(c, frac).FillWidth().Height(5).Label(i18n.T("订阅流量"))
+		} else if !sub.Expire.IsZero() {
+			ex := ui.Text(c, i18n.Tf("到期 %s", sub.Expire.Format("2006-01-02"))).FontSize(12).SingleLine()
+			if active {
+				ex.TextColor(t.AccentText.Alpha(0.85))
+			} else {
+				ex.TextColor(t.TextMuted)
+			}
+		}
+	})
+	if card.Clicked() {
+		s.navigate(env.Subs, "")
+	}
+}
+
+func (s *Shell) bentoNavCard(c *ui.Context, p env.Page, badge string, t *ui.Theme, k env.Kit) {
+	s.bentoActionCard(c, "nav:"+string(p), pageIcons[string(p)], env.Title(p), badge, s.page == p, t, k, func() {
+		s.navigate(p, "")
+	})
+}
+
+func (s *Shell) bentoActionCard(c *ui.Context, key, icon, title, badge string, active bool, t *ui.Theme, k env.Kit, onClick func()) {
+	btn := ui.ButtonBase(c.Key(key)).Column().Grow(1).Basis(0).
+		Padding(10, 12).Gap(10).Radius(14).AlignItems(ui.Start).
+		Label(title).Cursor(ui.CursorPointer)
+	if active {
+		btn.Background(t.Accent).Border(1, t.Accent)
+	} else {
+		btn.Background(t.Background).Border(1, t.Border.Alpha(0.55))
+		if btn.Hovered() {
+			btn.Background(t.SurfaceHover)
+		}
+	}
+	btn.Children(func() {
+		ui.Row(c).AlignItems(ui.Center).FillWidth().Children(func() {
+			ic := ui.Box(c).TextColor(t.Text)
+			if active {
+				ic.TextColor(t.AccentText)
+			}
+			ic.Children(func() { k.Icon(c, icon, 22) })
+			ui.Spacer(c)
+			if badge != "" {
+				b := ui.Box(c).Padding(1, 8).Radius(10)
+				if active {
+					b.Background(t.AccentText.Alpha(0.20)).Border(1, t.AccentText.Alpha(0.45))
+					b.Children(func() {
+						ui.Text(c, badge).FontSize(11).FontWeight(600).TextColor(t.AccentText).FontFeatures("tnum").SingleLine()
+					})
+				} else {
+					b.Background(t.Background).Border(1, t.Accent.Alpha(0.60))
+					b.Children(func() {
+						ui.Text(c, badge).FontSize(11).FontWeight(600).TextColor(t.Accent).FontFeatures("tnum").SingleLine()
+					})
+				}
+			}
+		})
+		lbl := ui.Text(c, title).FontSize(14.5).FontWeight(600).SingleLine()
+		if active {
+			lbl.TextColor(t.AccentText)
+		}
+	})
+	if btn.Clicked() && onClick != nil {
+		onClick()
+	}
+}
+
+// connsSpeedCard is a full-width card showing active connections, live
+// upload/download speed, and a subtle Clash Party–style real-time traffic
+// wave drawn behind the card content.
+func (s *Shell) connsSpeedCard(c *ui.Context, st model.Status, t *ui.Theme, k env.Kit) {
+	active := s.page == env.Conns
+	title := env.Title(env.Conns)
+	_, rawDown := s.api.TrafficHistory()
+	btn := ui.ButtonBase(c.Key("nav:conns")).FillWidth().
+		Radius(14).Clip().Label(title).Cursor(ui.CursorPointer)
+	if active {
+		btn.Background(t.Accent).Border(1, t.Accent)
+	} else {
+		btn.Background(t.Background).Border(1, t.Border.Alpha(0.55))
+		if btn.Hovered() {
+			btn.Background(t.SurfaceHover)
+		}
+	}
+	btn.Children(func() {
+		// Background live traffic wave: smoothed last 20 samples in lower half
+		// so it looks fluid like Clash Party without jagged spikes over text.
+		if st.Core == model.CoreRunning && len(rawDown) >= 2 {
+			src := rawDown
+			if len(src) > 20 {
+				src = src[len(src)-20:]
+			}
+			smooth := make([]float64, len(src))
+			for i := range src {
+				sum := float64(src[i])
+				cnt := 1.0
+				if i > 0 {
+					sum += float64(src[i-1])
+					cnt++
+				}
+				if i+1 < len(src) {
+					sum += float64(src[i+1])
+					cnt++
+				}
+				smooth[i] = sum / cnt
+			}
+			waveFill := t.Accent.Alpha(0.09)
+			waveStroke := t.Accent.Alpha(0.28)
+			if active {
+				waveFill = t.AccentText.Alpha(0.14)
+				waveStroke = t.AccentText.Alpha(0.35)
+			}
+			ui.Box(c).Absolute().Fill().Draw(func(p *ui.Painter, r ui.Rect) {
+				if r.W <= 0 || r.H <= 0 || len(smooth) < 2 {
+					return
+				}
+				peak := 1024.0
+				for _, v := range smooth {
+					if v > peak {
+						peak = v
+					}
+				}
+				var line, area ui.Path
+				n := len(smooth)
+				for i, v := range smooth {
+					x := r.X + r.W*float32(i)/float32(n-1)
+					y := r.Y + r.H - r.H*0.48*float32(v/peak)
+					if i == 0 {
+						line.MoveTo(x, y)
+						area.MoveTo(x, r.Y+r.H)
+						area.LineTo(x, y)
+					} else {
+						line.LineTo(x, y)
+						area.LineTo(x, y)
+					}
+				}
+				area.LineTo(r.X+r.W, r.Y+r.H)
+				area.Close()
+				p.FillPath(&area, waveFill)
+				p.StrokePath(&line, 1.4, waveStroke)
+			})
+		}
+
+		// Foreground card content: Clash Party 2-row rhythm (icon + speeds on top, title + count on bottom)
+		ui.Column(c).FillWidth().Padding(10, 12).Gap(8).AlignItems(ui.Start).Children(func() {
+			ui.Row(c).FillWidth().AlignItems(ui.Start).Children(func() {
+				ic := ui.Box(c).TextColor(t.Text).Padding(2, 0, 0, 0)
+				if active {
+					ic.TextColor(t.AccentText)
+				}
+				ic.Children(func() { k.Icon(c, "conns", 22) })
+				ui.Spacer(c)
+				ui.Column(c).Gap(3).AlignItems(ui.End).Children(func() {
+					if st.Core == model.CoreRunning {
+						up := ui.Text(c, env.FmtSpeed(st.Up)+" ↑").FontSize(13).FontWeight(500).FontFeatures("tnum").SingleLine()
+						dn := ui.Text(c, env.FmtSpeed(st.Down)+" ↓").FontSize(13).FontWeight(500).FontFeatures("tnum").SingleLine()
+						if active {
+							up.TextColor(t.AccentText)
+							dn.TextColor(t.AccentText)
+						} else {
+							up.TextColor(t.TextMuted)
+							dn.TextColor(t.Text)
+						}
+					} else {
+						statusTxt := i18n.T("未启动")
+						if st.Core == model.CoreStarting {
+							statusTxt = i18n.T("启动中…")
+						} else if st.Core == model.CoreError {
+							statusTxt = i18n.T("内核异常")
+						} else if st.Core == model.CoreMissing {
+							statusTxt = i18n.T("未找到内核")
+						}
+						txt := ui.Text(c, statusTxt).FontSize(13).SingleLine()
+						if active {
+							txt.TextColor(t.AccentText)
+						} else {
+							txt.TextColor(t.TextMuted)
+						}
+					}
+				})
+			})
+			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+				lbl := ui.Text(c, title).FontSize(15).FontWeight(600).SingleLine()
+				if active {
+					lbl.TextColor(t.AccentText)
+				}
+				ui.Spacer(c)
+				if st.Connections > 0 && st.Core == model.CoreRunning {
+					b := ui.Box(c).Padding(1, 8).Radius(10)
+					if active {
+						b.Background(t.AccentText.Alpha(0.20)).Border(1, t.AccentText.Alpha(0.45))
+						b.Children(func() {
+							ui.Text(c, fmt.Sprint(st.Connections)).FontSize(11.5).FontWeight(600).TextColor(t.AccentText).FontFeatures("tnum").SingleLine()
+						})
+					} else {
+						b.Background(t.Background).Border(1, t.Accent.Alpha(0.60))
+						b.Children(func() {
+							ui.Text(c, fmt.Sprint(st.Connections)).FontSize(11.5).FontWeight(600).TextColor(t.Accent).FontFeatures("tnum").SingleLine()
+						})
+					}
+				}
+			})
+		})
+	})
+	if btn.Clicked() {
+		s.navigate(env.Conns, "")
+	}
+}
+
+// coreCard matches Clash Party's 2-row mihomo-core card:
+// top row: version (left) + restart button (right);
+// bottom row: 「内核设置」 (left) + live memory (right).
+func (s *Shell) coreCard(c *ui.Context, st model.Status, active, busy bool, t *ui.Theme, k env.Kit) {
+	card := ui.ButtonBase(c.Key("nav:kernel")).Column().FillWidth().
+		Padding(10, 12).Gap(8).Radius(14).AlignItems(ui.Start).
+		Label(i18n.T("内核")).Cursor(ui.CursorPointer)
+	if active {
+		card.Background(t.Accent).Border(1, t.Accent)
+	} else {
+		card.Background(t.Background).Border(1, t.Border.Alpha(0.55))
+		if card.Hovered() {
+			card.Background(t.SurfaceHover)
+		}
+	}
+	card.Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+			ver := i18n.T("未启动")
+			if st.Core == model.CoreRunning {
+				if st.CoreVersion != "" {
+					ver = st.CoreVersion
+				} else {
+					ver = i18n.T("运行中")
+				}
+			} else if st.Core == model.CoreStarting {
+				ver = i18n.T("启动中…")
+			} else if st.Core == model.CoreError {
+				ver = i18n.T("内核异常")
+			} else if st.Core == model.CoreMissing {
+				ver = i18n.T("未找到内核")
+			}
+			verTxt := ui.Text(c, ver).FontSize(14.5).FontWeight(600).FontFeatures("tnum").SingleLine().Shrink(1)
+			if active {
+				verTxt.TextColor(t.AccentText)
+			}
+			ui.Spacer(c)
+			rst := ui.ButtonBase(c.Key("sb:core:restart")).Size(28, 28).Radius(7).
+				AlignItems(ui.Center).Justify(ui.Center).
+				Label(i18n.T("重启内核")).Tooltip(i18n.T("重启内核")).
+				Disabled(busy).Cursor(ui.CursorPointer)
+			if active {
+				rst.TextColor(t.AccentText)
+				if rst.Hovered() {
+					rst.Background(t.AccentText.Alpha(0.20))
+				}
+			} else {
+				rst.TextColor(t.Text)
+				if rst.Hovered() {
+					rst.Background(t.SurfaceHover)
+				}
+			}
+			rst.Children(func() { k.Icon(c, "refresh", 17) })
+			if rst.Clicked() {
+				s.env.Run(func() error { return s.api.RestartCore() }, i18n.T("内核已重启"))
+			}
+		})
+		ui.Spacer(c)
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+			lbl := ui.Text(c, i18n.T("内核设置")).FontSize(15).FontWeight(600).SingleLine()
+			if active {
+				lbl.TextColor(t.AccentText)
+			}
+			ui.Spacer(c)
+			if st.Core == model.CoreRunning && st.Memory > 0 {
+				mem := ui.Text(c, env.FmtBytes(st.Memory)).FontSize(14).FontWeight(600).FontFeatures("tnum").SingleLine()
+				if active {
+					mem.TextColor(t.AccentText)
+				} else {
+					mem.TextColor(t.TextMuted)
+				}
+			}
+		})
+	})
+	if card.Clicked() {
+		s.navigate(env.Settings, "kernel")
+	}
+}
+
+// compactToolPill renders a low-frequency diagnostic page in a 3-column bottom strip.
+func (s *Shell) compactToolPill(c *ui.Context, p env.Page, t *ui.Theme, k env.Kit) {
+	active := s.page == p
+	title := env.Title(p)
+	btn := ui.ButtonBase(c.Key("nav:"+string(p))).Row().Grow(1).Basis(0).
+		Padding(7, 6).Gap(5).Radius(10).AlignItems(ui.Center).Justify(ui.Center).
+		Label(title).Cursor(ui.CursorPointer)
+	if active {
+		btn.Background(t.Accent).Border(1, t.Accent)
+	} else {
+		btn.Background(t.Background).Border(1, t.Border.Alpha(0.55))
+		if btn.Hovered() {
+			btn.Background(t.SurfaceHover)
+		}
+	}
+	btn.Children(func() {
+		ic := ui.Box(c).TextColor(t.TextMuted)
+		if active {
+			ic.TextColor(t.AccentText)
+		}
+		ic.Children(func() { k.Icon(c, pageIcons[string(p)], 14) })
+		lbl := ui.Text(c, title).FontSize(12).FontWeight(500).SingleLine()
+		if active {
+			lbl.TextColor(t.AccentText).FontWeight(600)
+		} else {
+			lbl.TextColor(t.TextMuted)
+		}
+	})
+	if btn.Clicked() {
+		s.navigate(p, "")
+	}
+}
+
+// shortcuts are ⌘1–⌘9 for the nine pages and ⌘, for settings.
 func (s *Shell) shortcuts(c *ui.Context) {
 	for i, p := range env.Order[:9] {
 		if c.Shortcut(ui.Cmd, ui.Key1+ui.Key(i)) {

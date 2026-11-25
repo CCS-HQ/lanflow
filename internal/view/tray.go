@@ -81,9 +81,7 @@ func startTray(h host) (*tray, error) {
 		tr.icons = nil
 		tr.mu.Unlock()
 		tr.drawIcon(true)
-		if runtime.GOOS == "windows" {
-			tr.refresh(true)
-		}
+		tr.refresh(true)
 	})
 	if runtime.GOOS == "windows" {
 		// Left click opens the window, right click the menu.
@@ -420,19 +418,56 @@ func (tr *tray) modeItems(st model.Status) []*mygo.MenuItem {
 	return out
 }
 
+func delayBadgeColors(delay int, dark bool) (bg, fg string) {
+	switch {
+	case delay < 0 || delay >= 600:
+		if dark {
+			return "#ff453a3d", "#ff6961"
+		}
+		return "#ff3b302e", "#cd2218"
+	case delay >= 300:
+		if dark {
+			return "#ff9f0a3d", "#ffb340"
+		}
+		return "#ff9f0a38", "#b25e00"
+	default:
+		if dark {
+			return "#30d1583d", "#5ae07c"
+		}
+		return "#34c75933", "#188038"
+	}
+}
+
 func (tr *tray) nodeItems(g model.ProxyGroup, px model.ProxySnapshot) []*mygo.MenuItem {
 	h := tr.h
+	dark := tr.t != nil && tr.t.Dark()
+	seen := make(map[string]struct{}, len(g.All))
 	var out []*mygo.MenuItem
 	for _, n := range g.All {
-		name := n
-		label := n
-		if p, ok := px.Proxies[n]; ok && p.Delay != 0 {
-			label = n + "  " + env.FmtDelay(p.Delay, false)
+		if _, dup := seen[n]; dup {
+			continue
 		}
-		out = append(out, &mygo.MenuItem{Label: label, Type: mygo.MenuItemRadio, Checked: g.Now == n, Disabled: g.Type != model.GroupSelect,
+		seen[n] = struct{}{}
+		name := n
+		item := &mygo.MenuItem{
+			Label:    n,
+			Type:     mygo.MenuItemRadio,
+			Checked:  g.Now == n,
+			Disabled: g.Type != model.GroupSelect,
+			KeepOpen: true,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				h.runJob(func() error { return h.hostAPI().SelectProxy(g.Name, name) }, i18n.Tf("已切换到 %s", name))
-			}})
+			},
+		}
+		if p, ok := px.Proxies[n]; ok && p.Delay != 0 {
+			bg, fg := delayBadgeColors(p.Delay, dark)
+			item.Badge = env.FmtDelay(p.Delay, false)
+			item.BadgeAlign = mygo.BadgeAlignRight
+			item.BadgeShape = mygo.BadgeShapePill
+			item.BadgeColor = bg
+			item.BadgeTextColor = fg
+		}
+		out = append(out, item)
 	}
 	return out
 }
@@ -462,7 +497,8 @@ func (tr *tray) setTitle(st model.Status) {
 	tr.mu.Lock()
 	node := tr.node
 	tr.mu.Unlock()
-	title := trayart.Title(st, node, tr.h.hostAPI().Settings())
+	set := tr.h.hostAPI().Settings()
+	title := trayart.TitleForBar(st, node, set, true)
 	tr.mu.Lock()
 	same := title == tr.title
 	tr.title = title
@@ -472,17 +508,23 @@ func (tr *tray) setTitle(st model.Status) {
 	}
 }
 
-// updateGraph refreshes the traffic graph in the icon (macOS, when turned
-// on in settings) and redraws the icon if anything it shows changed.
+// updateGraph refreshes the traffic graph and compact 2-line speed in the
+// icon (macOS) and redraws the icon if anything it shows changed.
 func (tr *tray) updateGraph() {
 	api := tr.h.hostAPI()
+	set := api.Settings()
 	var graph []float64
-	if tr.h.mac() && api.Settings().TrayGraph {
-		up, down := api.TrafficHistory()
-		graph = trayart.Graph(up, down)
+	var speed [2]string
+	if tr.h.mac() {
+		if set.TrayGraph {
+			up, down := api.TrafficHistory()
+			graph = trayart.Graph(up, down)
+		}
+		speed = trayart.SpeedLinesFor(api.Status(), set)
 	}
 	tr.mu.Lock()
 	tr.look.Graph = graph
+	tr.look.SpeedLines = speed
 	tr.mu.Unlock()
 	tr.drawIcon(false)
 }

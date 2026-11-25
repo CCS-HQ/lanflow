@@ -76,7 +76,7 @@ func TestATrustDialogSaves(t *testing.T) {
 	e, r := testEnv(f)
 	p := New(e)
 	tt := ui.NewTester(p.View, 1000, 900)
-	if err := tt.Click("代理"); err != nil {
+	if err := tt.Click("TUN"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.Click("配置…"); err != nil {

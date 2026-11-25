@@ -72,7 +72,8 @@ func (c *englishChecker) menu(where string, items []*mygo.MenuItem) {
 func TestEnglishUIHasNoChinese(t *testing.T) {
 	i18n.SetLang(i18n.EN)
 	t.Cleanup(func() { i18n.SetLang(i18n.ZH) })
-	api, s, tt := newTest(t)
+	api, s, _ := newTest(t)
+	tt := ui.NewTester(s.View, 1180, 900)
 	// The language selector names Chinese in Chinese, by design.
 	c := &englishChecker{t: t, data: append(api.DataStrings(), i18n.Autonym(i18n.ZH)), seen: map[string]bool{}}
 	tt.SetTitleBar(ui.TitleBar{Height: 52})
@@ -130,7 +131,7 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	click(t, tt, i18n.T("导出…"))
 	c.frame("export dialog", tt)
 	click(t, tt, i18n.T("取消"))
-	s.navigate(env.Settings, "proxy")
+	s.navigate(env.Settings, "tun")
 	tt.Frame()
 	if info, ok := tt.AccessByRole(ui.RoleSwitch, i18n.T("TUN 模式（增强模式）")); ok {
 		tt.ClickAt(info.Bounds.X+info.Bounds.W/2, info.Bounds.Y+info.Bounds.H/2)
@@ -267,7 +268,8 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 // title to follow without a restart.
 func TestLanguageSettingAppliesAtOnce(t *testing.T) {
 	t.Cleanup(func() { i18n.SetLang(i18n.ZH) })
-	api, s, tt := newTest(t)
+	api, s, _ := newTest(t)
+	tt := ui.NewTester(s.View, 1180, 900)
 	s.navigate(env.Settings, "general")
 	tt.Frame()
 	if !tt.HasText("语言") || !tt.HasText("简体中文") {
@@ -287,7 +289,7 @@ func TestLanguageSettingAppliesAtOnce(t *testing.T) {
 	}
 	s.navigate(env.Overview, "")
 	tt.Frame()
-	if !tt.HasText("Overview") || !tt.HasText("Running · Rule") {
+	if !tt.HasText("Overview") || !tt.HasText("Current Exit") {
 		t.Fatalf("overview not in English: %q", tt.Texts())
 	}
 	// The selector names each language in itself.

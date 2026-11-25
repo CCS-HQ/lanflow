@@ -6,7 +6,6 @@ func init() {
 		// internal/view/proxies/page.go
 		"搜索节点":   "Search nodes",
 		"网格":     "Grid",
-		"视图":     "View",
 		"排序":     "Sort",
 		"默认顺序":   "Default Order",
 		"按延迟":    "By Latency",
@@ -26,7 +25,6 @@ func init() {
 		"负载均衡":                    "Load Balance",
 		"链式代理":                    "Relay",
 		"主代理组":                    "Main group",
-		"%s · 当前 %s":              "%s · now %s",
 		"%s · %d 个匹配":             "%s · %d matches",
 		"%s · %d 个匹配|one":         "%s · %d match",
 		"测速 %s":                   "Test latency of %s",

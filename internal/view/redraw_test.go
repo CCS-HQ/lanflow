@@ -17,6 +17,7 @@ func TestDataRedrawsAreRateLimited(t *testing.T) {
 	api := fake.NewInstant()
 	s := New(api, Options{Mac: true, Sync: true})
 	defer s.Close()
+	s.navigate(env.Overview, "")
 	var mu sync.Mutex
 	frames := 0
 	s.invalidate = func() { mu.Lock(); frames++; mu.Unlock() }
@@ -66,6 +67,7 @@ func TestPageTopics(t *testing.T) {
 	api := fake.NewInstant()
 	s := New(api, Options{Mac: true, Sync: true})
 	defer s.Close()
+	s.navigate(env.Overview, "")
 	if !s.wants(app.TopicTraffic) || s.wants(app.TopicLogs) {
 		t.Fatal("概览 reads traffic, not logs")
 	}

@@ -52,14 +52,14 @@ func (kit) Header(c *ui.Context, title, subtitle string, tools func()) {
 // separated by hairlines.
 func (kit) Section(c *ui.Context, title, note string, body func()) {
 	t := c.Theme()
-	ui.Column(c).Gap(6).Shrink(0).Children(func() {
+	ui.Column(c).Gap(8).Shrink(0).Children(func() {
 		if title != "" || note != "" {
-			ui.Row(c).Gap(8).AlignItems(ui.Baseline).Padding(0, 4).Children(func() {
+			ui.Column(c).Gap(3).Padding(0, 4).Children(func() {
 				if title != "" {
-					ui.Text(c, title).FontSize(13).FontWeight(600).SingleLine().Shrink(0)
+					ui.Text(c, title).FontSize(14).FontWeight(600).SingleLine()
 				}
 				if note != "" {
-					ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).Shrink(1)
+					ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
 				}
 			})
 		}
@@ -71,18 +71,18 @@ func (kit) Section(c *ui.Context, title, note string, body func()) {
 // children are separated by hairlines.
 func GroupBox(c *ui.Context) ui.Element {
 	t := c.Theme()
-	return ui.Column(c).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Dividers(1, t.Border)
+	return ui.Column(c).Radius(12).Background(t.Surface).Border(1, t.Border.Alpha(0.65)).Clip().Dividers(1, t.Border.Alpha(0.65))
 }
 
 // Row draws one settings-style row: label (+ muted description) on the
 // left, control on the right.
 func (kit) Row(c *ui.Context, label, desc string, control func()) {
 	t := c.Theme()
-	ui.Row(c).MinHeight(40).Padding(6, 12).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Column(c).Gap(2).Shrink(1).Children(func() {
-			ui.Text(c, label).FontSize(13)
+	ui.Row(c).MinHeight(48).Padding(10, 16).Gap(16).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Gap(3).Shrink(1).Children(func() {
+			ui.Text(c, label).FontSize(13.5).FontWeight(500)
 			if desc != "" {
-				ui.Text(c, desc).FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, desc).FontSize(12).TextColor(t.TextMuted)
 			}
 		})
 		ui.Spacer(c)

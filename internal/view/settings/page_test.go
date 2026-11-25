@@ -137,7 +137,7 @@ func TestTUNHelperFlow(t *testing.T) {
 	e, r := testEnv(f)
 	p := New(e)
 	tt := ui.NewTester(p.View, 1000, 800)
-	if err := tt.Click("代理"); err != nil {
+	if err := tt.Click("TUN"); err != nil {
 		t.Fatal(err)
 	}
 	clickRole(t, tt, ui.RoleSwitch, "TUN 模式（增强模式）")
@@ -557,7 +557,7 @@ func TestAppUpdateFlow(t *testing.T) {
 	p2 := New(e)
 	bad := &fakeUpdate{version: "0.3.0", installErr: errors.New("signature mismatch")}
 	p2.SetUpdater(&fakeUpdater{enabled: true, up: bad}, func() { t.Fatal("relaunched after a failed install") })
-	tt2 := ui.NewTester(p2.View, 1000, 1200)
+	tt2 := ui.NewTester(p2.View, 1000, 1500)
 	if err := tt2.Click("检查更新"); err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +595,7 @@ func TestAppUpdateFlow(t *testing.T) {
 	// An idle page explains the choice.
 	p5 := New(e)
 	p5.SetUpdater(&fakeUpdater{enabled: true}, nil)
-	tt5 := ui.NewTester(p5.View, 1000, 1200)
+	tt5 := ui.NewTester(p5.View, 1000, 1500)
 	if !tt5.HasText("不会自动检查，可随时手动检查") {
 		t.Fatalf("auto check off: %q", tt5.Texts())
 	}

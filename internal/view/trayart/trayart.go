@@ -6,12 +6,21 @@ package trayart
 import (
 	"bytes"
 	"fmt"
+	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"math"
+	"os"
 	"strings"
+	"sync"
 
 	"github.com/egoist/mygo/ui"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/font/sfnt"
+	"golang.org/x/image/math/fixed"
 
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -36,15 +45,20 @@ const (
 
 // Look is everything the icon shows.
 type Look struct {
-	State   State
-	TUN     bool      // TUN mode active: drawn in a distinct colour
-	Capture bool      // HTTPS decryption on
-	Graph   []float64 // nil = no graph; else bar heights 0..1, oldest first
+	State      State
+	TUN        bool      // TUN mode active: drawn in a distinct colour
+	Capture    bool      // HTTPS decryption on
+	Graph      []float64 // nil = no graph; else bar heights 0..1, oldest first
+	SpeedLines [2]string // optional 2-line stacked speed (macOS compact bar: [0]=up, [1]=down)
+}
+
+func (l Look) hasSpeed() bool {
+	return l.SpeedLines[0] != "" || l.SpeedLines[1] != ""
 }
 
 func (l Look) Key() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d|%v|%v|%v|", l.State, l.TUN, l.Capture, l.Graph != nil)
+	fmt.Fprintf(&b, "%d|%v|%v|%v|%s|%s|", l.State, l.TUN, l.Capture, l.Graph != nil, l.SpeedLines[0], l.SpeedLines[1])
 	for _, v := range l.Graph {
 		fmt.Fprintf(&b, "%.2f,", v)
 	}
@@ -63,20 +77,32 @@ type Ink struct {
 }
 
 const (
-	waveWidth = "1.6"
+	waveWidth = "1.4"
 	faint     = 0.32 // opacity of an inactive wave
 	GraphBars = 8
 	// graphLevels is how many heights above zero a bar of the graph takes.
 	graphLevels = 10
-	graphW      = 20.8 // the graph's width in points, after a 3-point gap
+	graphW      = 18.0 // the graph's width in points, after a 2.5-point gap
+	// speedW is the 2-line stacked speed block width in points (at 2× = 86px,
+	// matching Clash Party's 18px-font 2-line macOS menu bar layout).
+	speedW = 43.0
 )
 
-// The waves; the top one in full, and cut short to leave room for a badge.
+func iconWidth(l Look) float64 {
+	w := 18.0
+	if l.Graph != nil {
+		w += 3 + graphW
+	}
+	return w
+}
+
+// The waves, inset to a ~14pt visual footprint inside the 18pt macOS status
+// item frame (matching Clash Party's 16pt tray icon).
 const (
-	waveTop    = "M2 5.5c2.3-2 4.7-2 7 0s4.7 2 7 0"
-	waveTopCut = "M2 5.5c2.3-2 4.7-2 7 0"
-	waveMid    = "M2 9.5c2.3-2 4.7-2 7 0s4.7 2 7 0"
-	waveBottom = "M2 13.5c2.3-2 4.7-2 7 0s4.7 2 7 0"
+	waveTop    = "M3.4 6c1.9-1.5 3.7-1.5 5.6 0s3.7 1.5 5.6 0"
+	waveTopCut = "M3.4 6c1.9-1.5 3.7-1.5 5.6 0"
+	waveMid    = "M3.4 9.2c1.9-1.5 3.7-1.5 5.6 0s3.7 1.5 5.6 0"
+	waveBottom = "M3.4 12.4c1.9-1.5 3.7-1.5 5.6 0s3.7 1.5 5.6 0"
 )
 
 func waveOpacity(state State) [3]float64 {
@@ -90,12 +116,9 @@ func waveOpacity(state State) [3]float64 {
 	}
 }
 
-// SVG is the icon as SVG in points (18 tall).
+// SVG is the icon (waves and optional traffic graph) as SVG in points (18 tall).
 func SVG(l Look) string {
-	w := 18.0
-	if l.Graph != nil {
-		w += 3 + graphW
-	}
+	w := iconWidth(l)
 	op := waveOpacity(l.State)
 	badge := l.Capture || l.State == Error
 	top := waveTop
@@ -136,6 +159,91 @@ func SVG(l Look) string {
 	return b.String()
 }
 
+var (
+	speedFaceOnce sync.Once
+	speedFaceMu   sync.Mutex
+	speedFace     font.Face
+)
+
+func loadTTCFont(path, fullName string) *sfnt.Font {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	col, err := opentype.ParseCollection(raw)
+	if err != nil {
+		return nil
+	}
+	var buf sfnt.Buffer
+	for i := 0; i < col.NumFonts(); i++ {
+		f, err := col.Font(i)
+		if err != nil {
+			continue
+		}
+		if name, err := f.Name(&buf, sfnt.NameIDFull); err == nil && name == fullName {
+			return f
+		}
+	}
+	return nil
+}
+
+func getSpeedFace() font.Face {
+	speedFaceOnce.Do(func() {
+		// Prefer macOS Helvetica Neue Medium (crisp medium weight matching
+		// Clash Party's 2-line menu bar indicator), falling back to Arial Bold
+		// and embedded Go Bold on non-macOS systems.
+		ft := loadTTCFont("/System/Library/Fonts/HelveticaNeue.ttc", "Helvetica Neue Medium")
+		if ft == nil {
+			for _, p := range []string{
+				"/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+				"/System/Library/Fonts/SFNS.ttf",
+			} {
+				if b, err := os.ReadFile(p); err == nil {
+					if parsed, err := opentype.Parse(b); err == nil {
+						ft = parsed
+						break
+					}
+				}
+			}
+		}
+		if ft == nil {
+			ft, _ = opentype.Parse(gobold.TTF)
+		}
+		if ft != nil {
+			// Render at 2× supersampling (Size 36 on a 72px buffer, then 2×2
+			// box-downsampled to 36px) with HintingNone for smooth macOS-grade
+			// anti-aliasing matching Clash Party's Canvas rendering.
+			face, err := opentype.NewFace(ft, &opentype.FaceOptions{
+				Size:    36,
+				DPI:     72,
+				Hinting: font.HintingNone,
+			})
+			if err == nil {
+				speedFace = face
+			}
+		}
+	})
+	return speedFace
+}
+
+// CompactRate formats a rate for the 2-line stacked menu bar icon, matching
+// Clash Party's readable format: "0 B/s", "512 B/s", "9.8 KB/s", "1.3 MB/s".
+func CompactRate(b int64) string {
+	if b < 0 {
+		b = 0
+	}
+	switch {
+	case b < 1000:
+		return fmt.Sprintf("%d B/s", b)
+	case b < 1<<20:
+		return unit(float64(b)/1024, " KB/s")
+	case b < 1<<30:
+		return unit(float64(b)/(1<<20), " MB/s")
+	default:
+		return unit(float64(b)/(1<<30), " GB/s")
+	}
+}
+
 // tunColor returns the distinct icon colour used when TUN mode is active,
 // tuned for contrast against light and dark taskbars / menu bars.
 func tunColor(dark bool) color.NRGBA {
@@ -145,7 +253,8 @@ func tunColor(dark bool) color.NRGBA {
 	return color.NRGBA{16, 158, 86, 255} // emerald green on light bar
 }
 
-// PNG renders the icon at 2× (36 pixels tall).
+// PNG renders the icon at 2× (36 pixels tall), optionally followed by two
+// stacked lines of native-font speed text (matching Clash Party on macOS).
 func PNG(l Look, ink Ink) []byte {
 	var col color.NRGBA
 	if l.TUN && l.State == On {
@@ -170,13 +279,62 @@ func PNG(l Look, ink Ink) []byte {
 		}
 	}
 	s := ui.MustParseSVG([]byte(SVG(l)))
-	w := 36
-	if l.Graph != nil {
-		w = int(math.Round((18 + 3 + graphW) * 2))
+	iconPx := int(math.Round(iconWidth(l) * 2))
+	img := s.Image(iconPx, 36, col)
+
+	var out image.Image = img
+	if l.hasSpeed() {
+		speedPx := int(math.Round(speedW * 2))
+		totalW := iconPx + speedPx
+		dst := image.NewNRGBA(image.Rect(0, 0, totalW, 36))
+		draw.Draw(dst, img.Bounds(), img, image.Point{}, draw.Src)
+		if face := getSpeedFace(); face != nil {
+			// Draw text into a 2× supersampled buffer (speedPx*2 × 72) and
+			// box-downsample 2×2 into dst for crisp, even anti-aliased stems.
+			hiW, hiH := speedPx*2, 72
+			hi := image.NewAlpha(image.Rect(0, 0, hiW, hiH))
+			speedFaceMu.Lock()
+			d := &font.Drawer{
+				Dst:  hi,
+				Src:  image.Opaque,
+				Face: face,
+			}
+			for i, line := range l.SpeedLines {
+				if line == "" {
+					continue
+				}
+				y := 30
+				if i == 1 {
+					y = 66
+				}
+				adv := d.MeasureString(line)
+				x := fixed.I(hiW-4) - adv
+				if x < fixed.I(4) {
+					x = fixed.I(4)
+				}
+				d.Dot = fixed.Point26_6{X: x, Y: fixed.I(y)}
+				d.DrawString(line)
+			}
+			speedFaceMu.Unlock()
+			for y := 0; y < 36; y++ {
+				for x := 0; x < speedPx; x++ {
+					a := (int(hi.AlphaAt(x*2, y*2).A) +
+						int(hi.AlphaAt(x*2+1, y*2).A) +
+						int(hi.AlphaAt(x*2, y*2+1).A) +
+						int(hi.AlphaAt(x*2+1, y*2+1).A) + 2) / 4
+					if a > 0 {
+						c := col
+						c.A = uint8((int(col.A) * a) / 255)
+						dst.SetNRGBA(iconPx+x, y, c)
+					}
+				}
+			}
+		}
+		out = dst
 	}
-	img := s.Image(w, 36, col)
+
 	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
+	_ = png.Encode(&buf, out)
 	return buf.Bytes()
 }
 
@@ -227,9 +385,27 @@ func StateOf(st model.Status) State {
 	return Off
 }
 
+// SpeedLinesFor returns the 2-line stacked speed for the macOS menu bar
+// icon when both directions are enabled and the core is running.
+func SpeedLinesFor(st model.Status, set model.Settings) [2]string {
+	if st.Core != model.CoreRunning || set.HideTraySpeed {
+		return [2]string{}
+	}
+	if set.TraySpeed == model.TraySpeedOff || set.TraySpeed == model.TraySpeedDown {
+		return [2]string{}
+	}
+	return [2]string{CompactRate(st.Up), CompactRate(st.Down)}
+}
+
 // Title is the text beside the macOS icon, from the settings: mode
 // (when not rule), current node, speed, in that order.
 func Title(st model.Status, node string, set model.Settings) string {
+	return TitleForBar(st, node, set, false)
+}
+
+// TitleForBar is Title with stackedSpeed=true when both-direction speed is
+// already rendered in two stacked lines inside the tray icon PNG.
+func TitleForBar(st model.Status, node string, set model.Settings, stackedSpeed bool) string {
 	if st.Core != model.CoreRunning {
 		return ""
 	}
@@ -245,7 +421,7 @@ func Title(st model.Status, node string, set model.Settings) string {
 	case model.TraySpeedDown:
 		parts = append(parts, "↓"+Rate(st.Down)) // padded: the width stays put
 	default:
-		if !set.HideTraySpeed {
+		if !set.HideTraySpeed && !stackedSpeed {
 			parts = append(parts, Speed(st.Up, st.Down))
 		}
 	}

@@ -15,9 +15,10 @@ var icons = map[string]*ui.SVG{
 	"conns":    svg(`<path d="M5 13V3M2.5 5.5L5 3l2.5 2.5M11 3v10M8.5 10.5L11 13l2.5-2.5"/>`),
 	"logs":     svg(`<path d="M2.5 3.5h11M2.5 6.5h11M2.5 9.5h7M2.5 12.5h9"/>`),
 	"rules":    svg(`<path d="M2.5 4h1.5M2.5 8h1.5M2.5 12h1.5M6.5 4h7M6.5 8h7M6.5 12h4.5"/>`),
-	"net":      svg(`<path d="M1.8 6.3a9 9 0 0 1 12.4 0M4 8.7a5.8 5.8 0 0 1 8 0M6.2 11.1a2.6 2.6 0 0 1 3.6 0"/><circle cx="8" cy="13.2" r=".7" fill="currentColor"/>`),
+	"net":      svg(`<path d="M1.5 6.5a9.2 9.2 0 0 1 13 0M3.8 8.8a6 6 0 0 1 8.4 0M6 11a2.8 2.8 0 0 1 4 0"/><circle cx="8" cy="13" r=".8" fill="currentColor"/>`),
 	"stats":    svg(`<path d="M2.5 13.5h11"/><path d="M4 13.5V8.5M7 13.5V4.5M10 13.5V7M13 13.5V2.5" stroke-width="1.8"/>`),
-	"settings": svg(`<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1"/>`),
+	"settings": svg(`<circle cx="8" cy="8" r="2.2"/><path d="M6.9 1.8H9.1L9.5 3.6L10.6 4.1L11.9 3L13 4.1L11.9 5.4L12.4 6.5L14.2 6.9V9.1L12.4 9.5L11.9 10.6L13 11.9L11.9 13L10.6 11.9L9.5 12.4L9.1 14.2H6.9L6.5 12.4L5.4 11.9L4.1 13L3 11.9L4.1 10.6L3.6 9.5L1.8 9.1V6.9L3.6 6.5L4.1 5.4L3 4.1L4.1 3L5.4 4.1L6.5 3.6Z"/>`),
+	"tun":      svg(`<rect x="2" y="3" width="12" height="9" rx="1.8"/><path d="M5.5 14h5M8 12v2M8.4 5.2L6.6 7.8h2l-.8 2.4 2.2-3H8l.4-2z"/>`),
 	"search":   svg(`<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2l3.3 3.3"/>`),
 	"more":     svg(`<circle cx="3.5" cy="8" r="1" fill="currentColor"/><circle cx="8" cy="8" r="1" fill="currentColor"/><circle cx="12.5" cy="8" r="1" fill="currentColor"/>`),
 	"plus":     svg(`<path d="M8 3v10M3 8h10"/>`),
@@ -39,6 +40,7 @@ var icons = map[string]*ui.SVG{
 	"up":       svg(`<path d="M8 13V3M4 7l4-4 4 4"/>`),
 	"capture":  svg(`<rect x="3.5" y="7" width="9" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/><path d="M8 9.6v1.8"/>`),
 	"locate":   svg(`<circle cx="8" cy="8" r="4.5"/><circle cx="8" cy="8" r="1" fill="currentColor"/><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"/>`),
+	"sidebar":  svg(`<rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M6 2.5v11"/>`),
 }
 
 // pageIcons maps sidebar pages to their icon names.

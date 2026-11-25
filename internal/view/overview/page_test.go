@@ -86,34 +86,6 @@ func TestMapDrawsRoutesAndDestinations(t *testing.T) {
 	}
 }
 
-// noTotal is the fake API with the subscriptions' total traffic unknown.
-type noTotal struct{ app.API }
-
-func (n noTotal) Subscriptions() []model.Subscription {
-	subs := n.API.Subscriptions()
-	for i := range subs {
-		subs[i].Total = 0
-	}
-	return subs
-}
-
-// TestSubscriptionExpiryWithoutTotal: the expiry shows even when the
-// total traffic is unknown (docs/design.md §5.1 当前订阅).
-func TestSubscriptionExpiryWithoutTotal(t *testing.T) {
-	f := fake.NewInstant()
-	e, _ := testEnv(f)
-	e.API = noTotal{f}
-	p := New(e)
-	tt := ui.NewTester(p.View, 960, 640)
-	tt.Frame()
-	if !tt.HasText("到期 2027-03-01") {
-		t.Errorf("expiry missing without a total: %q", tt.Texts())
-	}
-	if tt.HasText("已用流量") {
-		t.Errorf("progress bar should not show without a total")
-	}
-}
-
 // TestSideDividerResizes: dragging the gap between the map and the side
 // column moves room between them, within bounds, and a double click puts
 // the default back.
