@@ -39,15 +39,21 @@ type composeArgs struct {
 	// subOverrides, when set, is the subscription's override selection for
 	// this composition instead of the stored one.
 	subOverrides *[]string
-	custom       []model.CustomRule
-	useRules     bool            // custom is authoritative even when nil
-	settings     *model.Settings // nil = current settings
-	content      []byte          // nil = stored content of subID
+	custom         []model.CustomRule
+	useRules       bool               // custom is authoritative even when nil
+	manualNodes    []model.ManualNode // overrides stored manual nodes when useManualNodes
+	useManualNodes bool
+	settings       *model.Settings // nil = current settings
+	content        []byte          // nil = stored content of subID
 }
 
 // buildInput assembles profile.Input from the store and settings. It reads
 // the store (disk) and must not be called with mu held.
 func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, error) {
+	manualNodes := s.d.store.ManualNodes()
+	if a.useManualNodes {
+		manualNodes = a.manualNodes
+	}
 	var sub model.Subscription
 	var ok bool
 	if a.subID == "" {
@@ -55,11 +61,11 @@ func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, 
 	} else {
 		sub, ok = s.d.store.Get(a.subID)
 	}
-	if !ok {
+	if !ok && (a.subID != "" || len(manualNodes) == 0) {
 		return profile.Input{}, sub, errNoSubscription
 	}
 	data := a.content
-	if data == nil {
+	if data == nil && ok {
 		var err error
 		data, err = s.d.store.Content(sub.ID)
 		if err != nil {
@@ -88,6 +94,7 @@ func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, 
 		Subscription: data,
 		Overrides:    profile.Layers(substituteOverride(list, a.ov), layerSub),
 		CustomRules:  s.d.store.CustomRules(),
+		ManualNodes:  manualNodes,
 		DNS:          set.DNS,
 		Sniffer:      set.Sniffer,
 		Geo:          mirroredGeo(set), // the download mirror applies to geox-url (mirror.go)

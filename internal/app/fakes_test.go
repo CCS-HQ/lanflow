@@ -565,13 +565,14 @@ func (l *fakeLoc) Lookup(ip string) model.EndpointInfo { return model.EndpointIn
 // ---- profile store ----
 
 type fakeStore struct {
-	mu      sync.Mutex
-	subs    []model.Subscription
-	current string
-	content map[string][]byte
-	ovs     []model.Override
-	rules   []model.CustomRule
-	nextID  int
+	mu          sync.Mutex
+	subs        []model.Subscription
+	current     string
+	content     map[string][]byte
+	ovs         []model.Override
+	rules       []model.CustomRule
+	manualNodes []model.ManualNode
+	nextID      int
 }
 
 func newFakeStore() *fakeStore {
@@ -777,6 +778,24 @@ func (s *fakeStore) SetCustomRules(r []model.CustomRule) ([]model.CustomRule, er
 	}
 	s.rules = out
 	return append([]model.CustomRule(nil), out...), nil
+}
+func (s *fakeStore) ManualNodes() []model.ManualNode {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]model.ManualNode(nil), s.manualNodes...)
+}
+func (s *fakeStore) SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := append([]model.ManualNode(nil), nodes...)
+	for i := range out {
+		if out[i].ID == "" {
+			s.nextID++
+			out[i].ID = fmt.Sprintf("m%d", s.nextID)
+		}
+	}
+	s.manualNodes = out
+	return append([]model.ManualNode(nil), out...), nil
 }
 
 // ---- composer ----

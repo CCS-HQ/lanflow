@@ -136,6 +136,8 @@ type profileStore interface {
 	MoveOverride(id string, delta int) error
 	CustomRules() []model.CustomRule
 	SetCustomRules(r []model.CustomRule) ([]model.CustomRule, error)
+	ManualNodes() []model.ManualNode
+	SetManualNodes(nodes []model.ManualNode) ([]model.ManualNode, error)
 }
 
 // composer wraps the package-level functions of package profile.

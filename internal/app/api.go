@@ -132,6 +132,11 @@ type API interface {
 	DeleteSubscription(id string) error          // refuses the current one
 	SubscriptionRaw(id string) (string, error)
 
+	// ---- manual nodes ----
+	ManualNodes() []model.ManualNode
+	SaveManualNode(n model.ManualNode) (model.ManualNode, error)
+	DeleteManualNode(id string) error
+
 	// ---- connections & logs ----
 	CloseConnection(id string) error
 	CloseAllConnections() error

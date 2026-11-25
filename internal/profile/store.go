@@ -20,6 +20,7 @@ import (
 const (
 	indexFile       = "profiles.json"
 	customRulesFile = "custom-rules.json"
+	manualNodesFile = "manual-nodes.json"
 	profilesDir     = "profiles"
 	overridesDir    = "overrides"
 	overrideGlobal  = "global"
@@ -77,11 +78,12 @@ func (e indexEntry) toModel(current string) model.Subscription {
 // kept in memory and written through; content and override files are read
 // from disk on demand. mu guards both the memory and the files.
 type store struct {
-	dir   string
-	mu    sync.RWMutex
-	index fileIndex
-	rules []model.CustomRule
-	ovs   []model.Override // the ordered override list (overrides.go)
+	dir         string
+	mu          sync.RWMutex
+	index       fileIndex
+	rules       []model.CustomRule
+	manualNodes []model.ManualNode
+	ovs         []model.Override // the ordered override list (overrides.go)
 }
 
 func openStore(dir string) (*store, error) {
@@ -135,6 +137,22 @@ func (s *store) load() error {
 	}
 	if s.rules == nil {
 		s.rules = []model.CustomRule{}
+	}
+
+	data, err = os.ReadFile(filepath.Join(s.dir, manualNodesFile))
+	switch {
+	case err == nil:
+		if len(strings.TrimSpace(string(data))) > 0 {
+			if err := json.Unmarshal(data, &s.manualNodes); err != nil {
+				return fmt.Errorf("手动节点 %s 已损坏：%w", manualNodesFile, err)
+			}
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		return fmt.Errorf("无法读取手动节点：%w", err)
+	}
+	if s.manualNodes == nil {
+		s.manualNodes = []model.ManualNode{}
 	}
 	return s.loadOverrides()
 }
@@ -200,6 +218,14 @@ func (s *store) saveRules() error {
 		return err
 	}
 	return atomicWrite(filepath.Join(s.dir, customRulesFile), append(data, '\n'))
+}
+
+func (s *store) saveManualNodes() error {
+	data, err := json.MarshalIndent(s.manualNodes, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(s.dir, manualNodesFile), append(data, '\n'))
 }
 
 func (s *store) contentPath(id string) string {
@@ -403,4 +429,36 @@ func (s *store) setCustomRules(r []model.CustomRule) ([]model.CustomRule, error)
 		return nil, err
 	}
 	return append([]model.CustomRule{}, out...), nil
+}
+
+func (s *store) manualNodesList() []model.ManualNode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]model.ManualNode(nil), s.manualNodes...)
+}
+
+func (s *store) setManualNodes(nodes []model.ManualNode) ([]model.ManualNode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.ManualNode, len(nodes))
+	copy(out, nodes)
+	taken := map[string]bool{}
+	for _, n := range out {
+		if n.ID != "" {
+			taken[n.ID] = true
+		}
+	}
+	for i := range out {
+		if out[i].ID == "" {
+			out[i].ID = newID(func(id string) bool { return taken[id] })
+			taken[out[i].ID] = true
+		}
+	}
+	backup := s.manualNodes
+	s.manualNodes = out
+	if err := s.saveManualNodes(); err != nil {
+		s.manualNodes = backup
+		return nil, err
+	}
+	return append([]model.ManualNode(nil), out...), nil
 }

@@ -72,6 +72,11 @@ var methodLevels = map[string]Level{
 	"DeleteSubscription":     LevelDanger,
 	"SubscriptionRaw":        LevelSensitive,
 
+	// ---- manual nodes ----
+	"ManualNodes":      LevelSensitive,
+	"SaveManualNode":   LevelWrite,
+	"DeleteManualNode": LevelWrite,
+
 	// ---- connections & logs ----
 	"CloseConnection":     LevelWrite,
 	"CloseAllConnections": LevelWrite,

@@ -219,6 +219,11 @@ func init() {
 		"内核意外退出，已自动重新启动":     "The core quit unexpectedly and was restarted",
 		"%s。系统代理已关闭。可在「日志」中查看原因，或重新启动内核。": "%s. The system proxy was turned off. See Logs for the cause, or start the core again.",
 
+		// internal/app/manual_nodes.go
+		"已存在名为「%s」的手动节点，请换一个名称。": "A manual node named “%s” already exists; choose another name.",
+		"保存手动节点失败：%v":               "Failed to save the manual node: %v",
+		"手动节点已撤销：%v":                "Manual node reverted: %v",
+
 		// internal/app/mirror.go
 		"镜像地址须是以 http:// 或 https:// 开头的完整地址": "The mirror must be a full URL starting with http:// or https://",
 

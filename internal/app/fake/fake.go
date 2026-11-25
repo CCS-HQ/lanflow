@@ -22,6 +22,7 @@ import (
 	"lanflow/internal/geo"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 	"lanflow/internal/seqring"
 )
 
@@ -42,6 +43,7 @@ type Fake struct {
 	connVer            *seqring.Versions[model.Connection]
 	rules              []model.Rule
 	custom             []model.CustomRule
+	manualNodes        []model.ManualNode
 	provs              []model.RuleProvider
 	pprovs             []model.ProxyProvider
 	set                model.Settings
@@ -352,6 +354,16 @@ func (f *Fake) CustomRules() []model.CustomRule {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]model.CustomRule(nil), f.custom...)
+}
+func (f *Fake) ManualNodes() []model.ManualNode {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]model.ManualNode, len(f.manualNodes))
+	for i, n := range f.manualNodes {
+		n.ALPN = append([]string(nil), n.ALPN...)
+		out[i] = n
+	}
+	return out
 }
 func (f *Fake) RuleProviders() []model.RuleProvider {
 	f.mu.Lock()
@@ -1110,6 +1122,97 @@ func (f *Fake) DeleteCustomRule(id string) error {
 		}
 		return nil
 	}, app.TopicRules)
+}
+func (f *Fake) SaveManualNode(n model.ManualNode) (model.ManualNode, error) {
+	err := f.do(func() error {
+		v, err := profile.ValidateManualNode(n)
+		if err != nil {
+			return err
+		}
+		n = v
+		if n.ID == "" {
+			n.ID = fmt.Sprintf("m%d", time.Now().UnixNano())
+			f.manualNodes = append(f.manualNodes, n)
+		} else {
+			found := false
+			for i := range f.manualNodes {
+				if f.manualNodes[i].ID == n.ID {
+					f.manualNodes[i] = n
+					found = true
+					break
+				}
+			}
+			if !found {
+				f.manualNodes = append(f.manualNodes, n)
+			}
+		}
+		for _, other := range f.manualNodes {
+			if other.ID != n.ID && other.Name == n.Name {
+				return fmt.Errorf(i18n.T("已存在名为「%s」的手动节点，请换一个名称。"), n.Name)
+			}
+		}
+		f.syncManualGroupLocked()
+		return nil
+	}, app.TopicProxies, app.TopicStatus)
+	return n, err
+}
+func (f *Fake) DeleteManualNode(id string) error {
+	return f.do(func() error {
+		for i, n := range f.manualNodes {
+			if n.ID == id {
+				f.manualNodes = append(f.manualNodes[:i], f.manualNodes[i+1:]...)
+				delete(f.px.Proxies, n.Name)
+				break
+			}
+		}
+		f.syncManualGroupLocked()
+		return nil
+	}, app.TopicProxies, app.TopicStatus)
+}
+func (f *Fake) syncManualGroupLocked() {
+	if f.px.Proxies == nil {
+		f.px.Proxies = map[string]model.Proxy{}
+	}
+	names := make([]string, 0, len(f.manualNodes))
+	for _, n := range f.manualNodes {
+		names = append(names, n.Name)
+		f.px.Proxies[n.Name] = model.Proxy{Name: n.Name, Type: n.Type, UDP: n.UDP, Delay: 80}
+	}
+	idx := -1
+	for i, g := range f.px.Groups {
+		if g.Name == profile.ManualGroupName {
+			idx = i
+			break
+		}
+	}
+	if len(names) == 0 {
+		if idx >= 0 {
+			f.px.Groups = append(f.px.Groups[:idx], f.px.Groups[idx+1:]...)
+			delete(f.px.Proxies, profile.ManualGroupName)
+		}
+		f.st.HasSubscriptions = len(f.subs) > 0
+		return
+	}
+	f.st.HasSubscriptions = true
+	now := names[0]
+	if idx >= 0 {
+		for _, cur := range names {
+			if cur == f.px.Groups[idx].Now {
+				now = cur
+				break
+			}
+		}
+		f.px.Groups[idx].All = names
+		f.px.Groups[idx].Now = now
+		return
+	}
+	f.px.Groups = append(f.px.Groups, model.ProxyGroup{
+		Name: profile.ManualGroupName,
+		Type: model.GroupSelect,
+		Now:  now,
+		All:  names,
+	})
+	f.px.Proxies[profile.ManualGroupName] = model.Proxy{Name: profile.ManualGroupName, Type: string(model.GroupSelect)}
 }
 func (f *Fake) MoveCustomRule(id string, delta int) error {
 	return f.do(func() error {
