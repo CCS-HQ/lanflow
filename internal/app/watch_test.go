@@ -116,6 +116,38 @@ func TestRecheckDetectsForeignProxyAndRefreshes(t *testing.T) {
 	}
 }
 
+// When a Wi-Fi or network-service switch leaves the OS system proxy empty
+// (not pointed at another app), recheck re-applies Lanflow's system proxy
+// instead of dropping ownership.
+func TestRecheckReappliesProxyWhenClearedOnNetworkSwitch(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.s.SetSystemProxy(true); err != nil {
+		t.Fatal(err)
+	}
+	h.s.TakeNotices()
+	// Simulate macOS scutil --proxy returning disabled during a Wi-Fi switch.
+	h.sys.mu.Lock()
+	h.sys.state = sysproxy.State{Enabled: false}
+	h.sys.mu.Unlock()
+
+	h.s.recheck()
+	st := h.s.Status()
+	if !st.SystemProxy {
+		t.Fatalf("SystemProxy should stay enabled after network switch, got %+v", st)
+	}
+	h.sys.mu.Lock()
+	got := h.sys.state
+	h.sys.mu.Unlock()
+	if !got.Enabled || got.Port != st.MixedPort {
+		t.Fatalf("sysproxy was not re-applied: %+v", got)
+	}
+	for _, n := range h.s.TakeNotices() {
+		if strings.Contains(n.Title, "系统代理已被其他程序修改") {
+			t.Fatalf("unexpected foreign proxy notice: %+v", n)
+		}
+	}
+}
+
 // A core that died while the machine slept is handled like a crash: one
 // automatic restart and a notice.
 func TestRecheckRestartsDeadCore(t *testing.T) {
