@@ -12,6 +12,8 @@ func SettingsPlace(key string) string {
 	switch key {
 	case "proxy":
 		return i18n.T("设置 › 代理")
+	case "tun":
+		return i18n.T("设置 › TUN")
 	case "dns":
 		return i18n.T("设置 › DNS")
 	case "sniffer":

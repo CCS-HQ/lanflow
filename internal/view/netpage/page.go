@@ -565,7 +565,7 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 					e.Kit.Dot(c, "gray")
 					ui.Text(c, i18n.T("未开启")).FontSize(12).TextColor(t.TextMuted)
 				}
-			}, env.Overview, "")
+			}, env.Settings, "proxy")
 			port := i18n.Tf("%d（HTTP + SOCKS5）", st.MixedPort)
 			if st.AllowLAN {
 				port += " · " + i18n.T("允许局域网连接")
@@ -579,7 +579,7 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 					e.Kit.Dot(c, "gray")
 					ui.Text(c, i18n.T("未开启")).FontSize(12).TextColor(t.TextMuted)
 				}
-			}, env.Settings, "proxy")
+			}, env.Settings, "tun")
 			// 嗅探 and DNS report the effective config (docs/design.md §5.7): the
 			// subscription's sections in 跟随订阅 mode, Lanflow's when taken over.
 			snf := i18n.T("未开启")
@@ -600,7 +600,7 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 						statusText(c, atrustSummary(a))
 						ui.Text(c, atrustDetail(a)).FontSize(11).TextColor(t.TextMuted).Selectable()
 					})
-				}, env.Settings, "proxy")
+				}, env.Settings, "tun")
 			}
 		})
 	})
