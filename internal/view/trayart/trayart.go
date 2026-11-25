@@ -19,6 +19,7 @@ import (
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/font/sfnt"
 	"golang.org/x/image/math/fixed"
 
 	"lanflow/internal/model"
@@ -161,23 +162,48 @@ var (
 	speedFace     font.Face
 )
 
+func loadTTCFont(path, fullName string) *sfnt.Font {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	col, err := opentype.ParseCollection(raw)
+	if err != nil {
+		return nil
+	}
+	var buf sfnt.Buffer
+	for i := 0; i < col.NumFonts(); i++ {
+		f, err := col.Font(i)
+		if err != nil {
+			continue
+		}
+		if name, err := f.Name(&buf, sfnt.NameIDFull); err == nil && name == fullName {
+			return f
+		}
+	}
+	return nil
+}
+
 func getSpeedFace() font.Face {
 	speedFaceOnce.Do(func() {
-		var raw []byte
-		for _, p := range []string{
-			"/System/Library/Fonts/SFNS.ttf",
-			"/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-		} {
-			if b, err := os.ReadFile(p); err == nil {
-				raw = b
-				break
+		// Prefer macOS Helvetica Neue Medium (crisp medium weight matching
+		// Clash Party's 2-line menu bar indicator), falling back to Arial Bold
+		// and embedded Go Bold on non-macOS systems.
+		ft := loadTTCFont("/System/Library/Fonts/HelveticaNeue.ttc", "Helvetica Neue Medium")
+		if ft == nil {
+			for _, p := range []string{
+				"/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+				"/System/Library/Fonts/SFNS.ttf",
+			} {
+				if b, err := os.ReadFile(p); err == nil {
+					if parsed, err := opentype.Parse(b); err == nil {
+						ft = parsed
+						break
+					}
+				}
 			}
 		}
-		if len(raw) == 0 {
-			raw = gobold.TTF
-		}
-		ft, err := opentype.Parse(raw)
-		if err != nil {
+		if ft == nil {
 			ft, _ = opentype.Parse(gobold.TTF)
 		}
 		if ft != nil {
