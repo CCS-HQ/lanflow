@@ -75,6 +75,10 @@ type Options struct {
 	// global shortcut there.
 	Remote      bool
 	SetShortcut func(action, acc string) error
+	// Phone: the app runs on a phone (iOS or Android), one screen in the
+	// system VPN's place of the system proxy and TUN (main_phone.go). The
+	// phone layout reads it; nothing else changes yet.
+	Phone bool
 }
 
 // pageView is what every page package exports.

@@ -38,6 +38,16 @@ func DefaultOptions(appName string) Options {
 		o.DataDir = filepath.Join(home, "Library", "Application Support", appName)
 		o.LogDir = filepath.Join(home, "Library", "Logs", appName)
 		o.CacheDir = filepath.Join(home, "Library", "Caches", appName)
+	case "ios":
+		// The app's sandbox, laid out as on macOS.
+		o.DataDir = filepath.Join(home, "Library", "Application Support", appName)
+		o.LogDir = filepath.Join(home, "Library", "Logs", appName)
+		o.CacheDir = filepath.Join(home, "Library", "Caches", appName)
+	case "android":
+		// HOME is the app's private files directory (MyGo's host sets it).
+		o.DataDir = filepath.Join(home, appName)
+		o.LogDir = filepath.Join(home, appName, "logs")
+		o.CacheDir = filepath.Join(home, appName, "cache")
 	case "windows":
 		roaming := os.Getenv("APPDATA")
 		if roaming == "" {

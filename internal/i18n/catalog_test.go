@@ -115,7 +115,7 @@ func sourceLiterals(t *testing.T) []literal {
 	t.Helper()
 	root := filepath.Join("..", "..")
 	var files []string
-	for _, dir := range []string{"internal/view", "internal/app", "internal/syncfile", "internal/split"} {
+	for _, dir := range []string{"internal/view", "internal/app", "internal/syncfile", "internal/split", "internal/platform/tunnel"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -135,7 +135,7 @@ func sourceLiterals(t *testing.T) []literal {
 			t.Fatal(err)
 		}
 	}
-	for _, f := range []string{"main.go", "main_service.go", filepath.Join("internal", "locate", "analyze.go"), filepath.Join("internal", "locate", "direct.go"), filepath.Join("internal", "profile", "chain_notes.go"), filepath.Join("internal", "profile", "aggregate_catalog.go")} {
+	for _, f := range []string{"main.go", "main_service.go", "main_phone.go", filepath.Join("internal", "locate", "analyze.go"), filepath.Join("internal", "locate", "direct.go"), filepath.Join("internal", "profile", "chain_notes.go"), filepath.Join("internal", "profile", "aggregate_catalog.go")} {
 		if _, err := os.Stat(filepath.Join(root, f)); err == nil {
 			files = append(files, filepath.Join(root, f))
 		}

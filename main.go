@@ -66,6 +66,10 @@ func startFailureText(err error) string {
 }
 
 func main() {
+	if onPhone {
+		runPhone() // main_phone.go: one process, no subcommands, tray or local API
+		return
+	}
 	if code, ok := runSubcommand(os.Args[1:]); ok {
 		os.Exit(code)
 	}

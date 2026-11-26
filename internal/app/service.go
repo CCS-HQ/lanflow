@@ -25,6 +25,7 @@ import (
 	"lanflow/internal/platform/atrust"
 	"lanflow/internal/platform/helper"
 	"lanflow/internal/platform/tailscale"
+	"lanflow/internal/platform/tunnel"
 	"lanflow/internal/profile"
 )
 
@@ -213,9 +214,16 @@ func NewService(o Options) (*Service, error) {
 		return nil, fmt.Errorf(i18n.T("无法打开订阅存储：%v"), err)
 	}
 	addr := core.ControllerAddress()
+	runner := core.NewExecRunner()
+	var tun tunnel.Tunnel
+	if onPhone() {
+		tun = tunnel.Current()
+		addr = phoneControllerAddress(tun)
+		runner = phoneCore{tun}.runner()
+	}
 	ctrl := controller.New(func(ctx context.Context) (net.Conn, error) { return core.Dial(ctx, addr) })
 	mgr := core.NewManager(core.Options{
-		Runner: core.NewExecRunner(),
+		Runner: runner,
 		Ready: func(ctx context.Context) error {
 			_, err := ctrl.Version(ctx)
 			return err
@@ -226,7 +234,11 @@ func NewService(o Options) (*Service, error) {
 	loc := locate.New(filepath.Join(o.CacheDir, "exits.json"),
 		filepath.Join(workDir, "geoip.metadb"), filepath.Join(workDir, "GeoLite2-ASN.mmdb"))
 
-	s, err := newServiceWith(o, realDeps(ctrl, mgr, store, loc))
+	d := realDeps(ctrl, mgr, store, loc)
+	if onPhone() {
+		d = phoneDeps(d, tun)
+	}
+	s, err := newServiceWith(o, d)
 	if err != nil {
 		return nil, err
 	}
