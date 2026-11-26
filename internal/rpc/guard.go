@@ -246,7 +246,7 @@ func (g *guard) checkWrite(ss *session, id Identity, method, summary string) err
 	_, _, genuine := ss.peer()
 	if allow, ok := g.grant(who); ok {
 		if !allow {
-			return refused("用户已拒绝「%s」修改澜流的配置；可在 设置 › 高级 › Agent 接入 撤销这个决定", who)
+			return refused("用户已拒绝「%s」修改澜流的配置；可在 设置 › Agent 撤销这个决定", who)
 		}
 		if genuine {
 			return nil
@@ -297,7 +297,7 @@ func (g *guard) checkWrite(ss *session, id Identity, method, summary string) err
 func (g *guard) checkHigh(ss *session, id Identity, method, summary string) error {
 	who := grantName(id)
 	if allow, ok := g.grant(who); ok && !allow {
-		return refused("用户已拒绝「%s」修改澜流的配置；可在 设置 › 高级 › Agent 接入 撤销这个决定", who)
+		return refused("用户已拒绝「%s」修改澜流的配置；可在 设置 › Agent 撤销这个决定", who)
 	}
 	// Scripts that run Lanflow's own `lanflow ctl` may have been allowed
 	// for good (CtlHighGrant).

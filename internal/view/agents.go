@@ -93,11 +93,11 @@ func consentBody(req AgentConsent) string {
 		return i18n.T("这是一项影响较大的操作，只对这一次请求有效。")
 	case "high":
 		if consentRemembers(req) {
-			return i18n.T("一个脚本或其他程序通过 lanflow ctl 请求执行影响较大的操作（导入或切换订阅、覆写、内核启停、系统代理、TUN）。「仅本次」只对这一次运行有效；选择「始终允许」后，之后通过 lanflow ctl 运行的这类操作都不再询问，可在 设置 › 高级 › Agent 接入 撤销。")
+			return i18n.T("一个脚本或其他程序通过 lanflow ctl 请求执行影响较大的操作（导入或切换订阅、覆写、内核启停、系统代理、TUN）。「仅本次」只对这一次运行有效；选择「始终允许」后，之后通过 lanflow ctl 运行的这类操作都不再询问，可在 设置 › Agent 撤销。")
 		}
 		return i18n.T("这是一项影响较大的操作（导入或切换订阅、覆写、内核启停、系统代理、TUN）。允许只对这次连接有效，不受「始终允许」影响。")
 	}
-	return i18n.T("它想通过本机接口修改设置、规则、节点或订阅。每次修改都会记入审计日志，可以用 lanflow ctl undo 撤销。选择「始终允许」后，可在 设置 › 高级 › Agent 接入 撤销。")
+	return i18n.T("它想通过本机接口修改设置、规则、节点或订阅。每次修改都会记入审计日志，可以用 lanflow ctl undo 撤销。选择「始终允许」后，可在 设置 › Agent 撤销。")
 }
 
 // consentDialog draws the oldest pending request.

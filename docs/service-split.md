@@ -56,7 +56,7 @@
   - 记住的「始终允许」同样只对这份可执行文件的连接生效：直接连套接字、借用已授权名称的程序仍会被询问，它得到的「始终允许」只对当前连接有效、不保存。记住的「拒绝」对所有连接生效。
 - 这层校验挡的是：agent 或脚本绕开 `lanflow ctl` / `lanflow mcp` 直连套接字并自称界面、自称终端里的 ctl，或冒用已获「始终允许」的名称，从而跳过上表。不挡的是恶意本地程序：它可以在自己控制下运行澜流的可执行文件（伪终端、继承的套接字、注入代码），也能直接读写数据目录。其他平台（非 macOS / Linux / Windows）不识别对端进程，同一用户的连接都视为澜流自己。
 - 首次有新 agent 写配置时，托盘弹通知请用户允许（本次 / 始终 / 拒绝），结果存在设置里，可在「设置 › 高级」撤销。不在终端里运行的 ctl 同样处理，结果记在固定名称 `lanflow ctl` 下（MCP 客户端不能用这个名称）。
-- 高影响写（`rpc.HighImpact`：`ImportSubscriptionURL`、`ImportSubscriptionFile`、`UseSubscription`、`SaveOverride`、`SaveOverrideEntry`、`DeleteOverrideEntry`、`StartCore`、`StopCore`、`RestartCore`、`SetSystemProxy`、`SetTUN`、非预览的 `ApplyConfigFile`）会替换正在使用的配置或断网：为切换节点给出的「始终允许」不覆盖它们，每个连接确认一次（允许 / 拒绝，拒绝后该连接不再询问）；已记住「拒绝」写入的 agent 直接拒绝。不在终端里运行的 `lanflow ctl` 每次运行都是一个新连接，只按连接确认的话脚本（定时任务、启动器动作）永远无法无人值守，所以它的高影响写可以选「始终允许」，单独记在 `Settings.AgentGrants` 的 `lanflow ctl (high impact)` 名下（`rpc.CtlHighGrant`，只对澜流自己的可执行文件生效，可在 设置 › 高级 › Agent 接入 撤销）；MCP 没有这个选项。代价是：用户一旦对它选了「始终允许」，能运行 shell 的 agent 也能经 `lanflow ctl` 执行这些操作而不再询问。
+- 高影响写（`rpc.HighImpact`：`ImportSubscriptionURL`、`ImportSubscriptionFile`、`UseSubscription`、`SaveOverride`、`SaveOverrideEntry`、`DeleteOverrideEntry`、`StartCore`、`StopCore`、`RestartCore`、`SetSystemProxy`、`SetTUN`、非预览的 `ApplyConfigFile`）会替换正在使用的配置或断网：为切换节点给出的「始终允许」不覆盖它们，每个连接确认一次（允许 / 拒绝，拒绝后该连接不再询问）；已记住「拒绝」写入的 agent 直接拒绝。不在终端里运行的 `lanflow ctl` 每次运行都是一个新连接，只按连接确认的话脚本（定时任务、启动器动作）永远无法无人值守，所以它的高影响写可以选「始终允许」，单独记在 `Settings.AgentGrants` 的 `lanflow ctl (high impact)` 名下（`rpc.CtlHighGrant`，只对澜流自己的可执行文件生效，可在 设置 › Agent 撤销）；MCP 没有这个选项。代价是：用户一旦对它选了「始终允许」，能运行 shell 的 agent 也能经 `lanflow ctl` 执行这些操作而不再询问。
 - MCP 不能让澜流读取它任选的本地文件：`ImportSubscriptionFile` 不提供（服务端同样拒绝）；`ApplyConfigFile` 的路径只能留空（同步文件本身）或是同步文件所在目录里的 `.yaml` / `.yml`（解析符号链接后判断）。ctl 不受这两条限制。
 - 授权弹窗和审计记录都带对端进程的 PID 与可执行文件路径（已知时）。
 - 审计日志 `logs/audit.log`：时间、客户端、方法、参数摘要（脱敏）、结果；`ctl undo` 用它回滚最近一次配置写入。
@@ -97,7 +97,7 @@ S1 在现有单进程里加了本机接口，界面仍直接调用进程内的 `
 | `internal/app/remote` | 生成的 `app.API` 客户端（`client_gen.go`）；生成器在 `apigen/`，`go generate ./internal/app/remote` 同时写出客户端和清单 |
 | `internal/ctl`、`internal/mcp` | 两个子命令；`main_cli.go` 在单实例锁之前分派，不开窗口 |
 | `main_rpc.go` | app 启动时开始服务（模拟后端同样提供），退出时关闭；授权弹窗经 `view.Shell.AskAgentConsent` |
-| `internal/view/agents.go`、`settings/agents.go` | 授权弹窗；「设置 › 高级 › Agent 接入」：复制 MCP 配置、撤销授权 |
+| `internal/view/agents.go`、`settings/agents.go` | 授权弹窗；「设置 › Agent」：复制 MCP 配置、撤销授权 |
 | `skills/lanflow/SKILL.md` | 配套 skill |
 
 **与设计的差异和补充**

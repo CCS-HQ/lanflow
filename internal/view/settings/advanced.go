@@ -345,7 +345,6 @@ func (p *Page) advancedTab(c *ui.Context, t *ui.Theme, s model.Settings, st mode
 				})
 			})
 		})
-		p.agentSection(c, s)
 	})
 }
 

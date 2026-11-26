@@ -13,7 +13,7 @@ import (
 	"lanflow/internal/model"
 )
 
-// Agent 接入 (docs/service-split.md §4–§5), at the end of the 高级 tab:
+// Agent 接入 (docs/service-split.md §4–§5), the Agent tab of the settings:
 // the standing answers given to agents that asked to change the
 // configuration through `lanflow mcp`, each revocable.
 
