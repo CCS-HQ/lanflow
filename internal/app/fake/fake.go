@@ -53,6 +53,7 @@ type Fake struct {
 	provs              []model.RuleProvider
 	pprovs             []model.ProxyProvider
 	set                model.Settings
+	geoInfo            model.GeoDataInfo
 	ovl                []model.Override // the override list; Overrides() derives the legacy views
 	sites              []model.SiteCheck
 	notices            []app.Notice
@@ -84,6 +85,7 @@ func NewInstant() *Fake { return build() }
 func build() *Fake {
 	f := &Fake{subsFns: map[int]func(app.Topic){}, stop: make(chan struct{})}
 	now := time.Now()
+	f.geoInfo = model.GeoDataInfo{UpdatedAt: now.Add(-3 * 24 * time.Hour), Files: 4}
 	f.st = model.Status{Core: model.CoreRunning, CoreVersion: "v1.19.33", StartedAt: now.Add(-2*time.Hour - 13*time.Minute),
 		SystemProxy: true, Mode: model.ModeRule, MixedPort: 7890, LANAddress: "192.168.1.23",
 		TotalUp: 21 << 20, TotalDown: 1 << 30, Memory: 48 << 20, CurrentSubscription: "s1", HasSubscriptions: true}
@@ -1466,9 +1468,11 @@ func (f *Fake) EffectiveSniffer() model.EffectiveSniffer {
 	return model.EffectiveSniffer{Settings: model.SnifferSettings{Enable: f.set.Sniffer.Enable, TLS: true, TLSPorts: "443", SkipDomain: []string{"Mijia Cloud"}}, Source: model.EffectiveSubscription}
 }
 
-// GeoDataInfo pretends the databases were downloaded three days ago.
+// GeoDataInfo returns the sample files' metadata, changed only by a download.
 func (f *Fake) GeoDataInfo() model.GeoDataInfo {
-	return model.GeoDataInfo{UpdatedAt: time.Now().Add(-3 * 24 * time.Hour), Files: 4}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.geoInfo
 }
 
 // fakeCountries maps the sample connections' destination IPs to countries.
@@ -1601,7 +1605,11 @@ func (f *Fake) RuntimeConfig() ([]model.RuntimeLine, error) {
 		{Text: "rules:", Source: ""}, {Text: "  - DOMAIN-SUFFIX,openai.com,节点选择", Source: i18n.T("自定义规则")}, {Text: "  - DOMAIN-SUFFIX,example.com,DIRECT", Source: i18n.T("全局覆写")}, {Text: "  - DOMAIN-SUFFIX,local,DIRECT", Source: i18n.T("订阅")}}, nil
 }
 func (f *Fake) UpdateGeoData() error {
-	return f.do(func() error { f.set.Geo.UpdatedAt = time.Now(); return nil }, app.TopicSettings)
+	return f.do(func() error {
+		now := time.Now()
+		f.set.Geo.UpdatedAt, f.geoInfo.UpdatedAt = now, now
+		return nil
+	}, app.TopicSettings)
 }
 
 // ---- core versions ----

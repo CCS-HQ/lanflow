@@ -3,10 +3,39 @@ package fake
 import (
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"lanflow/internal/app"
 	"lanflow/internal/model"
 )
+
+// Repeated renders must keep the files' timestamp, even across a minute
+// boundary. synctest advances time without waiting on the wall clock.
+func TestGeoDataInfoStableUntilUpdate(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := NewInstant()
+		before := f.GeoDataInfo()
+		if before.Files == 0 || before.UpdatedAt.IsZero() {
+			t.Fatalf("missing sample database metadata: %+v", before)
+		}
+		time.Sleep(time.Minute)
+		if got := f.GeoDataInfo(); got != before {
+			t.Fatalf("reading after a minute changed the files' timestamp: before=%+v, after=%+v", before, got)
+		}
+		if err := f.UpdateGeoData(); err != nil {
+			t.Fatal(err)
+		}
+		updated := f.GeoDataInfo()
+		if !updated.UpdatedAt.Equal(time.Now()) || updated.Files != before.Files || !updated.UpdatedAt.Equal(f.Settings().Geo.UpdatedAt) {
+			t.Fatalf("manual update did not update the files and settings together: %+v", updated)
+		}
+		time.Sleep(time.Minute)
+		if got := f.GeoDataInfo(); got != updated {
+			t.Fatalf("the downloaded files' timestamp drifted: before=%+v, after=%+v", updated, got)
+		}
+	})
+}
 
 // TestUpdateSettingsMerges: the fake saves a patch like the service does
 // (the views' tests rely on it): writers that read the same settings and
