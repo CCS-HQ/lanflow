@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"lanflow/internal/controller"
 	"lanflow/internal/core"
@@ -26,19 +29,21 @@ import (
 // ---- controller ----
 
 type fakeCtrl struct {
-	mu       sync.Mutex
-	proxies  map[string]controller.Proxy
-	conns    controller.Connections
-	rules    []controller.Rule
-	provs    map[string]controller.RuleProvider
-	patches  []controller.ConfigPatch
-	selected [][2]string
-	reloads  int
-	reloadFn func(path string) error
-	version  string
-	trafficC chan controller.Traffic
-	connsC   chan controller.Connections
-	logsC    chan controller.Log
+	mu         sync.Mutex
+	proxies    map[string]controller.Proxy
+	conns      controller.Connections
+	rules      []controller.Rule
+	provs      map[string]controller.RuleProvider
+	patches    []controller.ConfigPatch
+	selected   [][2]string
+	reloads    int
+	reloadFn   func(path string) error
+	version    string
+	configs    controller.Configs
+	configsErr error
+	trafficC   chan controller.Traffic
+	connsC     chan controller.Connections
+	logsC      chan controller.Log
 	// connIntervals are the intervals of every StreamConnections call.
 	connIntervals []time.Duration
 	// connActive counts the connections streams open now; connMaxActive is
@@ -71,7 +76,9 @@ func newFakeCtrl() *fakeCtrl {
 
 func (f *fakeCtrl) Version(context.Context) (string, error) { return f.version, nil }
 func (f *fakeCtrl) Configs(context.Context) (controller.Configs, error) {
-	return controller.Configs{}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.configs, f.configsErr
 }
 func (f *fakeCtrl) PatchConfigs(_ context.Context, p controller.ConfigPatch) error {
 	f.mu.Lock()
@@ -87,6 +94,21 @@ func (f *fakeCtrl) ReloadConfig(_ context.Context, path string) error {
 	if fn != nil {
 		return fn(path)
 	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var cfg struct {
+		Tun struct {
+			Enable bool `yaml:"enable"`
+		} `yaml:"tun"`
+	}
+	if err := yaml.Unmarshal(b, &cfg); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.configs.Tun.Enable = cfg.Tun.Enable
+	f.mu.Unlock()
 	return nil
 }
 func (f *fakeCtrl) UpdateGeo(context.Context) error { return nil }
@@ -879,7 +901,7 @@ func (p *fakeProf) Compose(in profile.Input) (profile.Output, error) {
 		}
 		fmt.Fprintf(&layers, "# %s\n%s", l.Name, l.Text)
 	}
-	y := fmt.Sprintf("# sub\n%s# global\n%s%s# port %d\n", in.Subscription, in.GlobalOverride, layers.String(), in.Managed.MixedPort)
+	y := fmt.Sprintf("# sub\n%s# global\n%s%s# port %d\ntun:\n  enable: %t\n", in.Subscription, in.GlobalOverride, layers.String(), in.Managed.MixedPort, in.Managed.TUN)
 	var lines []model.RuntimeLine
 	for _, l := range strings.Split(strings.TrimSuffix(y, "\n"), "\n") {
 		lines = append(lines, model.RuntimeLine{Text: l, Source: "订阅"})
@@ -961,11 +983,12 @@ func (f *fakeTS) detect(context.Context, func(string) bool) tailscale.Info {
 
 // fakeStray is a core the previous run left (takeover.go).
 type fakeStray struct {
-	mu    sync.Mutex
-	found bool
-	tun   bool
-	stops int
-	fail  int // this many Stops fail first: the helper is silent
+	mu      sync.Mutex
+	found   bool
+	tun     bool
+	stops   int
+	fail    int // this many Stops fail first: the helper is silent
+	stopTUN bool
 }
 
 func (f *fakeStray) Find(context.Context, string) (bool, bool) {
@@ -974,10 +997,11 @@ func (f *fakeStray) Find(context.Context, string) (bool, bool) {
 	return f.found, f.tun
 }
 
-func (f *fakeStray) Stop(context.Context, string, bool) error {
+func (f *fakeStray) Stop(_ context.Context, _ string, tun bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stops++
+	f.stopTUN = tun
 	if f.fail > 0 {
 		f.fail--
 		return errors.New("无法连接权限组件（context deadline exceeded）")

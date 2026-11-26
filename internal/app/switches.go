@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -103,7 +104,11 @@ func (s *Service) checkOtherTUN() error {
 	defer cancel()
 	if s.d.stray != nil {
 		if found, tun := s.d.stray.Find(ctx, s.workDir); found && tun {
-			return nil // a core of ours in the helper (a previous run's): its TUN is Lanflow's own
+			// A helper core may keep serving the system proxy with TUN
+			// off. Its presence alone does not make another TUN ours.
+			if cfg, err := s.d.ctrl.Configs(ctx); err == nil && cfg.Tun.Enable {
+				return nil
+			}
 		}
 	}
 	if name, found := s.d.otherTUN(ctx); found {
@@ -239,12 +244,17 @@ func (s *Service) TUNHelperInstalled() bool {
 	return s.state.helperOK
 }
 
-// SetTUN turns TUN mode on or off. On requires the helper; the core is
-// restarted through the helper (on) or as the current user (off).
+// SetTUN turns TUN mode on or off. On requires the helper. Once the core
+// runs through it, TUN changes reload that core without releasing the
+// proxy listeners; stopping/restarting the core can change its runner.
 func (s *Service) SetTUN(on bool) (err error) {
 	defer func() { s.logOp("TUN "+onOff(on), err) }()
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
+	return s.setTUNLocked(on)
+}
+
+func (s *Service) setTUNLocked(on bool) error {
 	if on && !s.refreshHelper() {
 		return ErrHelperRequired
 	}
@@ -254,7 +264,7 @@ func (s *Service) SetTUN(on bool) (err error) {
 		}
 	}
 	var wasRunning, oldTUN bool
-	err = s.updateSettings(func(set *model.Settings) {
+	err := s.updateSettings(func(set *model.Settings) {
 		oldTUN = set.TUN
 		set.TUN = on
 		// A failed stop leaves runningTUN set: retry the handoff instead
@@ -268,16 +278,58 @@ func (s *Service) SetTUN(on bool) (err error) {
 	if !wasRunning {
 		return nil
 	}
-	if err := s.restartLocked(); err != nil {
+	if err := s.applyTUNLocked(); err != nil {
 		// Match SaveSettings: a refused transition must not persist the
 		// requested mode while the old core may still be running.
 		if rerr := s.updateSettings(func(set *model.Settings) { set.TUN = oldTUN }); rerr != nil {
 			s.alog.Warnf("TUN: restore the stored mode: %v", rerr)
 		}
 		s.em.emit(TopicSettings)
-		return fmt.Errorf(i18n.T("切换 TUN 模式后重新启动内核失败：%v"), err)
+		return fmt.Errorf(i18n.T("切换 TUN 模式失败：%v"), err)
 	}
 	return nil
+}
+
+// applyTUNLocked applies the saved TUN setting. A user-run core needs a
+// restart to gain privileges; a helper-run core can change the TUN
+// listener in place. Keep the full composition/staging path so DNS,
+// coexistence and the helper's checked config change together.
+func (s *Service) applyTUNLocked() error {
+	s.mu.Lock()
+	canReload := s.state.st.Core == model.CoreRunning && s.state.tunRunner
+	want := s.state.settings.TUN
+	wasTUN := s.state.runningTUN
+	s.mu.Unlock()
+	if !canReload || !s.d.mgr.Running() {
+		return s.restartLocked()
+	}
+	p, err := s.prepare(composeArgs{})
+	if err != nil {
+		return err
+	}
+	return s.reloadPreparedChecked(p, func(ctx context.Context, restoring bool) error {
+		cfg, err := s.d.ctrl.Configs(ctx)
+		if err != nil {
+			return err
+		}
+		expected := want
+		if restoring {
+			expected = wasTUN
+			// Even a failed rollback must report the observed TUN state
+			// and restore DNS when the TUN is no longer running.
+			s.mu.Lock()
+			s.state.st.TUN, s.state.runningTUN = cfg.Tun.Enable, cfg.Tun.Enable
+			s.mu.Unlock()
+			s.syncDNS()
+			s.em.emit(TopicStatus)
+		}
+		// Mihomo can acknowledge a reload while logging a TUN listener
+		// error. Confirm the applied flag before changing UI/DNS state.
+		if cfg.Tun.Enable != expected {
+			return errors.New(i18n.T("内核未能应用 TUN 状态，请查看内核日志。"))
+		}
+		return nil
+	})
 }
 
 // InstallTUNHelper installs the privileged helper (administrator prompt).
@@ -302,11 +354,23 @@ func (s *Service) InstallTUNHelper() (err error) {
 // UninstallTUNHelper removes the helper; TUN is turned off first when active.
 func (s *Service) UninstallTUNHelper() (err error) {
 	defer func() { s.logOp("uninstall helper", err) }()
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	s.mu.Lock()
 	tunOn := s.state.settings.TUN
 	s.mu.Unlock()
 	if tunOn {
-		if err := s.SetTUN(false); err != nil {
+		if err := s.setTUNLocked(false); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	helperRunning := s.state.tunRunner && s.state.st.Core == model.CoreRunning
+	s.mu.Unlock()
+	if helperRunning {
+		// TUN off now keeps the helper core alive. Move the proxy to an
+		// ordinary process before removing the service that owns it.
+		if err := s.restartLocked(); err != nil {
 			return err
 		}
 	}

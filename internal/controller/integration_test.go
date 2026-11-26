@@ -1,10 +1,14 @@
 package controller
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -202,6 +206,9 @@ rules:
 		t.Fatalf("no traffic frames received")
 	}
 	t.Logf("traffic frames: %d", frames.Load())
+	t.Run("reload preserves mixed proxy connections", func(t *testing.T) {
+		testReloadKeepsProxy(t, c, cfgPath, cfg)
+	})
 
 	// Kill the kernel and make sure the client reports it cleanly.
 	stop()
@@ -209,5 +216,95 @@ rules:
 	_, err = c.Version(ctx())
 	if err == nil {
 		t.Fatal("Version succeeded after kernel exit")
+	}
+}
+
+// No TUN or system settings are changed here: exercise the same full
+// config reload used by TUN switches against a local echo server.
+func testReloadKeepsProxy(t *testing.T, c *Client, path, base string) {
+	echo, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			conn, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				conn.SetDeadline(time.Now().Add(20 * time.Second))
+				_, _ = io.Copy(conn, conn)
+			}()
+		}
+	}()
+	portProbe, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := portProbe.Addr().(*net.TCPAddr).Port
+	portProbe.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	reload := func() {
+		t.Helper()
+		cfg := fmt.Sprintf("mixed-port: %d\ntun:\n  enable: false\n%s", port, base)
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		if err := c.ReloadConfig(ctx, path); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("config reload: %v", time.Since(start))
+		got, err := c.Configs(ctx)
+		if err != nil || got.MixedPort != port || got.Tun.Enable {
+			t.Fatalf("after reload: %+v, %v", got, err)
+		}
+	}
+	dial := func() (net.Conn, *bufio.Reader) {
+		t.Helper()
+		conn, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", echo.Addr(), echo.Addr()); err != nil {
+			t.Fatal(err)
+		}
+		reader := bufio.NewReader(conn)
+		res, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("CONNECT: %s", res.Status)
+		}
+		// The CONNECT body is the tunnel; its connection is closed above.
+		return conn, reader
+	}
+	ping := func(conn net.Conn, reader *bufio.Reader) {
+		t.Helper()
+		const message = "same TCP connection"
+		if _, err := io.WriteString(conn, message); err != nil {
+			t.Fatal(err)
+		}
+		got := make([]byte, len(message))
+		if _, err := io.ReadFull(reader, got); err != nil || string(got) != message {
+			t.Fatalf("echo after reload: %q, %v", got, err)
+		}
+	}
+	reload()
+	conn, reader := dial()
+	ping(conn, reader)
+	for range 3 {
+		reload()
+		ping(conn, reader)
+		fresh, freshReader := dial()
+		ping(fresh, freshReader)
+		fresh.Close()
 	}
 }

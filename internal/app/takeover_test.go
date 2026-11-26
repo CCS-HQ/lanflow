@@ -19,6 +19,7 @@ func leftOver(tun bool) func(h *harness) {
 	return func(h *harness) {
 		h.helper.installed = true
 		h.stray.found, h.stray.tun = true, tun
+		h.ctrl.configs.Tun.Enable = tun
 		h.sys.state.Enabled, h.sys.state.Host, h.sys.state.Port = true, "127.0.0.1", 7890
 		h.dns.servers = sysdns.TUNServers // the system DNS points at the TUN
 		_ = os.MkdirAll(h.dir, 0o700)
@@ -93,6 +94,20 @@ func TestTakeOverOrphanCore(t *testing.T) {
 	}
 }
 
+func TestTakeOverHelperWithTUNOff(t *testing.T) {
+	h := newHarness(t, func(h *harness) {
+		leftOver(true)(h)
+		h.ctrl.configs.Tun.Enable = false // actual core state, not its privilege level
+	})
+	h.s.bootstrap()
+	if h.mgr.adopts != 1 || h.s.Status().TUN || !h.s.Status().SystemProxy || h.dns.restores != 1 {
+		t.Fatalf("takeover: status=%+v, DNS restores=%d", h.s.Status(), h.dns.restores)
+	}
+	if h.mgr.runner.(namedRunner).name != "helper" {
+		t.Fatal("lost the privileged runner")
+	}
+}
+
 // Nothing left running: a crash as before (recovery asked, DNS restored).
 func TestNoStrayIsACrash(t *testing.T) {
 	h := newHarness(t, func(hh *harness) {
@@ -110,6 +125,7 @@ func TestStrayIsNotAnotherClient(t *testing.T) {
 	h := newHarness(t, nil)
 	h.s.d.otherTUN = func(ctx context.Context) (string, bool) { return "utun1700", true }
 	h.stray.found, h.stray.tun = true, true
+	h.ctrl.configs.Tun.Enable = true
 	if err := h.s.checkOtherTUN(); err != nil {
 		t.Fatalf("own TUN refused: %v", err)
 	}

@@ -83,13 +83,15 @@ func tunHandoffHarness(t *testing.T) *harness {
 	if err := h.s.StartCore(); err != nil {
 		t.Fatal(err)
 	}
+	h.ctrl.mu.Lock()
+	h.ctrl.configs.Tun.Enable = true
+	h.ctrl.mu.Unlock()
 	return h
 }
 
 // A stopped privileged core can leave its port unbindable for a while.
-// Both the switch and a settings edit must wait before starting the user
-// core, then enable the system proxy on the original port.
-func TestTUNToSystemProxyKeepsPort(t *testing.T) {
+// After an explicit stop, a later user core must still wait for the port.
+func TestStoppedTUNToSystemProxyKeepsPort(t *testing.T) {
 	for _, viaSettings := range []bool{false, true} {
 		t.Run(map[bool]string{false: "switch", true: "settings"}[viaSettings], func(t *testing.T) {
 			h := tunHandoffHarness(t)
@@ -98,6 +100,9 @@ func TestTUNToSystemProxyKeepsPort(t *testing.T) {
 			h.mgr.mu.Lock()
 			h.mgr.onStop = func() { h.taken[port] = true }
 			h.mgr.mu.Unlock()
+			if err := h.s.StopCore(); err != nil {
+				t.Fatal(err)
+			}
 			waited := false
 			h.s.d.waitPortFree = func(ctx context.Context, p int, lan bool, timeout time.Duration) error {
 				if p != port || h.mgr.Running() || mgrStarts(h) != starts {
@@ -121,6 +126,9 @@ func TestTUNToSystemProxyKeepsPort(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if err := h.s.StartCore(); err != nil {
+				t.Fatal(err)
+			}
 			if err := h.s.SetSystemProxy(true); err != nil {
 				t.Fatal(err)
 			}
@@ -140,7 +148,7 @@ func TestTUNToSystemProxyKeepsPort(t *testing.T) {
 	}
 }
 
-func TestTUNHandoffFailureRestoresSettings(t *testing.T) {
+func TestTUNRestartFailureRestoresSettings(t *testing.T) {
 	for _, cause := range []error{errPortListening, context.DeadlineExceeded} {
 		t.Run(cause.Error(), func(t *testing.T) {
 			h := tunHandoffHarness(t)
@@ -148,7 +156,9 @@ func TestTUNHandoffFailureRestoresSettings(t *testing.T) {
 			h.taken[port] = true
 			h.s.d.waitPortFree = func(context.Context, int, bool, time.Duration) error { return cause }
 			before := mgrStarts(h)
-			err := h.s.SetTUN(false)
+			set := h.s.Settings()
+			set.TUN, set.CorePath = false, "/fake/another-mihomo"
+			err := h.s.SaveSettings(set) // changing the binary still requires a restart
 			if err == nil || !h.s.Settings().TUN || mgrStarts(h) != before {
 				t.Fatalf("failed handoff: err=%v, TUN=%v, starts=%d", err, h.s.Settings().TUN, mgrStarts(h))
 			}
@@ -173,7 +183,7 @@ func TestTUNStopFailureDoesNotStartAnotherCore(t *testing.T) {
 	before := mgrStarts(h)
 	mgr := h.s.d.mgr
 	h.s.d.mgr = stopFailMgr{mgr}
-	err := h.s.SetTUN(false)
+	err := h.s.RestartCore()
 	h.s.d.mgr = mgr
 	if err == nil || !strings.Contains(err.Error(), "helper did not answer") || mgrStarts(h) != before {
 		t.Fatalf("stop failure: err=%v, starts=%d", err, mgrStarts(h))

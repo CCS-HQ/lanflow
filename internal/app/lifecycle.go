@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"lanflow/internal/core"
@@ -287,38 +286,8 @@ func (s *Service) startLocked() (err error) {
 		return errors.New(coreMissingText(set.CorePath, core.ErrNotFound))
 	}
 	fail := s.failStart
-	if prev != model.CoreRunning && s.d.portInUse(set.MixedPort, set.AllowLAN) {
-		// A core of ours the previous run left may hold it (takeover.go).
-		s.stopStray()
-		busy := s.d.portInUse(set.MixedPort, set.AllowLAN)
-		if busy && set.TUN && helperOK && runtime.GOOS == "darwin" {
-			// The probe runs as this user; a root core binds over the
-			// TIME_WAIT sockets that make it fail, so only a real listener
-			// is a conflict. (Should launchLocked fall back to a plain
-			// proxy because another TUN runs, the core logs the bind error.)
-			if s.d.portListening != nil && s.d.portListening(set.MixedPort) {
-				return fail(s.portTaken(set.MixedPort), model.CoreError)
-			}
-		} else if busy {
-			if s.d.waitPortFree == nil {
-				return fail(s.portTaken(set.MixedPort), model.CoreError)
-			}
-			s.mu.Lock()
-			timeout := portWaitTimeout(s.d.now(), s.state.rootStoppedAt)
-			s.mu.Unlock()
-			s.alog.Infof("waiting up to %v for proxy port %d to become reusable", timeout.Round(time.Second), set.MixedPort)
-			if timeout > portWaitShort {
-				s.notify(Notice{Kind: "toast", Title: i18n.T("正在等待系统释放代理端口"),
-					Detail: i18n.Tf("TUN 模式下的连接刚关闭，系统要再占用端口 %d 最多约 %d 秒。", set.MixedPort, int(timeout.Round(time.Second)/time.Second))})
-			}
-			err := s.d.waitPortFree(s.rootCtx, set.MixedPort, set.AllowLAN, timeout)
-			if errors.Is(err, errPortListening) {
-				return fail(s.portTaken(set.MixedPort), model.CoreError)
-			}
-			if err != nil {
-				return fail(fmt.Errorf(i18n.T("等待代理端口 %d 释放失败：%v。请稍后重试。"), set.MixedPort, err), model.CoreError)
-			}
-		}
+	if err := s.waitStartPort(set, helperOK, prev); err != nil {
+		return fail(err, model.CoreError)
 	}
 	s.detectTailscale() // compose with Tailscale's interface when it is already up
 	s.detectCoexist()   // compose with aTrust's routes when it is already running
@@ -422,10 +391,11 @@ func (s *Service) tunLogFile() string {
 // next start waits long enough for its TIME_WAIT sockets (portwait.go).
 func (s *Service) noteCoreStopped() {
 	s.mu.Lock()
-	if s.state.tunRunner {
-		s.state.rootStoppedAt = s.d.now()
-	}
+	helper := s.state.tunRunner
 	s.mu.Unlock()
+	if helper {
+		s.noteRootStopped()
+	}
 }
 
 // runnerFor picks the exec or helper runner and remembers which one is active.
@@ -584,7 +554,7 @@ func (s *Service) restartLocked() (err error) {
 // coreGone is what coreGoneCleanupLocked found and did.
 type coreGone struct {
 	ours     bool  // Lanflow had set the system proxy
-	tun      bool  // the core that went away ran with TUN
+	helper   bool  // the core that went away ran through the helper, even with TUN off
 	proxyErr error // the system proxy could not be released: it still points at the core
 }
 
@@ -596,7 +566,7 @@ type coreGone struct {
 // result. opMu must be held.
 func (s *Service) coreGoneCleanupLocked() coreGone {
 	s.mu.Lock()
-	g := coreGone{ours: s.state.weSetProxy, tun: s.state.runningTUN}
+	g := coreGone{ours: s.state.weSetProxy, helper: s.state.tunRunner}
 	s.state.runningTUN = false
 	s.state.st.TUN = false
 	s.mu.Unlock()
@@ -661,7 +631,15 @@ func (s *Service) reloadPath(ctx context.Context) (string, error) {
 // it (subscription switch, update, edit) does not validate it twice; opMu
 // must be held and p must compose what the store now says. A stopped core
 // only drops p: the next start composes afresh.
-func (s *Service) reloadPrepared(p prepared) (err error) {
+func (s *Service) reloadPrepared(p prepared) error {
+	return s.reloadPreparedChecked(p, nil)
+}
+
+// check, when present, verifies a runtime change that the core can reject
+// without failing the reload request. A failed check reloads the restored
+// config as well as restoring it on disk. restoring tells check to verify
+// the previous runtime after rollback instead of the requested change.
+func (s *Service) reloadPreparedChecked(p prepared, check func(ctx context.Context, restoring bool) error) (err error) {
 	if !s.running() {
 		p.discard()
 		return nil
@@ -675,20 +653,33 @@ func (s *Service) reloadPrepared(p prepared) (err error) {
 	}
 	ctx, cancel := s.svcCtx(ctrlTimeout * 2)
 	path, err := s.reloadPath(ctx)
+	attempted := err == nil
 	if err == nil {
 		err = s.d.ctrl.ReloadConfig(ctx, path)
 	}
+	if err == nil && check != nil {
+		err = check(ctx, false)
+	}
 	cancel()
 	if err != nil {
+		var restoreErr error
 		if rerr := s.rollback(); rerr != nil {
+			restoreErr = rerr
 			s.alog.Errorf("reload config: %v", rerr)
-		} else if path != "" && path != s.runtime {
+		} else if (path != "" && path != s.runtime) || (check != nil && attempted) {
 			// The helper's copy is now the config the core refused, and it
 			// is the file that core reads when it is told to reload its own
 			// config: stage the restored one again.
 			rctx, rcancel := s.svcCtx(ctrlTimeout)
-			if _, serr := s.reloadPath(rctx); serr != nil {
+			restored, serr := s.reloadPath(rctx)
+			if serr != nil {
+				restoreErr = serr
 				s.alog.Warnf("reload config: restore the helper's copy: %v", serr)
+			} else if check != nil && attempted {
+				restoreErr = s.d.ctrl.ReloadConfig(rctx, restored)
+				if restoreErr == nil {
+					restoreErr = check(rctx, true)
+				}
 			}
 			rcancel()
 		}
@@ -698,6 +689,9 @@ func (s *Service) reloadPrepared(p prepared) (err error) {
 		s.state.runtimeDNS, s.state.groupIcons = rd, icons
 		s.state.dialers = dialersOf(prevYAML)
 		s.mu.Unlock()
+		if restoreErr != nil {
+			return fmt.Errorf(i18n.T("内核重新加载配置失败：%v；恢复运行配置也失败：%v。请重新启动内核。"), err, restoreErr)
+		}
 		return fmt.Errorf(i18n.T("内核重新加载配置失败：%v。仍在使用之前的配置。"), err)
 	}
 	s.mu.Lock()
@@ -792,16 +786,14 @@ func (s *Service) handleCrash(cause error) {
 	s.recordCoreExit(cause)
 
 	g := s.coreGoneCleanupLocked() // the restart below sets the DNS again when TUN comes back
-	if g.tun {
-		s.mu.Lock()
-		s.state.rootStoppedAt = s.d.now()
-		s.mu.Unlock()
+	if g.helper {
+		s.noteRootStopped()
 	}
 	if errors.Is(cause, core.ErrStateUnknown) && s.d.stray != nil {
 		// The helper went silent: the core may well still run and hold
 		// its ports, which would fail the restart below.
 		sctx, scancel := context.WithTimeout(context.Background(), 15*time.Second)
-		err := s.d.stray.Stop(sctx, s.workDir, g.tun)
+		err := s.d.stray.Stop(sctx, s.workDir, g.helper)
 		scancel()
 		if err != nil {
 			// Still silent, so the core cannot be stopped either: a start
@@ -810,6 +802,9 @@ func (s *Service) handleCrash(cause error) {
 			s.alog.Warnf("stop the core of unknown state: %v; restarting once the helper answers", err)
 			s.awaitHelperLocked(msg, g)
 			return
+		}
+		if g.helper {
+			s.noteRootStopped()
 		}
 	}
 	if s.rootCtx.Err() == nil && (last.IsZero() || now.Sub(last) > autoRestartGap) {
@@ -908,12 +903,15 @@ func (s *Service) recoverFromSilentHelper(msg string, g coreGone) bool {
 		return true // started or stopped by the user meanwhile
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	err := s.d.stray.Stop(ctx, s.workDir, g.tun)
+	err := s.d.stray.Stop(ctx, s.workDir, g.helper)
 	cancel()
 	if err != nil {
 		return false
 	}
 	s.alog.Infof("the helper answers again: stopped the core of unknown state, starting it")
+	if g.helper {
+		s.noteRootStopped()
+	}
 	s.mu.Lock()
 	s.state.lastAutoStart = s.d.now()
 	s.mu.Unlock()

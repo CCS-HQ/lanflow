@@ -162,6 +162,10 @@ func stopLeftovers(o LeftoverOptions, d leftoverDeps) LeftoverReport {
 			if err := d.stray.Stop(ctx, workDir, tun); err != nil {
 				r.CoreErr = err
 				logf("stop the previous run's core: %v", err)
+			} else if tun {
+				if err := writeRootStopped(o.DataDir, time.Now()); err != nil {
+					logf("remember the privileged core's exit: %v", err)
+				}
 			}
 		}
 		cancel()
