@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- 澜流 Lanflow: a breaking wave over the water line. The source of
+       icon.png: go run ./scripts/icon -->
+  <defs>
+    <linearGradient id="sea" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#0F766E"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#sea)"/>
+  <g fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" transform="translate(-22 -48)">
+    <path stroke-width="118" d="M250 700C320 500 470 330 680 330A140 140 0 0 1 820 470A140 140 0 0 1 680 610A100 100 0 0 1 580 510"/>
+    <path stroke-width="46" stroke-opacity=".55" d="M250 822c88-48 176-48 264 0s176 48 264 0"/>
+  </g>
+</svg>

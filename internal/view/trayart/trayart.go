@@ -37,11 +37,12 @@ const (
 )
 
 // The menu bar / notification area icon (docs/design.md §7): the Lanflow
-// mark, three waves, drawn at one weight in every state. The state shows
-// in which waves are solid: all three when traffic is taken over (system
-// proxy or TUN), the middle one when only the core runs, none when it is
-// stopped. A dot in the top right corner marks HTTPS decryption, a red one
-// an error. On macOS a small traffic graph may follow the mark.
+// mark, a breaking wave over the water line (scripts/icon/icon.svg), drawn
+// at one weight in every state. The state shows in which strokes are
+// solid: both when traffic is taken over (system proxy or TUN), only the
+// water line when only the core runs, neither when it is stopped. A dot
+// in the top left corner, beside the crest, marks HTTPS decryption, a red
+// one an error. On macOS a small traffic graph may follow the mark.
 
 // Look is everything the icon shows.
 type Look struct {
@@ -77,8 +78,8 @@ type Ink struct {
 }
 
 const (
-	waveWidth = "1.4"
-	faint     = 0.32 // opacity of an inactive wave
+	markWidth = 71.0 // the stroke, 1.5 pt, in the mark's own units (markScale)
+	faint     = 0.32 // opacity of an inactive stroke
 	GraphBars = 8
 	// graphLevels is how many heights above zero a bar of the graph takes.
 	graphLevels = 10
@@ -97,48 +98,45 @@ func iconWidth(l Look) float64 {
 	return w
 }
 
-// The waves, inset to a ~14pt visual footprint inside the 18pt macOS status
-// item frame (matching Clash Party's 16pt tray icon).
+// The mark's two strokes in the app icon's coordinates (scripts/icon/icon.svg),
+// scaled to a ~12pt footprint inside the 18pt macOS status item frame.
 const (
-	waveTop    = "M3.4 6c1.9-1.5 3.7-1.5 5.6 0s3.7 1.5 5.6 0"
-	waveTopCut = "M3.4 6c1.9-1.5 3.7-1.5 5.6 0"
-	waveMid    = "M3.4 9.2c1.9-1.5 3.7-1.5 5.6 0s3.7 1.5 5.6 0"
-	waveBottom = "M3.4 12.4c1.9-1.5 3.7-1.5 5.6 0s3.7 1.5 5.6 0"
+	markCurl      = "M250 700C320 500 470 330 680 330A140 140 0 0 1 820 470A140 140 0 0 1 680 610A100 100 0 0 1 580 510"
+	markWater     = "M250 822c88-48 176-48 264 0s176 48 264 0"
+	markTransform = "translate(-2.26 -3.55) scale(0.02105)"
 )
 
-func waveOpacity(state State) [3]float64 {
+// markOpacity is the opacity of the crest and of the water line.
+func markOpacity(state State) [2]float64 {
 	switch state {
 	case On:
-		return [3]float64{1, 1, 1}
+		return [2]float64{1, 1}
 	case Half:
-		return [3]float64{faint, 1, faint}
+		return [2]float64{faint, 1}
 	default: // off, error
-		return [3]float64{faint, faint, faint}
+		return [2]float64{faint, faint}
 	}
 }
 
-// SVG is the icon (waves and optional traffic graph) as SVG in points (18 tall).
+// SVG is the icon (the mark and optional traffic graph) as SVG in points (18 tall).
 func SVG(l Look) string {
 	w := iconWidth(l)
-	op := waveOpacity(l.State)
-	badge := l.Capture || l.State == Error
-	top := waveTop
-	if badge {
-		top = waveTopCut
-	}
+	op := markOpacity(l.State)
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %g 18" fill="none" stroke="currentColor" stroke-width="%s" stroke-linecap="round">`, w, waveWidth)
-	for i, d := range []string{top, waveMid, waveBottom} {
+	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %g 18" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round">`, w)
+	fmt.Fprintf(&b, `<g transform="%s" stroke-width="%g" stroke-linejoin="round">`, markTransform, markWidth)
+	for i, d := range []string{markCurl, markWater} {
 		fmt.Fprintf(&b, `<path d="%s" stroke-opacity="%.2f"/>`, d, op[i])
 	}
+	b.WriteString(`</g>`)
 	switch {
 	case l.State == Error:
-		b.WriteString(`<circle cx="14" cy="4.6" r="2.4" fill="#FF3B30" stroke="none"/>`)
+		b.WriteString(`<circle cx="3" cy="3.2" r="2.1" fill="#FF3B30" stroke="none"/>`)
 	case l.Capture:
-		b.WriteString(`<circle cx="14" cy="4.6" r="2.1" fill="currentColor" stroke="none"/>`)
+		b.WriteString(`<circle cx="3" cy="3.2" r="1.8" fill="currentColor" stroke="none"/>`)
 	}
 	if l.Graph != nil {
-		// bars on a faint baseline, bottom-aligned with the lowest wave
+		// bars on a faint baseline, bottom-aligned with the water line
 		x0, base, h := 21.0, 15.5, 12.0
 		step := graphW / GraphBars
 		bw := step * 0.62
