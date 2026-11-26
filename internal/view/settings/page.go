@@ -508,6 +508,7 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 				})
 			})
 			p.updateRows(c, t, s)
+			p.starRow(c)
 			p.feedbackRows(c, t, s)
 		})
 	})

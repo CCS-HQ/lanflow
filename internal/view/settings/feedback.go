@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"lanflow/internal/i18n"
@@ -19,6 +20,10 @@ import (
 // feedbackDocURL explains the report contract for a self-hosted endpoint.
 const feedbackDocURL = "https://github.com/CCS-HQ/lanflow/blob/main/docs/feedback-api.md"
 
+// repoURL is the project's GitHub page, where 关于 › 在 GitHub 上点 Star
+// sends the user.
+const repoURL = "https://github.com/CCS-HQ/lanflow"
+
 type feedbackUI struct {
 	open         bool
 	endpoint     field
@@ -29,6 +34,14 @@ type feedbackUI struct {
 
 func validEndpoint(v string) bool {
 	return strings.HasPrefix(v, "https://") || strings.HasPrefix(v, "http://localhost") || strings.HasPrefix(v, "http://127.0.0.1")
+}
+
+// starRow is the row of 关于 under 应用更新 that opens the project's
+// GitHub page, to star it or follow its releases.
+func (p *Page) starRow(c *ui.Context) {
+	p.e.Kit.Row(c, i18n.T("在 GitHub 上点 Star"), i18n.T("觉得好用欢迎点个 Star，也可在那里关注新版本"), func() {
+		ui.Button(c, i18n.T("打开 GitHub")).Tooltip(repoURL).OnClick(func() { _ = mygo.Shell.OpenExternal(repoURL) })
+	})
 }
 
 // feedbackRows are the rows of 关于.
