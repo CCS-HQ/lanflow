@@ -82,6 +82,9 @@ type ConnectOptions struct {
 	OnUI    func(rpc.UICommand)
 	OnState func(up bool, err error)
 	Hold    func() bool
+	// NeedsReplace, when set, checks whether a running service PID should
+	// be replaced (e.g. a non-elevated service when the window is elevated).
+	NeedsReplace func(pid int) bool
 
 	replaced bool // an older service was replaced already (Connect)
 }
@@ -163,6 +166,18 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 		}
 		o.replaced = true
 		return Connect(ctx, o)
+	}
+	if o.NeedsReplace != nil && o.Start != nil && !o.replaced && c.Conn() != nil {
+		if pid := c.Conn().Welcome().PID; pid > 0 && pid != os.Getpid() && o.NeedsReplace(pid) {
+			quit := func() error { return c.QuitService() }
+			err := o.replace(pid, quit)
+			c.Close()
+			if err != nil {
+				return nil, rpc.AttachResult{}, err
+			}
+			o.replaced = true
+			return Connect(ctx, o)
+		}
 	}
 	res, err := c.AttachUI(nil, o.Attach)
 	if err != nil {

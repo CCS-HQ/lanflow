@@ -10,6 +10,7 @@ package split
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -27,15 +28,23 @@ const (
 	// service and tries the single process instead; a service that gets
 	// it as a second instance does not start another window for it.
 	FallbackFlag = "--fallback"
+	// NoElevateFlag prevents maybeElevate from re-prompting for UAC when
+	// the user declined elevation or the process was just elevated.
+	NoElevateFlag = "--no-elevate"
+	// WaitExitFlag waits for an older Lanflow PID to exit before starting
+	// (used when relaunching with administrator rights).
+	WaitExitFlag = "--wait-exit="
 )
 
 // Args is what the command line asks for.
 type Args struct {
-	Service  bool
-	Login    bool
-	Fallback bool
-	Open     string // --open=…
-	Link     string // a lanflow:// or clash:// argument (Windows deep links)
+	Service   bool
+	Login     bool
+	Fallback  bool
+	NoElevate bool
+	WaitExit  int
+	Open      string // --open=…
+	Link      string // a lanflow:// or clash:// argument (Windows deep links)
 }
 
 // ParseArgs reads the flags of a launch (os.Args[1:]).
@@ -49,6 +58,12 @@ func ParseArgs(args []string) Args {
 			a.Login = true
 		case s == FallbackFlag:
 			a.Fallback = true
+		case s == NoElevateFlag:
+			a.NoElevate = true
+		case strings.HasPrefix(s, WaitExitFlag):
+			if pid, err := strconv.Atoi(strings.TrimPrefix(s, WaitExitFlag)); err == nil && pid > 0 {
+				a.WaitExit = pid
+			}
 		case strings.HasPrefix(s, OpenFlag):
 			a.Open = strings.TrimPrefix(s, OpenFlag)
 		case IsLink(s):

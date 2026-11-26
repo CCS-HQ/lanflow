@@ -235,10 +235,16 @@ func TestInstallCoreStoresVersionWithoutSwitching(t *testing.T) {
 	if dl := h.s.CoreDownload(); dl.Active || dl.Done != "v1.19.33" || dl.Error != "" {
 		t.Fatalf("progress: %+v", dl)
 	}
-	for _, leftover := range []string{bin + ".download", bin + ".new"} {
+	for _, leftover := range []string{bin + ".download", stagedCorePath(bin)} {
 		if _, err := os.Stat(leftover); err == nil {
 			t.Fatalf("temp file left behind: %s", leftover)
 		}
+	}
+	if got := stagedCorePath(`C:\Users\alice\cores\v1.19.34\mihomo.exe`); got != `C:\Users\alice\cores\v1.19.34\mihomo.new.exe` {
+		t.Fatalf("stagedCorePath windows = %q", got)
+	}
+	if got := stagedCorePath("/tmp/cores/v1.19.34/mihomo"); got != "/tmp/cores/v1.19.34/mihomo.new" {
+		t.Fatalf("stagedCorePath unix = %q", got)
 	}
 	// a second install of the same version is a no-op
 	n := hits.Load()

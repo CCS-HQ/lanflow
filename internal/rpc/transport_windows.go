@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
@@ -69,9 +70,63 @@ func currentSID() (string, error) {
 	return tu.User.Sid.String(), nil
 }
 
+var (
+	modadvapi32                    = windows.NewLazySystemDLL("advapi32.dll")
+	procImpersonateNamedPipeClient = modadvapi32.NewProc("ImpersonateNamedPipeClient")
+)
+
 // verifyClient checks the client process on a server-side pipe handle.
+// If OpenProcess fails with ERROR_ACCESS_DENIED (for example, a Medium-IL
+// service accepting a High-IL client of the same user), it falls back to
+// ImpersonateNamedPipeClient to read the client's token user SID.
 func verifyClient(conn net.Conn) error {
-	return verifyPipePID(conn, windows.GetNamedPipeClientProcessId)
+	fc, ok := conn.(interface{ Fd() uintptr })
+	if !ok {
+		return errors.New("无法获取管道句柄")
+	}
+	h := windows.Handle(fc.Fd())
+	var pid uint32
+	if err := windows.GetNamedPipeClientProcessId(h, &pid); err != nil {
+		return fmt.Errorf("无法获取对端进程: %w", err)
+	}
+	want, err := currentSID()
+	if err != nil {
+		return err
+	}
+	got, err := processSID(pid)
+	if err != nil {
+		if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return fmt.Errorf("无法检查对端进程 %d: %w", pid, err)
+		}
+		got, err = impersonatePipeClientSID(h)
+		if err != nil {
+			return fmt.Errorf("无法检查对端进程 %d: %w", pid, err)
+		}
+	}
+	if got != want {
+		return fmt.Errorf("对端进程 %d 属于 %s，不是当前用户", pid, got)
+	}
+	return nil
+}
+
+func impersonatePipeClientSID(h windows.Handle) (string, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	r, _, err := procImpersonateNamedPipeClient.Call(uintptr(h))
+	if r == 0 {
+		return "", fmt.Errorf("ImpersonateNamedPipeClient: %w", err)
+	}
+	defer func() { _ = windows.RevertToSelf() }()
+	var tok windows.Token
+	if err := windows.OpenThreadToken(windows.CurrentThread(), windows.TOKEN_QUERY, true, &tok); err != nil {
+		return "", fmt.Errorf("OpenThreadToken: %w", err)
+	}
+	defer tok.Close()
+	tu, err := tok.GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	return tu.User.Sid.String(), nil
 }
 
 // verifyServer checks the server process on a client-side pipe handle.

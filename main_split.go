@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,7 +84,7 @@ func runService(args split.Args) {
 			}
 		},
 		Quit:     func() { mygo.App.Quit() },
-		Settings: func(set model.Settings) { queueAutostart(exe, set.OpenAtLogin) },
+		Settings: func(set model.Settings) { queueAutostart(exe, set.OpenAtLogin, set.RunAsAdmin) },
 	})
 	box.OnNew = bg.SystemNotice
 	offNotices := api.OnChange(func(t app.Topic) {
@@ -348,9 +349,16 @@ func runWindow(args split.Args) {
 		}
 	}
 	startService := func() error { return split.StartService(exe, false) }
+	var needsReplace func(int) bool
+	if runtime.GOOS == "windows" && isElevated() {
+		needsReplace = func(pid int) bool {
+			elev, err := split.ProcessElevated(pid)
+			return err == nil && !elev
+		}
+	}
 	cl, res, err := split.Connect(context.Background(), split.ConnectOptions{
 		DataDir: o.DataDir, Version: version, Attach: firstOf(args.Open, args.Link),
-		Start: startService, OnUI: onUI,
+		Start: startService, OnUI: onUI, NeedsReplace: needsReplace,
 		// An older service was ended (an update while it ran): clear what
 		// it left before the new one starts.
 		Cleanup: func() { app.StopLeftovers(app.LeftoverOptions{DataDir: o.DataDir}) },
@@ -402,7 +410,13 @@ func runWindow(args split.Args) {
 	i18n.SetLang(cl.Settings().Language)
 	view.ApplyLanguage(cl.Settings().Language)
 	view.ApplyAppearance(cl.Settings().Appearance)
-	sh := view.New(cl, view.Options{Mac: runtime.GOOS == "darwin", Remote: true, SetShortcut: cl.SetShortcut})
+	sh := view.New(cl, view.Options{
+		Mac:         runtime.GOOS == "darwin",
+		Windows:     runtime.GOOS == "windows",
+		Elevated:    isElevated(),
+		Remote:      true,
+		SetShortcut: cl.SetShortcut,
+	})
 	// 重新启动 after an update: the old service quits (restoring the
 	// system proxy and DNS, stopping the decryption process and the core),
 	// is terminated or killed when it does not, what it left is cleared
@@ -434,6 +448,43 @@ func runWindow(args split.Args) {
 				mygo.App.Relaunch()
 			},
 		})
+	})
+	sh.SetRelaunchElevated(func() {
+		if !updating.CompareAndSwap(false, true) {
+			return
+		}
+		serviceQuitting.Store(true)
+		set := cl.Settings()
+		pid := 0
+		if c := cl.Conn(); c != nil {
+			pid = c.Welcome().PID
+		}
+		if pid == os.Getpid() {
+			pid = 0
+		}
+		go func() {
+			if err := split.RunElevated(exe, split.WaitExitFlag+strconv.Itoa(os.Getpid()), split.NoElevateFlag); err != nil {
+				serviceQuitting.Store(false)
+				updating.Store(false)
+				if !errors.Is(err, split.ErrElevationCanceled) {
+					sh.Env().Toast(err.Error(), true)
+				}
+				return
+			}
+			log.Printf("lanflow: elevated restart: ending the service %d first", pid)
+			split.RestartForUpdate(split.UpdateRestart{
+				PID:  pid,
+				Stop: split.StopOptions{Quit: cl.QuitService},
+				Cleanup: func() {
+					r := app.StopLeftovers(app.LeftoverOptions{DataDir: o.DataDir, MixedPort: set.MixedPort, AllowLAN: set.AllowLAN})
+					log.Printf("lanflow: elevated restart: leftovers %+v", r)
+				},
+				Relaunch: func() {
+					quitting.Store(true)
+					mygo.App.Quit()
+				},
+			})
+		}()
 	})
 	if p := os.Getenv("LANFLOW_PAGE"); p != "" && os.Getenv("LANFLOW_FAKE") == "1" {
 		page, arg, _ := strings.Cut(p, ":")

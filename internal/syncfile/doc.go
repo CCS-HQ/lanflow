@@ -234,6 +234,7 @@ var Excluded = []ExcludedItem{
 	{"settings.ui", "interface state"},
 	{"settings.connHiddenColumns", "interface state"},
 	{"settings.openAtLogin", "a login item of this machine"},
+	{"settings.runAsAdmin", "Windows administrator launch preference of this machine"},
 	{"settings.tun", "TUN needs the helper installed on this machine"},
 	{"settings.corePath", "a path on this machine"},
 	{"settings.coreVersion", "a core version installed on this machine"},

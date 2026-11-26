@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
@@ -216,8 +217,9 @@ func verifyControllerServer(conn net.Conn, address string) error {
 	if !ok {
 		return errors.New("无法获取内核控制器管道句柄")
 	}
+	h := windows.Handle(fc.Fd())
 	var pid uint32
-	if err := windows.GetNamedPipeServerProcessId(windows.Handle(fc.Fd()), &pid); err != nil {
+	if err := windows.GetNamedPipeServerProcessId(h, &pid); err != nil {
 		return fmt.Errorf("无法获取内核控制器进程：%w", err)
 	}
 	if ownServer(int(pid)) {
@@ -225,11 +227,17 @@ func verifyControllerServer(conn net.Conn, address string) error {
 	}
 	proc, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return verifyHelperControllerPipe(h, address)
+		}
 		return fmt.Errorf("无法检查内核控制器进程 %d：%w", pid, err)
 	}
 	defer windows.CloseHandle(proc)
 	var tok windows.Token
 	if err := windows.OpenProcessToken(proc, windows.TOKEN_QUERY, &tok); err != nil {
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return verifyHelperControllerPipe(h, address)
+		}
 		return fmt.Errorf("无法检查内核控制器进程 %d：%w", pid, err)
 	}
 	defer tok.Close()
@@ -250,6 +258,57 @@ func verifyControllerServer(conn net.Conn, address string) error {
 		return nil
 	}
 	return fmt.Errorf("管道 %s 的服务进程 %d（%s）不是澜流启动的 Mihomo 内核", address, pid, image)
+}
+
+// verifyHelperControllerPipe checks the controller pipe when a non-elevated
+// caller cannot open the LocalSystem mihomo.exe process: the pipe object must
+// be owned by SYSTEM or Administrators and LanflowHelper must be running.
+func verifyHelperControllerPipe(h windows.Handle, address string) error {
+	if err := verifyPipeOwnerPrivileged(h, address); err != nil {
+		return err
+	}
+	return verifyHelperServiceRunning()
+}
+
+func verifyPipeOwnerPrivileged(h windows.Handle, address string) error {
+	sd, err := windows.GetSecurityInfo(h, windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("无法读取内核控制器管道属主：%w", err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil || owner == nil {
+		return errors.New("无法读取内核控制器管道属主")
+	}
+	if !owner.IsWellKnown(windows.WinLocalSystemSid) && !owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		return fmt.Errorf("管道 %s 属主 %v 不是 SYSTEM 或 Administrators", address, owner)
+	}
+	return nil
+}
+
+func verifyHelperServiceRunning() error {
+	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return fmt.Errorf("无法连接服务管理器以校验内核控制器：%w", err)
+	}
+	defer windows.CloseServiceHandle(scm)
+	svcName, err := windows.UTF16PtrFromString(service.ServiceName)
+	if err != nil {
+		return err
+	}
+	svc, err := windows.OpenService(scm, svcName, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return fmt.Errorf("无法查询权限组件服务 %s：%w", service.ServiceName, err)
+	}
+	defer windows.CloseServiceHandle(svc)
+	var st windows.SERVICE_STATUS_PROCESS
+	var needed uint32
+	if err := windows.QueryServiceStatusEx(svc, windows.SC_STATUS_PROCESS_INFO, (*byte)(unsafe.Pointer(&st)), uint32(unsafe.Sizeof(st)), &needed); err != nil {
+		return fmt.Errorf("无法读取权限组件服务状态：%w", err)
+	}
+	if st.CurrentState != windows.SERVICE_RUNNING {
+		return fmt.Errorf("权限组件服务 %s 未运行（状态 %d）", service.ServiceName, st.CurrentState)
+	}
+	return nil
 }
 
 // isExecutable: Windows has no execute bit; the extension decides.

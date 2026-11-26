@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -224,6 +226,11 @@ var (
 // runElevated runs exe with args through the "runas" verb (UAC prompt)
 // and waits for it to exit; a non-zero exit code is an error.
 func runElevated(ctx context.Context, exe string, args []string) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if cerr := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED|windows.COINIT_DISABLE_OLE1DDE); cerr == nil || errors.Is(cerr, syscall.Errno(1)) {
+		defer windows.CoUninitialize()
+	}
 	verb, _ := windows.UTF16PtrFromString("runas")
 	file, err := windows.UTF16PtrFromString(exe)
 	if err != nil {

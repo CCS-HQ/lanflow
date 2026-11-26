@@ -36,15 +36,33 @@ func (r registryRun) ClearApproval() bool {
 }
 
 func apply(exe string, on bool) (bool, error) {
+	return applyElevated(exe, on, false)
+}
+
+func applyElevated(exe string, on, elevated bool) (bool, error) {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		return false, err
 	}
 	defer k.Close()
-	return applyRun(registryRun{k}, command(exe), on)
+	sid, err := currentUserSID()
+	if err != nil {
+		return false, err
+	}
+	return applyWindowsAutostart(registryRun{k}, schtasksStore{}, exe, strings.Join(Args, " "), sid, on, elevated, isCurrentElevated())
 }
 
 func enabled(exe string) bool {
+	if sid, err := currentUserSID(); err == nil {
+		if have, ok, _ := (schtasksStore{}).Get(); ok && taskMatches(have, taskSpec{
+			Command:   exe,
+			Arguments: strings.Join(Args, " "),
+			UserSID:   sid,
+			Highest:   true,
+		}) {
+			return true
+		}
+	}
 	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
 	if err != nil {
 		return false

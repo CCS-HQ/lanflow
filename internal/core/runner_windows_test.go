@@ -46,7 +46,41 @@ func TestDialChecksControllerServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial to a tracked core: %v", err)
 	}
-	c.Close()
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifyControllerPipeOwnerRejectsNonPrivileged(t *testing.T) {
+	addr := fmt.Sprintf(`\\.\pipe\lanflow-ctrl-owner-test-%d`, time.Now().UnixNano())
+	l, err := winio.ListenPipe(addr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		if c, err := l.Accept(); err == nil {
+			defer c.Close()
+			var b [1]byte
+			_, _ = c.Read(b[:])
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := winio.DialPipeContext(ctx, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fc := c.(interface{ Fd() uintptr })
+	err = verifyPipeOwnerPrivileged(windows.Handle(fc.Fd()), addr)
+	if windows.GetCurrentProcessToken().IsElevated() {
+		if err != nil {
+			t.Fatalf("elevated pipe owner rejected: %v", err)
+		}
+	} else if err == nil {
+		t.Fatal("non-privileged pipe owner accepted")
+	}
 }
 
 func TestTrustWorkDir(t *testing.T) {

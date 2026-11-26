@@ -509,6 +509,7 @@ const (
 type Settings struct {
 	// general
 	OpenAtLogin     bool
+	RunAsAdmin      bool // Windows: launch elevated by default and register elevated logon task
 	AutoSystemProxy bool // turn on the system proxy after launch
 	SilentStart     bool
 	CloseToTray     bool   // false = quit on close

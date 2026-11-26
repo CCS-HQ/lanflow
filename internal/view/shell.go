@@ -63,6 +63,10 @@ func FitWorkArea(wa mygo.Rectangle) (width, height int) {
 type Options struct {
 	// Mac selects macOS labels and modifiers.
 	Mac bool
+	// Windows enables Windows-specific settings (default run as admin).
+	Windows bool
+	// Elevated reports whether the process runs elevated on Windows.
+	Elevated bool
 	// Sync runs Env.Run jobs on the calling thread, for tests.
 	Sync bool
 	// Remote: the window runs in its own process and the service process
@@ -199,6 +203,8 @@ func New(api app.API, opts Options) *Shell {
 
 		RedrawData: s.redrawData,
 		Mac:        opts.Mac,
+		Windows:    opts.Windows,
+		Elevated:   opts.Elevated,
 		Kit:        NewKit(),
 
 		SetGlobalShortcut: s.SetGlobalShortcut,
