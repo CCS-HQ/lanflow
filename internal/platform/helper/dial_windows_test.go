@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"unsafe"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
@@ -59,16 +60,35 @@ func TestVerifyPipeOwnerPrivilegedRejectsCurrentUser(t *testing.T) {
 	defer conn.Close()
 	fc := conn.(interface{ Fd() uintptr })
 	err = verifyPipeOwnerPrivileged(windows.Handle(fc.Fd()))
-	// When the test itself runs non-elevated, the pipe owner is the user's SID,
-	// so verifyPipeOwnerPrivileged must reject it. If the test runs elevated,
-	// owner is Builtin\Administrators and it is accepted.
-	if windows.GetCurrentProcessToken().IsElevated() {
+	// Only pipes whose owner is LocalSystem or BUILTIN\Administrators are accepted;
+	// ordinary users and elevated built-in Administrator (-500) tokens whose
+	// default TokenOwner is their user SID are rejected.
+	if currentTokenOwnerPrivileged(t) {
 		if err != nil {
 			t.Fatalf("elevated pipe owner rejected: %v", err)
 		}
 	} else if err == nil {
 		t.Fatal("non-privileged pipe owner accepted")
 	}
+}
+
+func currentTokenOwnerPrivileged(t *testing.T) bool {
+	t.Helper()
+	tok := windows.GetCurrentProcessToken()
+	var n uint32
+	_ = windows.GetTokenInformation(tok, windows.TokenOwner, nil, 0, &n)
+	if n == 0 {
+		t.Fatal("GetTokenInformation(TokenOwner) returned length 0")
+	}
+	buf := make([]byte, n)
+	if err := windows.GetTokenInformation(tok, windows.TokenOwner, &buf[0], n, &n); err != nil {
+		t.Fatalf("GetTokenInformation(TokenOwner): %v", err)
+	}
+	type tokenOwner struct {
+		Owner *windows.SID
+	}
+	owner := (*tokenOwner)(unsafe.Pointer(&buf[0])).Owner
+	return owner != nil && (owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid))
 }
 
 func TestServiceExeFromCommandLine(t *testing.T) {

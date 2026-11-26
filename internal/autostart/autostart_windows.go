@@ -35,10 +35,6 @@ func (r registryRun) ClearApproval() bool {
 	return a.DeleteValue(Label) == nil
 }
 
-func apply(exe string, on bool) (bool, error) {
-	return applyElevated(exe, on, false)
-}
-
 func applyElevated(exe string, on, elevated bool) (bool, error) {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
