@@ -92,8 +92,8 @@ func TestOpenStateRemembered(t *testing.T) {
 	p := New(e)
 	tt := ui.NewTester(p.View, 800, 600)
 	px := api.Proxies()
-	if p.isOpen(px.Groups[0], px) || p.isOpen(px.Groups[1], px) {
-		t.Fatal("default: all groups start collapsed")
+	if !p.isOpen(px.Groups[0], px) || p.isOpen(px.Groups[1], px) {
+		t.Fatal("default: only the main group is open")
 	}
 	// 故障转移 is only a group header (no group lists it as a member).
 	if err := tt.Click("故障转移"); err != nil {
@@ -103,7 +103,7 @@ func TestOpenStateRemembered(t *testing.T) {
 	if !p.open["故障转移"] {
 		t.Fatalf("open after click: %v", p.open)
 	}
-	if saved := api.UIState(); !saved.OpenGroups["故障转移"] {
+	if saved := api.UIState(); !saved.OpenGroups["故障转移"] || !saved.OpenGroups["节点选择"] {
 		t.Fatalf("state not saved: %+v", saved)
 	}
 	// A fresh page (as after a restart) starts from the saved state.
@@ -119,14 +119,20 @@ func TestOpenStateRemembered(t *testing.T) {
 // click and remembers the choice of view.
 func TestGridView(t *testing.T) {
 	api := fake.NewInstant()
-	_ = api.SaveUIState(model.UIState{OpenGroups: map[string]bool{"节点选择": true}})
 	e, toasts := testEnv(api)
 	p := New(e)
 	tt := ui.NewTester(p.View, 900, 700)
-	if p.view != viewGrid {
-		t.Fatalf("expected default grid view, got %d", p.view)
+	if !tt.HasText("列表") || !tt.HasText("网格") {
+		t.Fatalf("view toggle missing: %q", tt.Texts())
 	}
-	if !tt.HasText("新加坡 02") || !tt.HasText("测速") {
+	if err := tt.Click("网格"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if p.view != viewGrid || !api.UIState().ProxyGrid {
+		t.Fatalf("grid not chosen/saved: view=%d ui=%+v", p.view, api.UIState())
+	}
+	if !tt.HasText("新加坡 02") || !tt.HasText("Trojan") {
 		t.Fatalf("grid cells: %q", tt.Texts())
 	}
 	if err := tt.Click("新加坡 02"); err != nil {
@@ -340,7 +346,7 @@ func TestGridColumnsFit(t *testing.T) {
 	for _, c := range []struct {
 		w    float32
 		want int
-	}{{0, gridColumns}, {300, minGridColumns}, {800, 3}, {1800, maxGridColumns}} {
+	}{{0, gridColumns}, {300, minGridColumns}, {800, 4}, {1800, maxGridColumns}} {
 		if got := gridColumnsFor(c.w); got != c.want {
 			t.Errorf("gridColumnsFor(%v) = %d, want %d", c.w, got, c.want)
 		}

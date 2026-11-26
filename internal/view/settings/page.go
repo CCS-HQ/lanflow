@@ -25,7 +25,7 @@ import (
 )
 
 // appVersion is shown in 关于.
-const appVersion = "0.1.16"
+const appVersion = "0.1.17"
 
 const (
 	tabGeneral = iota
@@ -42,29 +42,6 @@ var (
 	tabNames = []string{"常规", "代理|设置", "TUN", "DNS", "嗅探", "覆写", "内核", "高级"}
 	tabKeys  = []string{"general", "proxy", "tun", "dns", "sniffer", "override", "kernel", "advanced"}
 )
-
-func tabDesc(tab int) string {
-	switch tab {
-	case tabGeneral:
-		return i18n.T("启动、外观、菜单栏与全局快捷键")
-	case tabProxy:
-		return i18n.T("代理端口、局域网共享、绕过地址与测速")
-	case tabTUN:
-		return i18n.T("虚拟网卡接管、协议栈与内网兼容")
-	case tabDNS:
-		return i18n.T("域名解析方式、上游服务器与防泄漏")
-	case tabSniffer:
-		return i18n.T("从流量中还原真实域名，改善规则分流")
-	case tabOverride:
-		return i18n.T("用 YAML 追加节点、策略组或规则")
-	case tabKernel:
-		return i18n.T("Mihomo 版本管理与地理数据库更新")
-	case tabAdvanced:
-		return i18n.T("独立端口、局域网认证与底层调优")
-	default:
-		return ""
-	}
-}
 
 // Page holds page-local UI state.
 type Page struct {
@@ -178,14 +155,6 @@ func New(e *env.Env) *Page {
 // administrator privileges on Windows.
 func (p *Page) SetRelaunchElevated(fn func()) { p.relaunchElevated = fn }
 
-// ActiveTab returns the key of the currently selected settings tab.
-func (p *Page) ActiveTab() string {
-	if p.tab >= 0 && p.tab < len(tabKeys) {
-		return tabKeys[p.tab]
-	}
-	return tabKeys[0]
-}
-
 // View draws the whole content area including the header.
 func (p *Page) View(c *ui.Context) {
 	e, t := p.e, c.Theme()
@@ -202,37 +171,13 @@ func (p *Page) View(c *ui.Context) {
 	}
 
 	ui.Column(c).Fill().Children(func() {
-		e.Kit.Header(c, i18n.T("设置"), tabDesc(p.tab), nil)
-		// Dedicated full-width pill tab bar so all 7 tabs stay legible on
-		// compact windows without colliding with the page title.
-		ui.Box(c).Padding(0, 20, 10, 20).Shrink(0).Children(func() {
-			ui.Row(c.Key("tabs")).Padding(3).Gap(3).Radius(10).Background(t.Surface).
-				Border(1, t.Border.Alpha(0.6)).AlignItems(ui.Center).Label(i18n.T("设置分栏")).Children(func() {
-				labels := i18n.Options(tabNames...)
-				for i, lbl := range labels {
-					active := p.tab == i
-					btn := ui.ButtonBase(c.Key("tab:" + tabKeys[i])).Grow(1).Basis(0).Height(28).Radius(7).
-						AlignItems(ui.Center).Justify(ui.Center).Label(lbl).Cursor(ui.CursorPointer)
-					if active {
-						btn.Background(t.Accent)
-					} else if btn.Hovered() {
-						btn.Background(t.SurfaceHover)
-					}
-					btn.Children(func() {
-						txt := ui.Text(c, lbl).FontSize(12.5).FontWeight(500).SingleLine()
-						if active {
-							txt.TextColor(t.AccentText).FontWeight(600)
-						} else {
-							txt.TextColor(t.TextMuted)
-						}
-					})
-					if btn.Clicked() && !active {
-						p.requestTab(i)
-					}
-				}
-			})
+		e.Kit.Header(c, i18n.T("设置"), "", func() {
+			tab := p.tab
+			if ui.Segmented(c.Key("tabs"), &tab, i18n.Options(tabNames...)...).Label(i18n.T("设置分栏")).Changed() {
+				p.requestTab(tab)
+			}
 		})
-		ui.Scroll(c.Key(tabKeys[p.tab])).Grow(1).Padding(6, 22, 24).Gap(22).Children(func() {
+		ui.Scroll(c.Key(tabKeys[p.tab])).Grow(1).Padding(4, 24, 24).Gap(20).Children(func() {
 			switch p.tab {
 			case tabGeneral:
 				p.general(c, t, s)
@@ -454,7 +399,7 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 	// Two columns at ≥1100 pt (docs/design.md §5.8): 常规 and the shortcuts
 	// on the left, data, backup and about on the right.
 	env.Columns(c, 20, func() {
-		e.Kit.Section(c, i18n.T("启动与窗口"), "", func() {
+		e.Kit.Section(c, i18n.T("常规"), "", func() {
 			loginDesc := ""
 			if e.Windows {
 				if s.RunAsAdmin {
@@ -499,8 +444,6 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 				closeVal = closeOpts[0]
 			}
 			p.selectRow(c, i18n.T("关闭窗口时"), "", closeVal, closeOpts, func(v string) { s.CloseToTray = v == closeOpts[0]; p.save(s, "", nil) })
-		})
-		e.Kit.Section(c, i18n.T("外观与语言"), "", func() {
 			appOpts := []string{i18n.T("跟随系统"), i18n.T("浅色"), i18n.T("深色")}
 			appVals := []string{"system", "light", "dark"}
 			p.selectRow(c, i18n.T("外观"), "", mapName(s.Appearance, appVals, appOpts), appOpts, func(v string) {
