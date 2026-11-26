@@ -24,10 +24,9 @@ import (
 // aggTestURL and aggTestInterval are the health check of the url-test,
 // fallback and load-balance groups.
 const (
-	aggTestURL       = "https://www.gstatic.com/generate_204"
-	aggTestInterval  = 300
-	aggTestTolerance = 50
-	aggRuleInterval  = 86400 // rule-provider refresh, seconds
+	aggTestURL      = "https://www.gstatic.com/generate_204"
+	aggTestInterval = 300
+	aggRuleInterval = 86400 // rule-provider refresh, seconds
 )
 
 // Limits of a spec: a profile is built on every update, and the regular
@@ -54,26 +53,82 @@ var aggTelegramCIDRs = []string{
 	"IP-CIDR6,2001:67c:4e8::/48", "IP-CIDR6,2001:b28:f23d::/48", "IP-CIDR6,2001:b28:f23f::/48",
 }
 
-// aggRegionFilter is the node filter of each region module, by ID: the
-// names it matches. (Kept here: the catalog file holds only texts the
-// interface translates.)
-var aggRegionFilter = map[string]string{
-	"hk": `(?i)港|香港|🇭🇰|\bHK\b|\bHKG\b|Hong ?Kong`,
-	"tw": `(?i)台|臺|🇹🇼|\bTW\b|\bTWN\b|Taiwan`,
-	"jp": `(?i)日本|东京|東京|大阪|🇯🇵|\bJP\b|\bJPN\b|Japan|Tokyo|Osaka`,
-	"sg": `(?i)新加坡|狮城|獅城|🇸🇬|\bSG\b|\bSGP\b|Singapore`,
-	"us": `(?i)美国|美國|洛杉矶|硅谷|西雅图|纽约|🇺🇸|\bUS\b|\bUSA\b|United States|America|Los Angeles|San Jose|Seattle`,
-	"kr": `(?i)韩国|韓國|首尔|🇰🇷|\bKR\b|\bKOR\b|Korea|Seoul`,
-	"gb": `(?i)英国|英國|伦敦|🇬🇧|\bUK\b|\bGB\b|United Kingdom|London`,
-	"de": `(?i)德国|德國|法兰克福|🇩🇪|\bDE\b|Germany|Frankfurt`,
+// aggRegionGroups are the region groups of earlier catalogs (version
+// 1's regions, then region modules), which an upgrade turns into custom
+// groups keeping the nodes whose name matches. (Kept here: the catalog
+// file holds only texts the interface translates.)
+var aggRegionGroups = map[string]struct{ name, filter string }{
+	"hk": {"🇭🇰 香港节点", `(?i)港|香港|🇭🇰|\bHK\b|\bHKG\b|Hong ?Kong`},
+	"tw": {"🌏 台湾节点", `(?i)台|臺|🇹🇼|\bTW\b|\bTWN\b|Taiwan`},
+	"jp": {"🇯🇵 日本节点", `(?i)日本|东京|東京|大阪|🇯🇵|\bJP\b|\bJPN\b|Japan|Tokyo|Osaka`},
+	"sg": {"🇸🇬 新加坡节点", `(?i)新加坡|狮城|獅城|🇸🇬|\bSG\b|\bSGP\b|Singapore`},
+	"us": {"🇺🇸 美国节点", `(?i)美国|美國|洛杉矶|硅谷|西雅图|纽约|🇺🇸|\bUS\b|\bUSA\b|United States|America|Los Angeles|San Jose|Seattle`},
+	"kr": {"🇰🇷 韩国节点", `(?i)韩国|韓國|首尔|🇰🇷|\bKR\b|\bKOR\b|Korea|Seoul`},
+	"gb": {"🇬🇧 英国节点", `(?i)英国|英國|伦敦|🇬🇧|\bUK\b|\bGB\b|United Kingdom|London`},
+	"de": {"🇩🇪 德国节点", `(?i)德国|德國|法兰克福|🇩🇪|\bDE\b|Germany|Frankfurt`},
 }
 
-func init() {
-	for i := range AggregateModules {
-		if f, ok := aggRegionFilter[AggregateModules[i].ID]; ok {
-			AggregateModules[i].Filter = f
+// aggMovedModules are modules of earlier catalogs that an upgrade
+// replaces with the group now covering them.
+var aggMovedModules = map[string]string{
+	"spotify": "western", "streaming": "western", "tiktok": "social", "reddit": "social", "messaging": "social",
+	"epic": "pcgames", "games": "pcgames", "cloudflare": "cloud", "scholar": "edu",
+}
+
+// aggDroppedModules are modules of earlier catalogs with no counterpart.
+var aggDroppedModules = map[string]bool{"speedtest": true, "bilibili": true, "pt": true, "games-cn": true}
+
+// normalizeAggGroups replaces the groups of modules the catalog no longer
+// has: a region becomes a custom group filtering the nodes, a moved
+// module its new group, a dropped one goes; the rules targeting them
+// follow (a dropped group's go to 节点选择). Unknown IDs stay.
+func normalizeAggGroups(spec model.AggregateSpec) model.AggregateSpec {
+	moved := map[string]string{}
+	seen := map[string]bool{}
+	var groups []model.AggregateGroup
+	changed := false
+	for _, g := range spec.Groups {
+		if !g.Custom && AggModule(g.ID) == nil {
+			changed = true
+			old := g.ID
+			if r, ok := aggRegionGroups[old]; ok {
+				name, typ := r.name, g.Type
+				if g.Name != "" {
+					name = g.Name
+				}
+				if typ == "" {
+					typ = model.AggTypeURLTest
+				}
+				g = model.AggregateGroup{ID: "region-" + old, Custom: true, Name: name, Type: typ, Filter: r.filter}
+			} else if to, ok := aggMovedModules[old]; ok {
+				g = model.AggregateGroup{ID: to}
+			} else if aggDroppedModules[old] {
+				moved[old] = AggModSelect
+				continue
+			} else {
+				// Not a module of ours: validation reports it.
+				groups = append(groups, g)
+				continue
+			}
+			moved[old] = g.ID
+		}
+		if seen[g.ID] {
+			continue
+		}
+		seen[g.ID] = true
+		groups = append(groups, g)
+	}
+	if !changed {
+		return spec
+	}
+	spec.Groups = groups
+	for i, r := range spec.Rules {
+		if to, ok := moved[r.Target]; ok {
+			spec.Rules[i].Target = to
 		}
 	}
+	spec.Template = ""
+	return spec
 }
 
 // AggRelayPresets are the relay groups 添加中转组 offers: a name and the
@@ -108,9 +163,9 @@ func DefaultAggregateSpec() model.AggregateSpec {
 // aggV1Modules maps the modules of a version 1 spec to the catalog's.
 var aggV1Modules = map[string][]string{
 	"ads": {"ads"}, "ai": {"ai"}, "telegram": {"telegram"}, "youtube": {"youtube"}, "netflix": {"netflix"},
-	"disney": {"disney"}, "spotify": {"spotify"}, "tiktok": {"tiktok"}, "social": {"twitter", "meta"},
+	"disney": {"disney"}, "spotify": {"western"}, "tiktok": {"social"}, "social": {"twitter", "meta"},
 	"github": {"github"}, "google": {"google"}, "microsoft": {"microsoft"}, "apple": {"apple"},
-	"games": {"steam", "games"}, "global": {"global"}, "cn": {"cn"},
+	"games": {"steam", "pcgames"}, "global": {"global"}, "cn": {"cn"},
 }
 
 // UpgradeAggregateSpec returns spec in the current version: a version 1
@@ -118,13 +173,13 @@ var aggV1Modules = map[string][]string{
 // it had, with 私有网络 and 漏网之鱼, which version 1 always generated.
 func UpgradeAggregateSpec(spec model.AggregateSpec) model.AggregateSpec {
 	if spec.Version >= model.AggregateSpecVersion {
-		return spec
+		return normalizeAggGroups(spec.Clone())
 	}
 	spec = spec.Clone()
 	if len(spec.Groups) > 0 { // written by this version without its number
 		spec.AutoGroup, spec.Regions, spec.Modules = false, nil, nil
 		spec.Version = model.AggregateSpecVersion
-		return spec
+		return normalizeAggGroups(spec)
 	}
 	want := map[string]bool{AggModSelect: true, "private": true, AggModFinal: true, AggModAuto: spec.AutoGroup}
 	for _, r := range spec.Regions {
@@ -141,9 +196,21 @@ func UpgradeAggregateSpec(spec model.AggregateSpec) model.AggregateSpec {
 			spec.Groups = append(spec.Groups, model.AggregateGroup{ID: m.ID})
 		}
 	}
+	// The regions after 自动选择, as custom groups (normalizeAggGroups).
+	at := 0
+	for i, g := range spec.Groups {
+		if g.ID == AggModAuto || g.ID == AggModSelect {
+			at = i + 1
+		}
+	}
+	var regions []model.AggregateGroup
+	for _, r := range spec.Regions {
+		regions = append(regions, model.AggregateGroup{ID: r})
+	}
+	spec.Groups = append(append(append([]model.AggregateGroup(nil), spec.Groups[:at]...), regions...), spec.Groups[at:]...)
 	spec.AutoGroup, spec.Regions, spec.Modules = false, nil, nil
 	spec.Version = model.AggregateSpecVersion
-	return spec
+	return normalizeAggGroups(spec)
 }
 
 // Translator formats a text of aggregate building in the interface's
@@ -209,16 +276,22 @@ func aggGroupFilter(g model.AggregateGroup) string {
 }
 
 // AggGroupRules are the rule sets of g: a custom group's own, else its
-// module's, with the extended ones when g.Extended.
+// module's (without the Tail ones, which are not counted).
 func AggGroupRules(g model.AggregateGroup) []string {
 	if g.Custom {
 		return g.Rules
 	}
 	if m := AggModule(g.ID); m != nil {
-		if g.Extended {
-			return append(append([]string(nil), m.Rules...), m.Extra...)
-		}
 		return m.Rules
+	}
+	return nil
+}
+
+// aggGroupTail are the rule sets of g placed last (国内服务's complete
+// China list).
+func aggGroupTail(g model.AggregateGroup) []string {
+	if m := AggModule(g.ID); m != nil && !g.Custom {
+		return m.Tail
 	}
 	return nil
 }
@@ -807,8 +880,9 @@ func (g *aggGen) profile() *yaml.Node {
 		}
 		return out, true
 	}
-	// head is what the other groups offer before the nodes: 自动选择,
-	// the region groups that have nodes, the relay groups.
+	// head is what the other groups offer before DIRECT, REJECT and the
+	// nodes: 自动选择 and the relay groups. A filtered group without a
+	// node is left out.
 	var head []string
 	for i := range plans {
 		p := &plans[i]
@@ -816,12 +890,8 @@ func (g *aggGen) profile() *yaml.Node {
 			head = append(head, p.name)
 			continue
 		}
-		if nodes, filtered := pool(p.g); filtered {
-			if len(nodes) == 0 {
-				p.skip = true
-			} else if !p.g.Custom && AggModule(p.g.ID).Category == AggCatRegion {
-				head = append(head, p.name)
-			}
+		if nodes, filtered := pool(p.g); filtered && len(nodes) == 0 {
+			p.skip = true
 		}
 	}
 	for _, r := range relays {
@@ -843,21 +913,29 @@ func (g *aggGen) profile() *yaml.Node {
 		}
 		nodes, filtered := pool(p.g)
 		h := without(head, p.name)
+		// As SubBoost: 节点选择 offers 自动选择, DIRECT, REJECT and the
+		// nodes; the other groups 节点选择 first; 拦截 groups only
+		// REJECT, DIRECT and 节点选择; 直连 groups DIRECT, REJECT first.
+		cat := func(lists ...[]string) []string {
+			var out []string
+			for _, l := range lists {
+				out = append(out, l...)
+			}
+			return out
+		}
 		switch {
 		case p.g.ID == AggModSelect && !p.g.Custom && p.typ == model.AggTypeSelect:
-			p.members = append(append(append([]string(nil), h...), names...), "DIRECT")
-		case p.g.ID == AggModFinal && !p.g.Custom && p.typ == model.AggTypeSelect:
-			p.members = append([]string{selectName, "DIRECT"}, h...)
+			p.members = cat(h, []string{"DIRECT", "REJECT"}, names)
 		case p.typ == model.AggTypeURLTest || p.typ == model.AggTypeFallback || p.typ == model.AggTypeLoadBalance:
 			p.members = append([]string(nil), nodes...)
 		case p.typ == model.AggTypeRejectFirst:
 			p.members = []string{"REJECT", "DIRECT", selectName}
 		case p.typ == model.AggTypeDirectFirst:
-			p.members = append([]string{"DIRECT", selectName}, h...)
+			p.members = cat([]string{"DIRECT", "REJECT", selectName}, h, nodes)
 		case filtered:
 			p.members = append([]string(nil), nodes...)
 		default:
-			p.members = append(append([]string{selectName}, h...), "DIRECT")
+			p.members = cat([]string{selectName}, h, []string{"DIRECT", "REJECT"}, nodes)
 		}
 		p.members = without(p.members, p.name)
 	}
@@ -901,7 +979,11 @@ func (g *aggGen) profile() *yaml.Node {
 				if ip {
 					kind, behavior = "geoip", "ipcidr"
 				}
-				prov := kind + "-" + name
+				// Named as SubBoost does: the category, "-ip" for an IP set.
+				prov := name
+				if ip {
+					prov += "-ip"
+				}
 				if mapGet(providers, prov) == nil {
 					base := strings.TrimRight(spec.RuleBaseURL, "/")
 					if base == "" {
@@ -950,18 +1032,29 @@ func (g *aggGen) profile() *yaml.Node {
 	for _, r := range spec.Rules {
 		add(r.Type, strings.TrimSpace(r.Value), target(r.Target), r.NoResolve, true)
 	}
+	// The groups' rule sets in the catalog's rule order (aggRuleOrder),
+	// those of the same rank in group order.
+	type groupRef struct {
+		ref, group string
+		rank, seq  int
+	}
+	var refs []groupRef
 	for _, p := range plans {
 		if p.skip {
 			continue
 		}
-		for _, ref := range AggGroupRules(p.g) {
-			kind, name, _ := strings.Cut(ref, ":")
-			typ := model.AggRuleGeoSite
-			if kind == "geoip" {
-				typ = model.AggRuleGeoIP
-			}
-			add(typ, name, p.name, kind == "geoip", false)
+		for _, ref := range append(append([]string(nil), AggGroupRules(p.g)...), aggGroupTail(p.g)...) {
+			refs = append(refs, groupRef{ref, p.name, aggRuleRank(ref), len(refs)})
 		}
+	}
+	sort.SliceStable(refs, func(i, j int) bool { return refs[i].rank < refs[j].rank })
+	for _, r := range refs {
+		kind, name, _ := strings.Cut(r.ref, ":")
+		typ := model.AggRuleGeoSite
+		if kind == "geoip" {
+			typ = model.AggRuleGeoIP
+		}
+		add(typ, name, r.group, kind == "geoip", false)
 	}
 	if len(geoSkipped) > 0 {
 		g.warnings = append(g.warnings, g.tr.text("geoSkipped", strings.Join(geoSkipped, "、")))
@@ -1057,7 +1150,7 @@ func aggGroupNode(name, typ string, members []string) *yaml.Node {
 	switch typ {
 	case model.AggTypeURLTest:
 		return mapNode("name", strNode(name), "type", strNode("url-test"), "proxies", strSeq(members),
-			"url", strNode(aggTestURL), "interval", intNode(aggTestInterval), "tolerance", intNode(aggTestTolerance), "lazy", boolNode(true))
+			"url", strNode(aggTestURL), "interval", intNode(aggTestInterval), "lazy", boolNode(false))
 	case model.AggTypeFallback:
 		return mapNode("name", strNode(name), "type", strNode("fallback"), "proxies", strSeq(members),
 			"url", strNode(aggTestURL), "interval", intNode(aggTestInterval), "lazy", boolNode(true))

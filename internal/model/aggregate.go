@@ -70,9 +70,6 @@ type AggregateGroup struct {
 	// Filter limits a custom group to the nodes whose name matches
 	// (regexp, "" = every node).
 	Filter string `json:"filter,omitempty"`
-	// Extended adds the catalog module's extended rule sets (扩展规则集,
-	// the 完整版 template's) to its own.
-	Extended bool `json:"extended,omitempty"`
 }
 
 // AggregateRelay is a relay group (中转代理组): the nodes matching Landing

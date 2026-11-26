@@ -41,7 +41,6 @@ type aggDialogs struct {
 	gType    string
 	gFilter  string
 	gRules   []string
-	gExt     bool // a catalog group: with its extended rule sets
 	gRuleAdd string
 	gErr     string
 
@@ -85,7 +84,7 @@ func (g *aggDialogs) openGroup(spec model.AggregateSpec, i int) {
 		return
 	}
 	gr := spec.Groups[i]
-	g.gCustom, g.gName, g.gType, g.gFilter, g.gExt = gr.Custom, profile.AggGroupName(gr), profile.AggGroupType(gr), gr.Filter, gr.Extended
+	g.gCustom, g.gName, g.gType, g.gFilter = gr.Custom, profile.AggGroupName(gr), profile.AggGroupType(gr), gr.Filter
 	g.gRules = append([]string(nil), gr.Rules...)
 }
 
@@ -285,14 +284,6 @@ func (p *Page) aggGroupDialog(c *ui.Context) {
 				}
 			})
 			ui.Text(c, i18n.T("手动选择：默认跟随节点选择；自动测速 / 故障转移 / 负载均衡：在匹配的节点中自动挑选；拦截、直连：默认拒绝或直连，可再切换。")).FontSize(11.5).TextColor(t.TextMuted)
-			var m *profile.AggregateModule
-			if !g.gCustom && g.gIdx >= 0 && g.gIdx < len(d.spec.Groups) {
-				m = profile.AggModule(d.spec.Groups[g.gIdx].ID)
-			}
-			if m != nil && len(m.Extra) > 0 {
-				ui.Checkbox(c.Key("gext"), &g.gExt, i18n.Tf("包含扩展规则集（另 %d 个）", len(m.Extra)))
-				ui.Text(c, strings.Join(m.Extra, "  ")).FontSize(11).Font("monospace").TextColor(t.TextMuted)
-			}
 			if g.gCustom {
 				field(c, i18n.T("节点筛选（正则，可选）"), func() {
 					ui.TextInput(c.Key("gfilter"), &g.gFilter).Placeholder(i18n.T("香港|HK")).Font("monospace").FontSize(12).Label(i18n.T("节点筛选"))
@@ -353,7 +344,7 @@ func (p *Page) saveGroup() string {
 		gr.Name, gr.Type, gr.Filter, gr.Rules = name, g.gType, strings.TrimSpace(g.gFilter), append([]string(nil), g.gRules...)
 	} else {
 		m := profile.AggModule(gr.ID)
-		gr.Name, gr.Type, gr.Extended = name, g.gType, g.gExt && len(m.Extra) > 0
+		gr.Name, gr.Type = name, g.gType
 		if name == m.Name() {
 			gr.Name = ""
 		}

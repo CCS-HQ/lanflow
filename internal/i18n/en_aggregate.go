@@ -18,14 +18,6 @@ func init() {
 		"聚合订阅更新失败：%v。仍在使用上次的配置。": "Aggregate subscription update failed: %v. Still using the previous config.",
 
 		// internal/profile/aggregate_catalog.go
-		"香港节点":  "Hong Kong",
-		"台湾节点":  "Taiwan",
-		"日本节点":  "Japan",
-		"新加坡节点": "Singapore",
-		"美国节点":  "United States",
-		"韩国节点":  "Korea",
-		"英国节点":  "United Kingdom",
-		"德国节点":  "Germany",
 		"广告拦截":  "Ad blocking",
 		"AI 服务": "AI services",
 		"谷歌服务":  "Google",
@@ -71,7 +63,6 @@ func init() {
 		"名称前缀":           "Name prefix",
 		"替换为":            "Replace with",
 		"自动选择":           "Auto select",
-		"按延迟自动选用最快的节点":   "Picks the fastest node by latency",
 		"正在下载来源并生成配置…":   "Downloading the sources and building the config…",
 		"设置改过了，预览可能已过时。": "The settings changed; the preview may be out of date.",
 		"还有 %d 个节点未列出":   "%d more nodes not listed",

@@ -389,9 +389,7 @@ func (d *aggEditor) applyTemplate(id string) {
 	// Keep the renames and type changes of groups that stay.
 	for i := range groups {
 		if k := d.groupIndex(groups[i].ID); k >= 0 {
-			ext := groups[i].Extended
 			groups[i] = d.spec.Groups[k]
-			groups[i].Extended = ext
 		}
 	}
 	d.spec.Groups = append(groups, custom...)
