@@ -37,13 +37,6 @@ func init() {
 		"配置未通过校验，当前配置保持不变。":           "The config failed validation; the current config is unchanged.",
 
 		// internal/view/shell_sidebar.go
-		"设置 (⌘,)":        "Settings (⌘,)",
-		"快捷系统代理开关":         "Quick System Proxy Toggle",
-		"快捷 TUN 开关":        "Quick TUN Toggle",
-		"当前订阅 %s，点击管理订阅":   "Current subscription %s, click to manage",
-		"更新当前订阅":           "Update Current Subscription",
-		"订阅流量":             "Subscription Usage",
-		"内核设置":             "Core Settings",
 
 		// internal/view/shell_update.go
 		"澜流有新版本 %s": "Lanflow %s is available",
@@ -64,6 +57,8 @@ func init() {
 		"无":            "None",
 		"订阅：%s":        "Subscription: %s",
 		"打开澜流":         "Open Lanflow",
+		"状态：回到概览":      "Status: back to Overview",
+		"运行中 · %s":     "Running · %s",
 	} {
 		en[k] = v
 	}

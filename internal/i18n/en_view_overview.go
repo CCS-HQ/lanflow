@@ -40,7 +40,7 @@ func init() {
 		"运行中": "Running",
 		"Mihomo 内核意外退出，自动重启也失败了。系统代理已自动关闭，避免断网。": "The Mihomo core quit unexpectedly and the automatic restart failed. The system proxy was turned off to keep you online.",
 		"Mihomo 内核意外退出：%s。系统代理已自动关闭，避免断网。":       "The Mihomo core quit unexpectedly: %s. The system proxy was turned off to keep you online.",
-		"正在下载内核":                                 "Downloading Core",
+		"正在下载内核": "Downloading Core",
 		"未找到 Mihomo 内核：内核文件不存在或无法执行。可下载官方内核，或选择本机已有的内核文件。": "Mihomo core not found: the core file does not exist or cannot run. Download the official core, or choose one already on this machine.",
 		"未找到 Mihomo 内核：%s": "Mihomo core not found: %s",
 		"选择内核文件":           "Choose Core File",
@@ -53,8 +53,23 @@ func init() {
 		"你的位置：未知": "Your location: unknown",
 
 		// internal/view/overview/divider.go
-		"调整出口地图与右侧栏宽度": "Resize the exit map and the side column",
-		"拖动调整宽度，双击复位":  "Drag to resize, double-click to reset",
+		"调整出口地图与右侧栏宽度":                 "Resize the exit map and the side column",
+		"拖动调整宽度，双击复位":                  "Drag to resize, double-click to reset",
+		" · 已运行 %s":                    " · up %s",
+		"内核开关":                         "Core switch",
+		"打开以让系统流量走代理，点击关闭提示":           "Turn on to route system traffic through the proxy; click to dismiss",
+		"打开以让系统流量走代理":                  "Turn on to route system traffic through the proxy",
+		"系统代理开关":                       "System proxy switch",
+		"当前订阅，打开订阅页":                   "Current subscription, opens Subscriptions",
+		"尚未选择订阅":                       "No subscription selected",
+		"无流量信息":                        "No traffic information",
+		"本地文件 · 无流量信息":                 "Local file · no traffic information",
+		"本次 ↑ %s ↓ %s · 连接 %d · 内存 %s": "Session ↑ %s ↓ %s · %d connections · %s memory",
+		"60 秒前":       "60 s ago",
+		"现在":          "now",
+		"TUN 模式开关":    "TUN mode switch",
+		"接管所有应用的流量":   "Captures the traffic of every app",
+		"首次开启需安装权限组件": "The first time needs the helper installed",
 	} {
 		en[k] = v
 	}
