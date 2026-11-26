@@ -101,7 +101,7 @@ var searchSections = []searchSection{
 	{tabAdvanced, "内核行为", []searchRow{r("统一延迟", "unified-delay"), r("TCP 并发", "tcp-concurrent"), r("进程匹配", "find-process-mode"), r("禁用 TCP 保活", "disable-keep-alive"), r("TCP 保活间隔", "keep-alive-interval"), r("TCP 保活空闲", "keep-alive-idle"), r("出站网卡", "interface-name"), r("下载 User-Agent", "global-ua"), r("地理数据加载", "geodata-loader"), r("禁用 ETag", "etag"), r("保存 Fake-IP 映射", "store-fake-ip")}},
 	{tabAdvanced, "DNS 高级", []searchRow{r("本机 DNS 监听", "dns listen"), r("优先 HTTP/3", "prefer-h3"), r("缓存算法", "cache-algorithm arc lru"), r("引导服务器", "default-nameserver"), r("备用服务器", "fallback"), r("备用服务器 · 按 GeoIP 过滤", "fallback-filter geoip"), r("备用服务器 · 直连网段", "fallback-filter ipcidr"), r("备用服务器 · 域名", "fallback-filter domain")}},
 	{tabAdvanced, "嗅探高级", []searchRow{r("不强制 DNS 映射", "force-dns-mapping")}},
-	{tabAdvanced, "Agent 接入", []searchRow{r("MCP 配置", "mcp claude agent ctl"), r("已授权的 agent", "agent audit consent")}},
+	{tabAgent, "Agent 接入", []searchRow{r("MCP 配置", "mcp claude agent ctl"), r("已授权的 agent", "agent audit consent")}},
 }
 
 // SearchIndex returns the searchable sections and rows of the settings,

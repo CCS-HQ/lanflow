@@ -36,11 +36,12 @@ const (
 	tabOverride
 	tabKernel
 	tabAdvanced
+	tabAgent
 )
 
 var (
-	tabNames = []string{"常规", "代理|设置", "TUN", "DNS", "嗅探", "覆写", "内核", "高级"}
-	tabKeys  = []string{"general", "proxy", "tun", "dns", "sniffer", "override", "kernel", "advanced"}
+	tabNames = []string{"常规", "代理|设置", "TUN", "DNS", "嗅探", "覆写", "内核", "高级", "Agent"}
+	tabKeys  = []string{"general", "proxy", "tun", "dns", "sniffer", "override", "kernel", "advanced", "agent"}
 )
 
 // Page holds page-local UI state.
@@ -195,6 +196,8 @@ func (p *Page) View(c *ui.Context) {
 				p.kernel(c, t, s, st)
 			case tabAdvanced:
 				p.advancedTab(c, t, s, st)
+			case tabAgent:
+				p.agentSection(c, s)
 			}
 		})
 		switch p.tab {

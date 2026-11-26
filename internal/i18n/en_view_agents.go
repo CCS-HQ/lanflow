@@ -1,7 +1,7 @@
 package i18n
 
 // English of agent access: the consent dialog (internal/view/agents.go)
-// and 设置 › 高级 › Agent 接入 (internal/view/settings/agents.go).
+// and 设置 › Agent (internal/view/settings/agents.go).
 func init() {
 	for k, v := range map[string]string{
 		// internal/view/agents.go
@@ -11,7 +11,7 @@ func init() {
 		"允许「%s」修改澜流的配置吗？": "Allow \"%s\" to change Lanflow's configuration?",
 		"它请求读取连接明细、日志原文或订阅内容等敏感信息。允许只对这次连接有效。": "It asks to read sensitive data such as connection details, raw logs or subscription contents. Allowing applies to this connection only.",
 		"这是一项影响较大的操作，只对这一次请求有效。":               "This action has wide effects; allowing applies to this request only.",
-		"它想通过本机接口修改设置、规则、节点或订阅。每次修改都会记入审计日志，可以用 lanflow ctl undo 撤销。选择「始终允许」后，可在 设置 › 高级 › Agent 接入 撤销。": "It wants to change settings, rules, nodes or subscriptions through the local interface. Every change goes to the audit log and can be reverted with lanflow ctl undo. \"Always allow\" can be revoked in Settings › Advanced › Agent access.",
+		"它想通过本机接口修改设置、规则、节点或订阅。每次修改都会记入审计日志，可以用 lanflow ctl undo 撤销。选择「始终允许」后，可在 设置 › Agent 撤销。": "It wants to change settings, rules, nodes or subscriptions through the local interface. Every change goes to the audit log and can be reverted with lanflow ctl undo. \"Always allow\" can be revoked in Settings › Agent.",
 		"仅本次":  "Just this time",
 		"始终允许": "Always allow",
 		"允许":   "Allow",
