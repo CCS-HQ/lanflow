@@ -75,6 +75,9 @@ var columns = []ui.TableColumn{
 // View draws the whole content area including the header.
 func (p *Page) View(c *ui.Context) {
 	e, t := p.e, c.Theme()
+	if q, ok := env.TakeQuery(e.Arg(env.Rules)); ok { // the global search
+		p.query = q
+	}
 	st := e.API.Status()
 	running := st.Core == model.CoreRunning
 	ui.Column(c).Fill().Children(func() {

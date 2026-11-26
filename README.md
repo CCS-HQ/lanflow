@@ -45,6 +45,7 @@ gh attestation verify lanflow-<版本>-arm64.dmg --repo Owlbay/lanflow
 - **共存**：与其他代理软件共存，深信服 aTrust 兼容模式
 - **反馈问题**：填写描述、可选附带诊断包，发送前完整展示将要发出的内容；报告发往你在「设置 › 常规 › 关于 › 反馈上报」里填写的自建服务（默认为空，只能保存到文件），接口约定见 [feedback-api.md](docs/feedback-api.md)，参考实现见 [examples/feedback-worker](examples/feedback-worker/)
 - **后台服务与按需界面**：代理、订阅更新、统计和托盘由常驻的后台服务进程负责，关掉窗口后界面进程退出、释放内存，代理和连接不受影响；托盘图标按状态区分（接管流量 / 仅内核运行 / 关闭，TUN 开启时变色，解密中带圆点）
+- **全局搜索**（⌘K / Ctrl+K）：一个搜索框找到全部页面、常用操作、每个设置项（可用 Mihomo 字段名搜）、代理组与节点、订阅和自定义规则，也能直接在连接、日志、规则等页按输入内容筛选
 - 托盘菜单、全局快捷键、单实例、异常退出后的系统代理恢复、内核崩溃自动重启
 
 ## 目录
@@ -119,7 +120,7 @@ agent 可以直接编辑 `lanflow.yaml`，或用 `lanflow ctl config sync apply 
   }
   ```
 
-  工具由接口的方法清单生成，另有组合工具 `route_domain`（让域名走某个节点或代理组：规则测试 → 生成规则 → 预览 → 应用 → 验证）、`diagnose_site`、`diagnose`、`switch_node`。仓库里的 [`skills/lanflow/SKILL.md`](skills/lanflow/SKILL.md) 是配套的 Claude skill（标准流程、常见请求、禁区）。
+  工具由接口的方法清单生成，另有组合工具 `route_domain`（让域名走某个节点或代理组：规则测试 → 生成规则 → 预览 → 应用 → 验证）、`diagnose_site`、`diagnose`、`switch_node`，以及与窗口里全局搜索（⌘K）对应的 `search`（一次查找节点、代理组、订阅、规则、覆写、设置字段和工具本身）。仓库里的 [`skills/lanflow/SKILL.md`](skills/lanflow/SKILL.md) 是配套的 Claude skill（标准流程、常见请求、禁区）。
 - **`lanflow ctl <命令>`**：命令行，默认输出 JSON，`--format table` 给人看：`status`、`proxies list|select|test`、`mode set`、`sub list|add|use|update`、`rule add|test`、`config get|set|apply`（`--dry-run` 输出差异）、`config sync status|apply`、`diag`、`undo`、`audit`，以及 `methods`（本机接口的方法清单与权限级别）和 `call <方法> [JSON 参数...]`（直接调用其中一个方法）。macOS 上可以 `ln -s /Applications/Lanflow.app/Contents/MacOS/Lanflow /usr/local/bin/lanflow`。澜流没运行时以退出码 3 报错。
 
 权限分级（`docs/service-split.md` §4）：

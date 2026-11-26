@@ -52,11 +52,16 @@ func (kit) Header(c *ui.Context, title, subtitle string, tools func()) {
 // separated by hairlines.
 func (kit) Section(c *ui.Context, title, note string, body func()) {
 	t := c.Theme()
-	ui.Column(c).Gap(8).Shrink(0).Children(func() {
+	sec := ui.Column(c).Gap(8).Shrink(0)
+	lit := env.Reveal(sec, title) // a jump from the global search (env/reveal.go)
+	sec.Children(func() {
 		if title != "" || note != "" {
 			ui.Column(c).Gap(3).Padding(0, 4).Children(func() {
 				if title != "" {
-					ui.Text(c, title).FontSize(14).FontWeight(600).SingleLine()
+					tx := ui.Text(c, title).FontSize(14).FontWeight(600).SingleLine()
+					if lit {
+						tx.TextColor(t.Accent)
+					}
 				}
 				if note != "" {
 					ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
@@ -78,7 +83,11 @@ func GroupBox(c *ui.Context) ui.Element {
 // left, control on the right.
 func (kit) Row(c *ui.Context, label, desc string, control func()) {
 	t := c.Theme()
-	ui.Row(c).MinHeight(48).Padding(10, 16).Gap(16).AlignItems(ui.Center).Children(func() {
+	row := ui.Row(c).MinHeight(48).Padding(10, 16).Gap(16).AlignItems(ui.Center)
+	if env.Reveal(row, label) {
+		row.Background(t.Accent.Alpha(0.12))
+	}
+	row.Children(func() {
 		ui.Column(c).Gap(3).Shrink(1).Children(func() {
 			ui.Text(c, label).FontSize(13.5).FontWeight(500)
 			if desc != "" {

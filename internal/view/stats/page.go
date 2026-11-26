@@ -86,6 +86,9 @@ type row struct {
 // View draws the page.
 func (p *Page) View(c *ui.Context) {
 	e, t := p.e, c.Theme()
+	if q, ok := env.TakeQuery(e.Arg(env.Stats)); ok { // the global search
+		p.query = q
+	}
 	st := e.API.TrafficStats(rangeKeys[p.rng])
 	subtitle := ""
 	if p.rng == len(rangeKeys)-1 && !st.Since.IsZero() {

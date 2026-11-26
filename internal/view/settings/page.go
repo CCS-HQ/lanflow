@@ -273,6 +273,9 @@ func (p *Page) View(c *ui.Context) {
 }
 
 func (p *Page) handleArg(a string) {
+	if p.openEntry(a) { // "tab#label", from the global search (search.go)
+		return
+	}
 	if key, ok := strings.CutPrefix(a, "override:"); ok {
 		p.requestTab(tabOverride)
 		if p.tab == tabOverride {
@@ -1008,7 +1011,11 @@ func (p *Page) Topics() []app.Topic {
 // fixed-width input squeezed the description into a narrow column of
 // many lines and still cut the URL off.
 func stackedRow(c *ui.Context, t *ui.Theme, label, desc string, control func()) {
-	ui.Column(c).Gap(6).Padding(8, 12).Children(func() {
+	col := ui.Column(c).Gap(6).Padding(8, 12)
+	if env.Reveal(col, label) { // a jump from the global search
+		col.Background(t.Accent.Alpha(0.12))
+	}
+	col.Children(func() {
 		ui.Column(c).Gap(2).Children(func() {
 			ui.Text(c, label).FontSize(13)
 			if desc != "" {

@@ -68,6 +68,21 @@ func (s *Shell) sidebarHeader(c *ui.Context, st model.Status, barH float32) {
 				}
 			})
 
+			searchTip := i18n.T("全局搜索 (⌘K)")
+			if !s.opts.Mac {
+				searchTip = i18n.T("全局搜索 (Ctrl+K)")
+			}
+			findBtn := ui.ButtonBase(c.Key("sb:search")).Size(32, 32).Radius(8).
+				AlignItems(ui.Center).Justify(ui.Center).
+				Label(i18n.T("全局搜索")).Tooltip(searchTip).Cursor(ui.CursorPointer).TextColor(t.Text)
+			if findBtn.Hovered() {
+				findBtn.Background(t.SurfaceHover)
+			}
+			findBtn.Children(func() { k.Icon(c, "search", 18) })
+			if findBtn.Clicked() {
+				s.OpenSearch()
+			}
+
 			setBtn := ui.ButtonBase(c.Key("sb:settings")).Size(32, 32).Radius(8).
 				AlignItems(ui.Center).Justify(ui.Center).
 				Label(i18n.T("设置")).Tooltip(i18n.T("设置 (⌘,)")).Cursor(ui.CursorPointer)
@@ -696,8 +711,12 @@ func (s *Shell) compactToolPill(c *ui.Context, p env.Page, t *ui.Theme, k env.Ki
 	}
 }
 
-// shortcuts are ⌘1–⌘9 for the nine pages and ⌘, for settings.
+// shortcuts are ⌘1–⌘9 for the nine pages, ⌘, for settings and ⌘K for
+// the global search.
 func (s *Shell) shortcuts(c *ui.Context) {
+	if c.Shortcut(ui.Cmd, ui.KeyK) && !s.pal.open {
+		s.OpenSearch()
+	}
 	for i, p := range env.Order[:9] {
 		if c.Shortcut(ui.Cmd, ui.Key1+ui.Key(i)) {
 			s.navigate(p, "")

@@ -49,7 +49,7 @@ func TestToolList(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"status", "proxies", "select_proxy", "test_rule", "patch_settings", "undo",
-		"route_domain", "diagnose_site", "switch_node", "diagnose"} {
+		"route_domain", "diagnose_site", "switch_node", "diagnose", "search"} {
 		if !seen[want] {
 			t.Errorf("tool %s missing", want)
 		}

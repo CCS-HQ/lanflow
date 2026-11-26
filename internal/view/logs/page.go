@@ -183,6 +183,9 @@ func levelOptions() []string {
 func (p *Page) View(c *ui.Context) {
 	e, t := p.e, c.Theme()
 	p.restore()
+	if q, ok := env.TakeQuery(e.Arg(env.Logs)); ok { // the global search
+		p.query = q
+	}
 	// Paused, the log is neither read nor numbered again: the frozen copy
 	// and its numbers stand.
 	var all []model.LogEntry

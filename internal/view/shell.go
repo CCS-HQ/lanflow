@@ -134,6 +134,7 @@ type Shell struct {
 	consents     []*consentReq // agents waiting for the user (agents.go)
 	consentOpen  bool
 	fb           feedbackDialog // 反馈问题 and the crash prompt (feedback.go)
+	pal          palette        // the global search, ⌘K (palette.go)
 	hiddenOnce   bool
 	hiddenFlag   string // file that records the tray notice was shown (ConfigDir); "" = memory only
 	updateStamp  string // file that records the last launch-time update check; "" = check every launch
@@ -699,6 +700,7 @@ func (s *Shell) View(c *ui.Context) {
 	}
 	s.shortcuts(c)
 	s.dialogs(c, st)
+	s.paletteDialog(c)
 	s.toastView(c)
 }
 
