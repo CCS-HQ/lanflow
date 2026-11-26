@@ -575,6 +575,7 @@ type fakeStore struct {
 	manualNodes []model.ManualNode
 	chains      []model.ProxyChain
 	aggs        map[string]model.AggregateSpec
+	aggTpls     []model.AggregateTemplate
 	nextID      int
 }
 
@@ -587,6 +588,17 @@ func (s *fakeStore) AggregateSpec(id string) (model.AggregateSpec, bool) {
 	defer s.mu.Unlock()
 	spec, ok := s.aggs[id]
 	return spec.Clone(), ok
+}
+func (s *fakeStore) AggregateTemplates() ([]model.AggregateTemplate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]model.AggregateTemplate{}, s.aggTpls...), nil
+}
+func (s *fakeStore) SetAggregateTemplates(list []model.AggregateTemplate) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.aggTpls = append([]model.AggregateTemplate(nil), list...)
+	return nil
 }
 func (s *fakeStore) SetAggregateSpec(id string, spec model.AggregateSpec) error {
 	s.mu.Lock()

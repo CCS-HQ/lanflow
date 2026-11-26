@@ -18,13 +18,14 @@ import (
 
 // File names under Store.Dir (see the package comment for the layout).
 const (
-	indexFile       = "profiles.json"
-	customRulesFile = "custom-rules.json"
-	manualNodesFile = "manual-nodes.json"
-	proxyChainsFile = "proxy-chains.json"
-	profilesDir     = "profiles"
-	overridesDir    = "overrides"
-	overrideGlobal  = "global"
+	indexFile        = "profiles.json"
+	customRulesFile  = "custom-rules.json"
+	manualNodesFile  = "manual-nodes.json"
+	aggTemplatesFile = "aggregate-templates.json"
+	proxyChainsFile  = "proxy-chains.json"
+	profilesDir      = "profiles"
+	overridesDir     = "overrides"
+	overrideGlobal   = "global"
 )
 
 // indexEntry is model.Subscription without runtime flags; Current is derived
@@ -270,7 +271,41 @@ func (s *store) aggregateSpec(id string) (model.AggregateSpec, bool) {
 	if json.Unmarshal(data, &spec) != nil {
 		return model.AggregateSpec{}, false
 	}
-	return spec, true
+	return UpgradeAggregateSpec(spec), true
+}
+
+// aggregateTemplates reads the user's aggregate templates (我的模板).
+func (s *store) aggregateTemplates() ([]model.AggregateTemplate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := os.ReadFile(filepath.Join(s.dir, aggTemplatesFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return []model.AggregateTemplate{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []model.AggregateTemplate
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("聚合模板 %s 已损坏：%w", aggTemplatesFile, err)
+	}
+	for i := range out {
+		out[i].Spec = UpgradeAggregateSpec(out[i].Spec)
+	}
+	return out, nil
+}
+
+func (s *store) setAggregateTemplates(list []model.AggregateTemplate) error {
+	if list == nil {
+		list = []model.AggregateTemplate{}
+	}
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return atomicWrite(filepath.Join(s.dir, aggTemplatesFile), append(data, '\n'))
 }
 
 func (s *store) setAggregateSpec(id string, spec model.AggregateSpec) error {

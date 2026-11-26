@@ -82,15 +82,6 @@ func TestDeleteRefusesCurrent(t *testing.T) {
 	}
 }
 
-func indexOf(texts []string, s string) int {
-	for i, t := range texts {
-		if t == s {
-			return i
-		}
-	}
-	return -1
-}
-
 func TestSortableColumns(t *testing.T) {
 	api := fake.NewInstant()
 	e, _ := testEnv(api)

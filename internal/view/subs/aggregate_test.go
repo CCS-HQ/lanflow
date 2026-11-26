@@ -13,22 +13,22 @@ import (
 func TestAggregateEditorCreatePreviewSave(t *testing.T) {
 	api := fake.NewInstant()
 	e, toasts := testEnv(api)
-	p := New(e)
-	tt := ui.NewTester(p.View, 1000, 760)
+	p := NewAggregates(e)
+	tt := ui.NewTester(p.View, 1200, 800)
 	tt.Frame()
-	if err := tt.Click("导入"); err != nil {
+	if !tt.HasText("还没有聚合订阅") {
+		t.Fatalf("empty list: %q", tt.Texts())
+	}
+	if err := tt.Click("新建聚合订阅"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("新建聚合订阅…"); err != nil {
-		t.Fatal(err)
-	}
 	tt.Frame()
-	if !p.agg.open || !tt.HasText("新建聚合订阅") || !tt.HasText("来源 1") {
+	if !p.agg.open || !tt.HasText("新建聚合订阅") || !tt.HasText("订阅链接 #1") || !tt.HasText("标准版") {
 		t.Fatalf("editor not open: %q", tt.Texts())
 	}
 
 	// Nothing filled in: saving says what is missing.
-	if err := tt.Click("保存"); err != nil {
+	if err := tt.Click("导入澜流"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -36,20 +36,38 @@ func TestAggregateEditorCreatePreviewSave(t *testing.T) {
 		t.Fatalf("saved an empty source: err %q", p.agg.err)
 	}
 
+	// Quick mode: the source card's kind icons, a template.
 	p.agg.sources[0].url = "https://air.example.com/sub"
 	p.agg.sources[0].prefix = "A · "
-	p.agg.addSource(model.AggSourceLinks)
-	p.agg.sources[1].links = "trojan://pw@tw.example.com:443?sni=tw.example.com#台湾%2009"
-	p.agg.renames = []model.RenameRule{{Pattern: `\s+0(\d)$`, Replace: " $1"}}
-	for _, tab := range []int{aggTabSources, aggTabNodes, aggTabGroups} {
-		p.agg.tab = tab
-		tt.Frame()
+	if err := tt.Click("添加订阅/节点源"); err != nil {
+		t.Fatal(err)
 	}
-	if !tt.HasText("香港节点") || !tt.HasText("广告拦截") {
-		t.Fatalf("groups tab: %q", tt.Texts())
+	tt.Frame()
+	// the second card's 节点链接 kind button
+	var kinds []ui.AccessInfo
+	for _, a := range tt.AccessAll() {
+		if a.Role == ui.RoleButton && a.Name == "节点链接" {
+			kinds = append(kinds, a)
+		}
+	}
+	if len(kinds) != 2 {
+		t.Fatalf("kind buttons: %d", len(kinds))
+	}
+	tt.ClickAt(kinds[1].Bounds.X+kinds[1].Bounds.W/2, kinds[1].Bounds.Y+kinds[1].Bounds.H/2)
+	tt.Frame()
+	if aggKinds[p.agg.sources[1].kind] != model.AggSourceLinks {
+		t.Fatalf("kind = %d", p.agg.sources[1].kind)
+	}
+	p.agg.sources[1].links = "trojan://pw@tw.example.com:443?sni=tw.example.com#台湾%2009"
+	if err := tt.Click("精简版"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if p.agg.spec.Template != "lite" || len(p.agg.spec.Groups) != 7 {
+		t.Fatalf("template: %q %d groups", p.agg.spec.Template, len(p.agg.spec.Groups))
 	}
 
-	if err := tt.Click("预览"); err != nil {
+	if err := tt.Click("生成配置"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -58,31 +76,58 @@ func TestAggregateEditorCreatePreviewSave(t *testing.T) {
 		t.Fatalf("preview: %+v err %q", pv, p.agg.previewErr)
 	}
 	// six fake nodes minus the 剩余流量 entry, plus the typed link
-	if len(pv.Nodes) != 6 || pv.Nodes[0].Name != "A · 香港 1" || pv.Nodes[5].Name != "台湾 9" {
+	if len(pv.Nodes) != 6 || pv.Nodes[0].Name != "A · 香港 01" || pv.Nodes[5].Name != "台湾 09" {
 		t.Fatalf("nodes = %+v", pv.Nodes)
 	}
-	if !tt.HasText("A · 香港 1") || !tt.HasText(profile.AggGroupSelect) {
-		t.Fatalf("preview tab: %q", tt.Texts())
+	if !tt.HasText("A · 香港 01") || !tt.HasText("🚀 节点选择") || !tt.HasText("✓ 5 节点") {
+		t.Fatalf("preview: %q", tt.Texts())
 	}
-	if err := tt.Click("查看生成的 YAML"); err != nil {
+	if err := tt.Click("YAML"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 
-	// A change marks the preview stale.
-	p.agg.exclude = "台湾"
+	// Advanced mode: a module, a custom rule, node processing.
+	if err := tt.Click("高级模式"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	d := &p.agg
+	d.setModule("youtube", true)
+	if d.groupIndex("youtube") < 0 || d.spec.Template != "" {
+		t.Fatal("module not added")
+	}
+	if msg := d.addRule(model.AggregateRule{Type: model.AggRuleDomainSuffix, Value: "corp.example.com", Target: "youtube"}); msg != "" {
+		t.Fatal(msg)
+	}
+	if msg := d.addRule(model.AggregateRule{Type: model.AggRuleDomainSuffix, Value: "corp.example.com", Target: "youtube"}); msg == "" {
+		t.Fatal("a duplicate rule was added")
+	}
+	views := d.ruleViews()
+	if views[0].Key != "DOMAIN-SUFFIX,corp.example.com" || views[len(views)-1].Key != "MATCH" {
+		t.Fatalf("rule views = %+v", views)
+	}
+	d.moveRule(views, 0, 1)
+	if d.ruleViews()[1].Key != "DOMAIN-SUFFIX,corp.example.com" {
+		t.Fatal("rule not moved")
+	}
+	d.setModule("youtube", false)
+	if d.spec.Rules[0].Target != profile.AggModSelect {
+		t.Fatalf("rule target of a removed group = %q", d.spec.Rules[0].Target)
+	}
+	d.spec.Exclude = "台湾"
 	tt.Frame()
 	if !tt.HasText("设置改过了，预览可能已过时。") {
 		t.Fatalf("no stale note: %q", tt.Texts())
 	}
 
-	p.agg.name = "全部节点"
-	if err := tt.Click("保存"); err != nil {
+	d.name = "全部节点"
+	if err := tt.Click("导入澜流"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if p.agg.open {
-		t.Fatalf("editor still open: %q", p.agg.err)
+	if d.open {
+		t.Fatalf("editor still open: %q", d.err)
 	}
 	var sub model.Subscription
 	for _, s := range api.Subscriptions() {
@@ -93,32 +138,29 @@ func TestAggregateEditorCreatePreviewSave(t *testing.T) {
 	if sub.Name != "全部节点" || sub.Total == 0 {
 		t.Fatalf("saved = %+v", sub)
 	}
-	if got := (*toasts)[len(*toasts)-1]; got != "已保存「全部节点」" {
+	if got := (*toasts)[len(*toasts)-1]; got != "已导入澜流：「全部节点」" {
 		t.Fatalf("toast %q", got)
 	}
-	if !tt.HasText("聚合") {
-		t.Fatalf("source column: %q", tt.Texts())
+
+	// The list shows it, with what its spec holds.
+	tt.Frame()
+	tt.Frame()
+	if !tt.HasText("全部节点") || !tt.HasText("2 个来源 · 高级配置 · 更新于 刚刚") {
+		t.Fatalf("list: %q", tt.Texts())
 	}
 
-	// Editing loads the stored spec.
-	if err := tt.Click("更多 全部节点"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.ChooseMenuItem("编辑聚合…"); err != nil {
+	// Editing loads the stored spec, on the advanced mode (it has rules).
+	if err := tt.Click("编辑 全部节点"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	d := &p.agg
-	if !d.open || d.id != sub.ID || len(d.sources) != 2 || d.sources[1].links == "" || d.exclude != "台湾" || len(d.renames) != 1 {
+	if !d.open || d.id != sub.ID || len(d.sources) != 2 || d.sources[1].links == "" || d.spec.Exclude != "台湾" || len(d.spec.Rules) != 1 || d.mode != aggModeAdvanced {
 		t.Fatalf("editor state = %+v", d)
-	}
-	if !tt.HasText("编辑聚合订阅") {
-		t.Fatalf("edit title: %q", tt.Texts())
 	}
 	// A source reading another subscription: the choice defaults to the first one.
 	d.addSource(model.AggSourceSub)
 	tt.Frame()
-	spec := d.spec(api.Subscriptions())
+	spec := d.fullSpec(api.Subscriptions())
 	if got := spec.Sources[2].SubID; got != "s1" {
 		t.Fatalf("sub source = %q", got)
 	}
@@ -128,6 +170,80 @@ func TestAggregateEditorCreatePreviewSave(t *testing.T) {
 	tt.Frame()
 	if d.open {
 		t.Fatal("cancel kept the editor open")
+	}
+}
+
+func TestAggregateTemplates(t *testing.T) {
+	api := fake.NewInstant()
+	e, _ := testEnv(api)
+	p := New(e)
+	tt := ui.NewTester(p.View, 1200, 800)
+	tt.Frame()
+	p.openAggregate(nil)
+	tt.Frame()
+	d := &p.agg
+	d.spec.Rules = []model.AggregateRule{{Type: model.AggRuleDomain, Value: "a.example.com", Target: "DIRECT"}}
+	if err := tt.Click("保存为模板"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	d.dlg.tplName = "我的分流"
+	if err := tt.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	list, _ := api.AggregateTemplates()
+	if len(list) != 1 || list[0].Name != "我的分流" || len(list[0].Spec.Sources) != 0 || len(list[0].Spec.Rules) != 1 {
+		t.Fatalf("templates = %+v", list)
+	}
+	if d.spec.Template != "my:"+list[0].ID {
+		t.Fatalf("template mark = %q", d.spec.Template)
+	}
+	d.applyTemplate("full")
+	d.spec.Rules = nil
+	if err := tt.Click("我的模板"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("套用"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if len(d.spec.Rules) != 1 || d.spec.Template != "my:"+list[0].ID || len(d.sources) != 1 {
+		t.Fatalf("applied: %+v", d.spec)
+	}
+}
+
+func TestAggregateGroupDialog(t *testing.T) {
+	api := fake.NewInstant()
+	e, _ := testEnv(api)
+	p := New(e)
+	p.openAggregate(nil)
+	d := &p.agg
+	d.dlg.openGroup(d.spec, -1)
+	d.dlg.gName, d.dlg.gType, d.dlg.gRules = "💼 工作", model.AggTypeSelect, []string{"geosite:slack"}
+	if msg := p.saveGroup(); msg != "" {
+		t.Fatal(msg)
+	}
+	g := d.spec.Groups[len(d.spec.Groups)-1]
+	if !g.Custom || g.Name != "💼 工作" || g.Rules[0] != "geosite:slack" {
+		t.Fatalf("custom group = %+v", g)
+	}
+	// renaming a catalog group to its own name keeps no override
+	i := d.groupIndex("ads")
+	d.dlg.openGroup(d.spec, i)
+	d.dlg.gType = model.AggTypeDirectFirst
+	if msg := p.saveGroup(); msg != "" {
+		t.Fatal(msg)
+	}
+	if g := d.spec.Groups[i]; g.Name != "" || g.Type != model.AggTypeDirectFirst {
+		t.Fatalf("ads = %+v", g)
+	}
+	// a duplicate name is refused
+	d.dlg.openGroup(d.spec, -1)
+	d.dlg.gName = "💼 工作"
+	if msg := p.saveGroup(); msg == "" {
+		t.Fatal("a duplicate group name was accepted")
 	}
 }
 

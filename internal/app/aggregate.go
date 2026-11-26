@@ -149,6 +149,84 @@ func (s *Service) SaveAggregate(in model.Subscription, spec model.AggregateSpec,
 	return sub, err
 }
 
+// AggMaxTemplates is how many templates of their own a user can keep.
+const AggMaxTemplates = 50
+
+// AggregateTemplates returns the user's aggregate templates (我的模板).
+func (s *Service) AggregateTemplates() ([]model.AggregateTemplate, error) {
+	return s.d.store.AggregateTemplates()
+}
+
+// SaveAggregateTemplate adds (empty ID) or replaces a template of the
+// user's own. Only the groups, rules and node processing are kept: the
+// sources and what refers to their nodes by name are dropped.
+func (s *Service) SaveAggregateTemplate(t model.AggregateTemplate) (out model.AggregateTemplate, err error) {
+	defer func() { s.logOp("save aggregate template "+strings.TrimSpace(t.Name), err) }()
+	t.Name = strings.TrimSpace(t.Name)
+	if t.Name == "" {
+		return out, errors.New(i18n.T("请填写模板名称。"))
+	}
+	spec := profile.UpgradeAggregateSpec(t.Spec).Clone()
+	spec.Sources, spec.Hidden, spec.NodeOrder, spec.Template = nil, nil, nil, ""
+	check := spec
+	check.Sources = []model.AggregateSource{{ID: "t", Kind: model.AggSourceLinks, Links: "ss://x"}}
+	if err := profile.ValidateAggregateSpec(check, i18n.Tf); err != nil {
+		return out, err
+	}
+	t.Spec = spec
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	list, err := s.d.store.AggregateTemplates()
+	if err != nil {
+		return out, err
+	}
+	if t.ID == "" {
+		if len(list) >= AggMaxTemplates {
+			return out, fmt.Errorf(i18n.T("模板不能超过 %d 个。"), AggMaxTemplates)
+		}
+		var b [4]byte
+		_, _ = rand.Read(b[:])
+		t.ID, t.Created = hex.EncodeToString(b[:]), s.d.now()
+		list = append(list, t)
+	} else {
+		found := false
+		for i := range list {
+			if list[i].ID == t.ID {
+				t.Created = list[i].Created
+				list[i], found = t, true
+			}
+		}
+		if !found {
+			return out, errors.New(i18n.T("模板不存在，可能已被删除。"))
+		}
+	}
+	if err := s.d.store.SetAggregateTemplates(list); err != nil {
+		return out, fmt.Errorf(i18n.T("保存模板失败：%v"), err)
+	}
+	return t, nil
+}
+
+// DeleteAggregateTemplate removes a template of the user's own.
+func (s *Service) DeleteAggregateTemplate(id string) (err error) {
+	defer func() { s.logOp("delete aggregate template "+id, err) }()
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	list, err := s.d.store.AggregateTemplates()
+	if err != nil {
+		return err
+	}
+	out := list[:0:0]
+	for _, t := range list {
+		if t.ID != id {
+			out = append(out, t)
+		}
+	}
+	if len(out) == len(list) {
+		return errors.New(i18n.T("模板不存在，可能已被删除。"))
+	}
+	return s.d.store.SetAggregateTemplates(out)
+}
+
 // buildAggregate rebuilds a stored aggregate subscription (updateOne).
 func (s *Service) buildAggregate(sub model.Subscription) ([]byte, model.AggregatePreview, error) {
 	spec, ok := s.d.store.AggregateSpec(sub.ID)
@@ -209,6 +287,8 @@ func (s *Service) gatherAggregate(sub model.Subscription, spec model.AggregateSp
 		switch in.Source.Kind {
 		case model.AggSourceLinks:
 			in.Data = []byte(in.Source.Links)
+		case model.AggSourceYAML:
+			in.Data = []byte(in.Source.YAML)
 		case model.AggSourceSub:
 			ref, ok := s.d.store.Get(in.Source.SubID)
 			switch {

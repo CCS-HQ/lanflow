@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	"github.com/egoist/mygo"
@@ -178,21 +179,44 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	c.frame("invalid config dialog", tt)
 	click(t, tt, i18n.T("好"))
 
-	// The aggregate subscription editor, every tab and the preview. The
-	// generated group and node names are profile data.
-	c.data = append(c.data, profile.AggGroupSelect, profile.AggGroupAuto, profile.AggGroupFinal)
+	// The aggregate subscription editor: both modes, the preview and the
+	// dialogs. The generated group and node names are profile data.
+	for _, m := range profile.AggregateModules {
+		c.data = append(c.data, m.Name())
+	}
+	tt.Advance(time.Minute) // the toast of the step above, over the editor's footer
 	tt.Frame()
 	click(t, tt, i18n.T("导入"))
 	if err := tt.ChooseMenuItem(i18n.T("新建聚合订阅…")); err != nil {
 		t.Fatal(err)
 	}
-	c.frame("aggregate editor", tt)
-	for _, tab := range []string{"节点处理", "分组与规则"} {
-		click(t, tt, i18n.T(tab))
-		c.frame("aggregate editor "+tab, tt)
+	c.frame("aggregate editor (quick)", tt)
+	click(t, tt, i18n.T("我的模板"))
+	c.frame("aggregate my templates", tt)
+	click(t, tt, i18n.T("关闭"))
+	for range 30 { // the dialog's exit
+		tt.Frame()
 	}
-	click(t, tt, i18n.T("预览"))
+	click(t, tt, i18n.T("保存为模板"))
+	c.frame("aggregate save template", tt)
+	click(t, tt, i18n.T("取消"))
+	for range 30 {
+		tt.Frame()
+	}
+	click(t, tt, i18n.T("高级模式"))
+	c.frame("aggregate editor (advanced)", tt)
+	for _, dlg := range []string{"自动处理", "批量编辑"} {
+		click(t, tt, i18n.T(dlg))
+		c.frame("aggregate "+dlg, tt)
+		click(t, tt, i18n.T("取消"))
+		for range 30 {
+			tt.Frame()
+		}
+	}
+	click(t, tt, i18n.T("生成配置"))
 	c.frame("aggregate preview (empty source)", tt)
+	click(t, tt, "YAML")
+	c.frame("aggregate yaml view", tt)
 	click(t, tt, i18n.T("取消"))
 	tt.Frame()
 

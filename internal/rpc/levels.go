@@ -63,17 +63,20 @@ var methodLevels = map[string]Level{
 	"UpdateUIState": LevelUI,
 
 	// ---- subscriptions ----
-	"ImportSubscriptionURL":  LevelWrite,
-	"ImportSubscriptionFile": LevelWrite,
-	"UpdateSubscription":     LevelWrite,
-	"UpdateAllSubscriptions": LevelWrite,
-	"UseSubscription":        LevelWrite,
-	"EditSubscription":       LevelWrite,
-	"DeleteSubscription":     LevelDanger,
-	"SubscriptionRaw":        LevelSensitive,
-	"AggregateSpec":          LevelSensitive, // source links
-	"PreviewAggregate":       LevelSensitive, // downloads the sources; the result holds the profile
-	"SaveAggregate":          LevelWrite,
+	"ImportSubscriptionURL":   LevelWrite,
+	"ImportSubscriptionFile":  LevelWrite,
+	"UpdateSubscription":      LevelWrite,
+	"UpdateAllSubscriptions":  LevelWrite,
+	"UseSubscription":         LevelWrite,
+	"EditSubscription":        LevelWrite,
+	"DeleteSubscription":      LevelDanger,
+	"SubscriptionRaw":         LevelSensitive,
+	"AggregateSpec":           LevelSensitive, // source links
+	"PreviewAggregate":        LevelSensitive, // downloads the sources; the result holds the profile
+	"SaveAggregate":           LevelWrite,
+	"AggregateTemplates":      LevelRead,
+	"SaveAggregateTemplate":   LevelWrite,
+	"DeleteAggregateTemplate": LevelWrite,
 
 	// ---- manual nodes ----
 	"ManualNodes":      LevelSensitive,

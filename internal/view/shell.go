@@ -164,6 +164,7 @@ type Shell struct {
 	sbSetDirty  atomic.Bool
 	sbCapDirty  atomic.Bool
 	sbCurSub    *model.Subscription
+	sbAggCount  int // aggregate subscriptions, the 聚合订阅 card's badge
 	sbCapOn     bool
 	sbCap       model.CaptureStatus
 }
@@ -212,17 +213,18 @@ func New(api app.API, opts Options) *Shell {
 		s.updateStamp = filepath.Join(dir, "update-check")
 	}
 	s.pages = map[env.Page]pageView{
-		env.Overview: overview.New(s.env),
-		env.Proxies:  proxies.New(s.env),
-		env.Subs:     subs.New(s.env),
-		env.Conns:    conns.New(s.env),
-		env.Logs:     logs.New(s.env),
-		env.Rules:    rules.New(s.env),
-		env.Net:      netpage.New(s.env),
-		env.Stats:    stats.New(s.env),
-		env.Probe:    probe.New(s.env),
-		env.Capture:  capture.New(s.env),
-		env.Settings: settings.New(s.env),
+		env.Overview:  overview.New(s.env),
+		env.Proxies:   proxies.New(s.env),
+		env.Subs:      subs.New(s.env),
+		env.Conns:     conns.New(s.env),
+		env.Logs:      logs.New(s.env),
+		env.Rules:     rules.New(s.env),
+		env.Net:       netpage.New(s.env),
+		env.Stats:     stats.New(s.env),
+		env.Probe:     probe.New(s.env),
+		env.Capture:   capture.New(s.env),
+		env.Aggregate: subs.NewAggregates(s.env),
+		env.Settings:  settings.New(s.env),
 	}
 	s.topics = map[env.Page]map[app.Topic]bool{}
 	for id, p := range s.pages {

@@ -4,7 +4,7 @@
 // System Proxy & TUN quick cards, current subscription card, bento nav cards
 // (including Overrides), full-width Connections card with live traffic wave,
 // full-width Core card (version, memory & one-click restart), and a compact
-// secondary tools strip.
+// secondary tools strip, and the 聚合订阅 card at the bottom.
 
 package view
 
@@ -96,7 +96,11 @@ func (s *Shell) sidebar(c *ui.Context, st model.Status) {
 
 	if s.sbSubsDirty.Swap(false) {
 		var cur *model.Subscription
+		s.sbAggCount = 0
 		for _, sub := range s.api.Subscriptions() {
+			if sub.Source == model.SourceAggregate {
+				s.sbAggCount++
+			}
 			if sub.Current {
 				subCopy := sub
 				cur = &subCopy
@@ -206,6 +210,15 @@ func (s *Shell) sidebar(c *ui.Context, st model.Status) {
 					s.compactToolPill(c, p, t, k)
 				}
 			})
+
+			// 11. 聚合订阅: the subscriptions built and maintained locally
+			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
+				ab := ""
+				if s.sbAggCount > 0 {
+					ab = fmt.Sprint(s.sbAggCount)
+				}
+				s.bentoNavCard(c, env.Aggregate, ab, t, k)
+			})
 		})
 	})
 }
@@ -219,7 +232,7 @@ func (s *Shell) modeSwitcher(c *ui.Context, cur model.Mode) {
 		AlignItems(ui.Center).Children(func() {
 		for i, m := range sidebarModes {
 			active := cur == m
-			btn := ui.ButtonBase(c.Key("sb:mode:"+string(m))).Grow(1).Basis(0).Height(32).Radius(9).
+			btn := ui.ButtonBase(c.Key("sb:mode:" + string(m))).Grow(1).Basis(0).Height(32).Radius(9).
 				AlignItems(ui.Center).Justify(ui.Center).
 				Label(labels[i]).Cursor(ui.CursorPointer)
 			if active {

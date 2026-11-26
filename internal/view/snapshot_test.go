@@ -45,10 +45,13 @@ var snapshots = []snapshot{
 	{name: "proxies", page: env.Proxies},
 	{name: "subs", page: env.Subs},
 	// The aggregate subscription editor (docs/aggregate.md), on each tab.
-	{name: "subs-aggregate", page: env.Subs, prep: aggregatePrep("")},
-	{name: "subs-aggregate-nodes", page: env.Subs, prep: aggregatePrep("节点处理")},
-	{name: "subs-aggregate-groups", page: env.Subs, prep: aggregatePrep("分组与规则")},
-	{name: "subs-aggregate-preview", page: env.Subs, prep: aggregatePrep("预览")},
+	{name: "aggregate-empty", page: env.Aggregate},
+	{name: "aggregate-list", page: env.Aggregate, prep: aggregateSaved},
+	{name: "subs-aggregate", page: env.Subs, prep: aggregatePrep()},
+	{name: "subs-aggregate-preview", page: env.Subs, prep: aggregatePrep("生成配置")},
+	{name: "subs-aggregate-advanced", page: env.Subs, prep: aggregatePrep("高级模式", "生成配置")},
+	{name: "subs-aggregate-yaml", page: env.Subs, prep: aggregatePrep("生成配置", "YAML")},
+	{name: "subs-aggregate-groups", page: env.Subs, prep: aggregateScrolled("节点导入", "节点管理", "常用服务", "规则管理")},
 	{name: "conns", page: env.Conns},
 	{name: "capture", page: env.Capture},
 	{name: "capture-detail", page: env.Capture, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
@@ -350,9 +353,65 @@ func setMode(m model.Mode) func(*testing.T, *fake.Fake, *Shell, *ui.Tester) {
 	}
 }
 
-// aggregatePrep saves an aggregate subscription in the fake and opens it
-// in the editor on tab ("" = the first); 预览 also builds the preview.
-func aggregatePrep(tab string) func(*testing.T, *fake.Fake, *Shell, *ui.Tester) {
+// aggregateScrolled opens the editor's advanced mode with a preview and
+// clicks the given section titles, scrolling each into view.
+func aggregateScrolled(titles ...string) func(*testing.T, *fake.Fake, *Shell, *ui.Tester) {
+	return func(t *testing.T, api *fake.Fake, s *Shell, tt *ui.Tester) {
+		aggregatePrep("高级模式")(t, api, s, tt)
+		for _, title := range titles {
+			text := i18n.T(title)
+			// The panel's footer covers its bottom: scroll further than
+			// the window's edge.
+			for range 12 {
+				r, ok := tt.Find(text)
+				if !ok {
+					t.Fatalf("find %q", text)
+				}
+				if r.Y >= 120 && r.Y+r.H <= float32(tt.Image().Bounds().Dy())-120 {
+					break
+				}
+				dy := float32(200)
+				if r.Y < 120 {
+					dy = -200
+				}
+				tt.Scroll(r.X, 300, 0, dy)
+				tt.Frame()
+			}
+			click(t, tt, text)
+			for range 20 {
+				tt.Frame()
+			}
+		}
+		if !tt.HasText(i18n.T("配置")) { // two columns: the preview shows beside
+			click(t, tt, i18n.T("生成配置"))
+			tt.Frame()
+		}
+	}
+}
+
+// aggregateSaved saves two aggregate subscriptions in the fake, the
+// second one in use, for the 聚合订阅 list.
+func aggregateSaved(t *testing.T, api *fake.Fake, _ *Shell, tt *ui.Tester) {
+	spec := profile.DefaultAggregateSpec()
+	spec.Sources = []model.AggregateSource{
+		{Kind: model.AggSourceURL, URL: "https://air.example.com/sub"},
+		{Kind: model.AggSourceLinks, Links: "trojan://pw@tw.example.com:443#台湾 09"},
+	}
+	if _, err := api.SaveAggregate(model.Subscription{Name: "全部节点", AutoUpdateHours: 12}, spec, false); err != nil {
+		t.Fatal(err)
+	}
+	spec.Template = "lite"
+	if _, err := api.SaveAggregate(model.Subscription{Name: "家里用", AutoUpdateHours: 24}, spec, true); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		tt.Frame()
+	}
+}
+
+// aggregatePrep saves an aggregate subscription in the fake, opens it in
+// the editor and clicks the given texts (生成配置 builds the preview).
+func aggregatePrep(clicks ...string) func(*testing.T, *fake.Fake, *Shell, *ui.Tester) {
 	return func(t *testing.T, api *fake.Fake, s *Shell, tt *ui.Tester) {
 		spec := profile.DefaultAggregateSpec()
 		spec.Sources = []model.AggregateSource{
@@ -365,10 +424,11 @@ func aggregatePrep(tab string) func(*testing.T, *fake.Fake, *Shell, *ui.Tester) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		s.navigate(env.Subs, "aggregate:"+sub.ID)
+		s.navigate(env.Aggregate, sub.ID)
 		tt.Frame()
-		if tab != "" {
-			click(t, tt, i18n.T(tab))
+		for _, k := range clicks {
+			click(t, tt, i18n.T(k))
+			tt.Frame()
 		}
 	}
 }

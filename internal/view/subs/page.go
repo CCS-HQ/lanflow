@@ -49,6 +49,14 @@ type Page struct {
 	async func(fn func())
 	// pickFile opens the system file dialog; tests replace it.
 	pickFile func() (string, bool)
+
+	// aggOnly: this is the 聚合订阅 page (NewAggregates), not 订阅.
+	aggOnly bool
+	// aggSum is what the 聚合订阅 cards show of each spec, read for the
+	// list aggSumSig describes; aggSumBusy while a read runs.
+	aggSum     map[string]aggSummary
+	aggSumSig  string
+	aggSumBusy bool
 }
 
 // New returns the page.
@@ -82,6 +90,10 @@ func (p *Page) SetAsync(async func(fn func()), pickFile func() (string, bool)) {
 
 // View draws the whole content area including the header.
 func (p *Page) View(c *ui.Context) {
+	if p.aggOnly {
+		p.aggregatesView(c)
+		return
+	}
 	t := c.Theme()
 	k := p.e.Kit
 	subs := p.e.API.Subscriptions()
@@ -92,15 +104,12 @@ func (p *Page) View(c *ui.Context) {
 	case arg == "import-file":
 		p.importFile()
 	case arg == "aggregate":
-		p.openAggregate(nil)
+		// The editor lives on the 聚合订阅 page.
+		p.e.Navigate(env.Aggregate, "new")
 	case strings.HasPrefix(arg, "aggregate:"):
 		// "aggregate:<id>": the editor of that aggregate subscription
 		// ("aggregate" alone: a new one)
-		for _, s := range subs {
-			if s.ID == strings.TrimPrefix(arg, "aggregate:") && s.Source == model.SourceAggregate {
-				p.openAggregate(&s)
-			}
-		}
+		p.e.Navigate(env.Aggregate, strings.TrimPrefix(arg, "aggregate:"))
 	default:
 		// "import-url", or a deep link's "import-url:<url>[\n<name>]": the
 		// dialog opens prefilled; nothing imports by itself (docs/design.md §6.1).
@@ -143,7 +152,7 @@ func (p *Page) View(c *ui.Context) {
 			}
 			m.Separator()
 			if m.Item(i18n.T("新建聚合订阅…")).Chosen() {
-				p.openAggregate(nil)
+				p.e.Navigate(env.Aggregate, "new")
 			}
 		}).Label(i18n.T("导入"))
 	})
@@ -160,7 +169,7 @@ func (p *Page) View(c *ui.Context) {
 				p.importFile()
 			}
 			if ui.Button(c, i18n.T("新建聚合订阅")).Clicked() {
-				p.openAggregate(nil)
+				p.e.Navigate(env.Aggregate, "new")
 			}
 		})
 		p.dialogs(c)
@@ -374,7 +383,7 @@ func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, s model.Subscription) {
 	}
 	if sub.Source == model.SourceAggregate {
 		if m.Item(i18n.T("编辑聚合…")).Chosen() {
-			p.openAggregate(&sub)
+			p.e.Navigate(env.Aggregate, sub.ID)
 		}
 	} else if m.Item(i18n.T("编辑…")).Chosen() {
 		p.edit = editDialog{open: true, id: sub.ID, name: sub.Name, url: sub.URL, isURL: sub.Source == "url",

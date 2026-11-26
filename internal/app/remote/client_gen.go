@@ -286,6 +286,21 @@ func (cl *Client) SaveAggregate(s model.Subscription, spec model.AggregateSpec, 
 	return
 }
 
+func (cl *Client) AggregateTemplates() (res0 []model.AggregateTemplate, err error) {
+	err = cl.call("AggregateTemplates", nil, &res0)
+	return
+}
+
+func (cl *Client) SaveAggregateTemplate(t model.AggregateTemplate) (res0 model.AggregateTemplate, err error) {
+	err = cl.call("SaveAggregateTemplate", []any{t}, &res0)
+	return
+}
+
+func (cl *Client) DeleteAggregateTemplate(id string) (err error) {
+	err = cl.call("DeleteAggregateTemplate", []any{id})
+	return
+}
+
 func (cl *Client) ManualNodes() (res0 []model.ManualNode) {
 	_ = cl.call("ManualNodes", nil, &res0)
 	return

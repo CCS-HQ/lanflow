@@ -47,6 +47,7 @@ type Fake struct {
 	manualNodes        []model.ManualNode
 	chains             []model.ProxyChain
 	aggs               map[string]model.AggregateSpec // aggregate subscriptions' specs (aggregate.go)
+	aggTpls            []model.AggregateTemplate      // aggregate templates of the user's own
 	provs              []model.RuleProvider
 	pprovs             []model.ProxyProvider
 	set                model.Settings
