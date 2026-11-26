@@ -14,7 +14,14 @@ const Label = "lanflow.service"
 
 // Apply makes the login start exe (on) or nothing (off); it only writes
 // when the current entry differs. changed reports a write.
-func Apply(exe string, on bool) (changed bool, err error) { return apply(exe, on) }
+func Apply(exe string, on bool) (changed bool, err error) { return applyElevated(exe, on, false) }
+
+// ApplyElevated configures login autostart for exe, registering an elevated
+// Windows Scheduled Task when elevated is true and falling back to the user's
+// Run entry otherwise.
+func ApplyElevated(exe string, on, elevated bool) (changed bool, err error) {
+	return applyElevated(exe, on, elevated)
+}
 
 // Enabled reports whether the login starts exe.
 func Enabled(exe string) bool { return enabled(exe) }

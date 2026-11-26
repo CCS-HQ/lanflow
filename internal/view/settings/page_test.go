@@ -93,6 +93,71 @@ func TestGeneralSwitchesApplyAtOnce(t *testing.T) {
 	}
 }
 
+func TestGeneralWindowsRunAsAdminAndAutostart(t *testing.T) {
+	t.Run("non-elevated Windows prompts restart and shows banner", func(t *testing.T) {
+		f := fake.NewInstant()
+		e, r := testEnv(f)
+		e.Mac = false
+		e.Windows = true
+		e.Elevated = false
+		p := New(e)
+		relaunched := 0
+		p.SetRelaunchElevated(func() { relaunched++ })
+		tt := ui.NewTester(p.View, 1000, 800)
+		if !tt.HasText("开机时启动") || !tt.HasText("默认使用管理员启动") {
+			t.Fatalf("expected Windows startup controls, got %q", tt.Texts())
+		}
+		clickRole(t, tt, ui.RoleSwitch, "默认使用管理员启动")
+		if !f.Settings().RunAsAdmin {
+			t.Fatal("RunAsAdmin not saved")
+		}
+		if len(r.confirms) != 1 || r.confirms[0] != "以管理员身份重新启动？" {
+			t.Fatalf("expected restart confirmation, got %q", r.confirms)
+		}
+		if relaunched != 1 {
+			t.Fatalf("expected relaunchElevated to run once, got %d", relaunched)
+		}
+		tt.Frame()
+		if !tt.HasText("以管理员身份重启") {
+			t.Fatalf("expected restart banner when RunAsAdmin=true and Elevated=false, got %q", tt.Texts())
+		}
+	})
+
+	t.Run("elevated Windows does not prompt restart or show banner", func(t *testing.T) {
+		f := fake.NewInstant()
+		e, r := testEnv(f)
+		e.Mac = false
+		e.Windows = true
+		e.Elevated = true
+		p := New(e)
+		p.SetRelaunchElevated(func() { t.Fatal("should not relaunch when already elevated") })
+		tt := ui.NewTester(p.View, 1000, 800)
+		clickRole(t, tt, ui.RoleSwitch, "默认使用管理员启动")
+		if !f.Settings().RunAsAdmin {
+			t.Fatal("RunAsAdmin not saved")
+		}
+		if len(r.confirms) != 0 {
+			t.Fatalf("unexpected confirms when already elevated: %q", r.confirms)
+		}
+		tt.Frame()
+		if tt.HasText("以管理员身份重启") {
+			t.Fatalf("unexpected restart banner when already elevated: %q", tt.Texts())
+		}
+	})
+
+	t.Run("non-Windows hides RunAsAdmin", func(t *testing.T) {
+		f := fake.NewInstant()
+		e, _ := testEnv(f)
+		e.Mac = true
+		e.Windows = false
+		p := New(e)
+		tt := ui.NewTester(p.View, 1000, 800)
+		if tt.HasText("默认使用管理员启动") {
+			t.Fatalf("RunAsAdmin should be hidden on non-Windows: %q", tt.Texts())
+		}
+	})
+}
+
 func TestPortErrorKeepsOldValue(t *testing.T) {
 	f := fake.NewInstant()
 	e, r := testEnv(f)

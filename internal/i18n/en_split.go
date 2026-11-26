@@ -18,6 +18,8 @@ func init() {
 		"无法结束旧的澜流后台服务: %w":          "Could not end the old background service of Lanflow: %w",
 		"旧的澜流后台服务没有退出":              "The old background service of Lanflow did not quit",
 		"另一个旧版本的澜流正在运行：请先退出它，再打开澜流": "An older version of Lanflow is running: quit it first, then open Lanflow again.",
+		"已取消管理员授权":               "Administrator authorization canceled",
+		"无法以管理员身份启动":              "Could not launch as administrator",
 	} {
 		en[k] = v
 	}

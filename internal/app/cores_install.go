@@ -79,7 +79,7 @@ func (s *Service) installVersion(channel, version string) error {
 	}
 	final := s.coreVersionPath(version)
 	archive := final + ".download"
-	fresh := final + ".new"
+	fresh := stagedCorePath(final)
 	defer os.Remove(archive)
 	defer os.Remove(fresh)
 	cleanup := func() {
@@ -155,6 +155,17 @@ func (s *Service) installVersion(channel, version string) error {
 	}
 	s.alog.Infof("core %s installed from %s (sha256 %s)", version, src, sum[:12])
 	return nil
+}
+
+// stagedCorePath returns the temporary path where an extracted binary is
+// verified before replacing final. Keeping the ".exe" suffix on Windows
+// ensures CreateProcess/exec.Command executes it directly instead of failing
+// with ERROR_BAD_EXE_FORMAT / Win32 error 193 on ".new".
+func stagedCorePath(final string) string {
+	if strings.HasSuffix(strings.ToLower(final), ".exe") {
+		return final[:len(final)-4] + ".new.exe"
+	}
+	return final + ".new"
 }
 
 // versionMatches compares what `mihomo -v` reported with the requested

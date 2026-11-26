@@ -177,7 +177,7 @@ type PatchResult struct {
 //   - the built-in Tailscale node's state directory (LogoutTailscale
 //     moves it).
 var patchLocked = []string{
-	"UI", "AgentGrants", "ConnHiddenColumns",
+	"UI", "AgentGrants", "ConnHiddenColumns", "RunAsAdmin",
 	"CorePath", "CoreVersion", "DownloadMirror", "CoreChannel", "CoreAutoInstall",
 	"WebDAV", "Feedback", "Sync",
 	"TailscaleBuiltin.StateGen",

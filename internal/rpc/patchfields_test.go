@@ -184,6 +184,7 @@ func TestApplyPatch(t *testing.T) {
 
 	// Locked for agents, wherever in the patch; not for the window's use.
 	for _, patch := range []string{
+		`{"RunAsAdmin":true}`,
 		`{"CorePath":"/tmp/x"}`, `{"coreversion":"v1"}`, `{"WebDAV":{"url":"https://x"}}`, `{"UI":{}}`, `{"AgentGrants":[]}`,
 		`{"Feedback":{"Endpoint":"https://x"}}`, `{"feedback":{"autoReport":true}}`, `{"DownloadMirror":"https://x/"}`,
 		`{"CoreChannel":"alpha"}`, `{"CoreAutoInstall":true}`, `{"Sync":{"mode":"folder","dir":"/x"}}`, `{"Mode":"global","sync":{"dir":"/z"}}`,

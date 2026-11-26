@@ -2,14 +2,17 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log"
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/egoist/mygo"
 	_ "github.com/egoist/mygo/locales/zh-Hans" // MyGo's own strings in Chinese
@@ -76,8 +79,15 @@ func main() {
 	// window, a client of the service. LANFLOW_SINGLE=1 (or the marker
 	// file <DataDir>/single-process) keeps the single process.
 	args := split.ParseArgs(os.Args[1:])
+	if args.WaitExit > 0 {
+		split.WaitExit(args.WaitExit, 30*time.Second)
+	}
+	dataDir := app.DefaultOptions("Lanflow").DataDir
+	if maybeElevate(args, dataDir) {
+		os.Exit(0)
+	}
 	switch {
-	case split.SingleProcess(app.DefaultOptions("Lanflow").DataDir):
+	case split.SingleProcess(dataDir):
 		runSingle(false)
 	case args.Service:
 		runService(args)
@@ -107,7 +117,11 @@ func runSingle(locked bool) {
 	i18n.SetLang(api.Settings().Language)
 	view.ApplyLanguage(api.Settings().Language)
 	view.ApplyAppearance(api.Settings().Appearance)
-	shell := view.New(api, view.Options{Mac: runtime.GOOS == "darwin"})
+	shell := view.New(api, view.Options{
+		Mac:      runtime.GOOS == "darwin",
+		Windows:  runtime.GOOS == "windows",
+		Elevated: isElevated(),
+	})
 	stopLocalAPI := startLocalAPI(api, agentPrompt(shell), singleHost{shell})
 	if p := os.Getenv("LANFLOW_PAGE"); p != "" && os.Getenv("LANFLOW_FAKE") == "1" {
 		// Development aid: open on a page, e.g. "subs" or "subs:import-url".
@@ -116,7 +130,27 @@ func runSingle(locked bool) {
 	}
 
 	var win *mygo.Window
+	var offAutostart func()
+	var relaunchElevating atomic.Bool
+	var signaled atomic.Bool
 	quitting := false
+	shell.SetRelaunchElevated(func() {
+		if !relaunchElevating.CompareAndSwap(false, true) {
+			return
+		}
+		go func() {
+			err := split.RunElevated(executable(), split.WaitExitFlag+strconv.Itoa(os.Getpid()), split.NoElevateFlag)
+			if err != nil {
+				relaunchElevating.Store(false)
+				if !errors.Is(err, split.ErrElevationCanceled) {
+					shell.Env().Toast(err.Error(), true)
+				}
+				return
+			}
+			signaled.Store(true)
+			mygo.App.Quit()
+		}()
+	})
 	showWindow := func() {
 		if win != nil {
 			shell.ShowWindow()
@@ -147,7 +181,6 @@ func runSingle(locked bool) {
 	// A termination signal (pkill, logout scripts, an installer replacing
 	// the app) must not wait on the quit confirmation nobody will answer:
 	// quit straight away; OnWillQuit still restores the system proxy and DNS.
-	var signaled atomic.Bool
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -174,6 +207,9 @@ func runSingle(locked bool) {
 		quitting = true
 	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		if offAutostart != nil {
+			offAutostart()
+		}
 		stopLocalAPI()
 		shell.Close()
 		api.Shutdown()
@@ -181,6 +217,14 @@ func runSingle(locked bool) {
 
 	mygo.App.WhenReady(func() {
 		settings := api.Settings()
+		exe := executable()
+		queueAutostart(exe, settings.OpenAtLogin, settings.RunAsAdmin)
+		offAutostart = api.OnChange(func(t app.Topic) {
+			if t == app.TopicSettings {
+				set := api.Settings()
+				queueAutostart(exe, set.OpenAtLogin, set.RunAsAdmin)
+			}
+		})
 		win = newMainWindow(shell, settings.SilentStart)
 		win.OnClose(func(e *mygo.CloseEvent) {
 			if quitting {

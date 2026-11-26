@@ -139,6 +139,10 @@ type Env struct {
 
 	// Mac is true on macOS (labels: 访达/菜单栏 vs 资源管理器/通知区域, ⌘ vs Ctrl).
 	Mac bool
+	// Windows is true on Windows (administrator launch & Task Scheduler autostart).
+	Windows bool
+	// Elevated is true when the current process runs elevated on Windows.
+	Elevated bool
 
 	// SetGlobalShortcut makes acc (a MyGo accelerator, "" = none) the
 	// system-wide shortcut that toggles the system proxy, replacing the

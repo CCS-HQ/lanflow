@@ -106,8 +106,9 @@ type Page struct {
 	fbk feedbackUI
 
 	// 应用更新 (update.go)
-	upd      Updater
-	relaunch func()
+	upd              Updater
+	relaunch         func()
+	relaunchElevated func()
 
 	// Settings saves run one at a time, in order (save): saveQ holds the
 	// ones not finished, oldest first, saveBusy says the first is running,
@@ -149,6 +150,10 @@ type dialogText struct {
 func New(e *env.Env) *Page {
 	return &Page{e: e, upd: mygoUpdater{}, relaunch: func() { mygo.App.Relaunch() }}
 }
+
+// SetRelaunchElevated sets the callback that restarts Lanflow with
+// administrator privileges on Windows.
+func (p *Page) SetRelaunchElevated(fn func()) { p.relaunchElevated = fn }
 
 // View draws the whole content area including the header.
 func (p *Page) View(c *ui.Context) {
@@ -395,7 +400,38 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 	// on the left, data, backup and about on the right.
 	env.Columns(c, 20, func() {
 		e.Kit.Section(c, i18n.T("常规"), "", func() {
-			p.switchRow(c, i18n.T("开机时启动"), "", s.OpenAtLogin, func(on bool) { s.OpenAtLogin = on; p.save(s, "", nil) })
+			loginDesc := ""
+			if e.Windows {
+				if s.RunAsAdmin {
+					loginDesc = i18n.T("通过任务计划程序以管理员权限开机启动，无需每次确认 UAC")
+				} else {
+					loginDesc = i18n.T("登录 Windows 时自动启动澜流后台服务")
+				}
+			}
+			p.switchRow(c, i18n.T("开机时启动"), loginDesc, s.OpenAtLogin, func(on bool) { s.OpenAtLogin = on; p.save(s, "", nil) })
+			if e.Windows {
+				adminDesc := i18n.T("启动时请求管理员权限，用于安装和使用 TUN 模式及管理内核")
+				if e.Elevated {
+					adminDesc = i18n.T("当前已以管理员身份运行；开启后每次启动均请求管理员权限")
+				}
+				p.switchRow(c, i18n.T("默认使用管理员启动"), adminDesc, s.RunAsAdmin, func(on bool) {
+					s.RunAsAdmin = on
+					p.saveThen(s, func(err error) {
+						if err != nil {
+							p.e.Toast(err.Error(), true)
+							return
+						}
+						if on && !e.Elevated && p.relaunchElevated != nil {
+							e.Confirm(i18n.T("以管理员身份重新启动？"), i18n.T("已开启「默认使用管理员启动」。是否立即以管理员身份重新启动澜流，使管理员权限和开机启动配置生效？"), i18n.T("立即重启"), false, p.relaunchElevated)
+						}
+					})
+				})
+				if s.RunAsAdmin && !e.Elevated && p.relaunchElevated != nil {
+					e.Kit.Banner(c, "info", i18n.T("当前以普通用户身份运行，以管理员身份重启后生效。"), func() {
+						ui.Button(c, i18n.T("以管理员身份重启")).OnClick(p.relaunchElevated)
+					})
+				}
+			}
 			p.switchRow(c, i18n.T("启动后自动开启系统代理"), "", s.AutoSystemProxy, func(on bool) { s.AutoSystemProxy = on; p.save(s, "", nil) })
 			where := i18n.T("通知区域")
 			if e.Mac {

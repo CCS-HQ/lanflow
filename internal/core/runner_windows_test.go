@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
@@ -46,7 +47,63 @@ func TestDialChecksControllerServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial to a tracked core: %v", err)
 	}
-	c.Close()
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifyControllerPipeOwnerRejectsNonPrivileged(t *testing.T) {
+	addr := fmt.Sprintf(`\\.\pipe\lanflow-ctrl-owner-test-%d`, time.Now().UnixNano())
+	l, err := winio.ListenPipe(addr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		if c, err := l.Accept(); err == nil {
+			defer c.Close()
+			var b [1]byte
+			_, _ = c.Read(b[:])
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := winio.DialPipeContext(ctx, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fc := c.(interface{ Fd() uintptr })
+	err = verifyPipeOwnerPrivileged(windows.Handle(fc.Fd()), addr)
+	// verifyPipeOwnerPrivileged only accepts pipes whose owner is LocalSystem or
+	// BUILTIN\Administrators; an elevated built-in Administrator (-500) token
+	// whose default TokenOwner is its user SID is also rejected.
+	if currentTokenOwnerPrivileged(t) {
+		if err != nil {
+			t.Fatalf("elevated pipe owner rejected: %v", err)
+		}
+	} else if err == nil {
+		t.Fatal("non-privileged pipe owner accepted")
+	}
+}
+
+func currentTokenOwnerPrivileged(t *testing.T) bool {
+	t.Helper()
+	tok := windows.GetCurrentProcessToken()
+	var n uint32
+	_ = windows.GetTokenInformation(tok, windows.TokenOwner, nil, 0, &n)
+	if n == 0 {
+		t.Fatal("GetTokenInformation(TokenOwner) returned length 0")
+	}
+	buf := make([]byte, n)
+	if err := windows.GetTokenInformation(tok, windows.TokenOwner, &buf[0], n, &n); err != nil {
+		t.Fatalf("GetTokenInformation(TokenOwner): %v", err)
+	}
+	type tokenOwner struct {
+		Owner *windows.SID
+	}
+	owner := (*tokenOwner)(unsafe.Pointer(&buf[0])).Owner
+	return owner != nil && (owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid))
 }
 
 func TestTrustWorkDir(t *testing.T) {

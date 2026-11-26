@@ -40,6 +40,14 @@ func (s *Shell) SetRelaunch(fn func()) {
 	}
 }
 
+// SetRelaunchElevated sets the callback used on Windows to relaunch Lanflow
+// with administrator privileges.
+func (s *Shell) SetRelaunchElevated(fn func()) {
+	if page, ok := s.pages[env.Settings].(*settings.Page); ok {
+		page.SetRelaunchElevated(fn)
+	}
+}
+
 // updateCheckInterval is how often the launch-time update check runs.
 const updateCheckInterval = 24 * time.Hour
 

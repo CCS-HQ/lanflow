@@ -60,7 +60,7 @@ func rc(label string, keywords ...string) searchRow {
 
 var searchSections = []searchSection{
 	// 常规
-	{tabGeneral, "常规", []searchRow{r("开机时启动", "login autostart"), r("启动后自动开启系统代理", "system proxy"), r("启动时不显示窗口", "silent tray"), r("关闭窗口时", "close tray"), r("外观", "dark light theme"), r("语言", "language english")}},
+	{tabGeneral, "常规", []searchRow{r("开机时启动", "login autostart"), rc("默认使用管理员启动", "admin administrator uac elevate windows"), r("启动后自动开启系统代理", "system proxy"), r("启动时不显示窗口", "silent tray"), r("关闭窗口时", "close tray"), r("外观", "dark light theme"), r("语言", "language english")}},
 	{tabGeneral, "功能", []searchRow{r("抓包（HTTPS 解密）", "capture mitm https")}},
 	{tabGeneral, "菜单栏显示", []searchRow{r("实时速度", "menubar speed"), r("流量图", "menubar graph"), r("当前节点", "menubar node"), r("代理模式", "menubar mode")}},
 	{tabGeneral, "全局快捷键", []searchRow{r("添加快捷键", "hotkey shortcut")}},

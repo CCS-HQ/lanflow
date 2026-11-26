@@ -54,6 +54,8 @@ func plist(exe string) []byte {
 `)
 }
 
+func applyElevated(exe string, on, _ bool) (bool, error) { return apply(exe, on) }
+
 func apply(exe string, on bool) (bool, error) {
 	path, err := plistPath()
 	if err != nil {

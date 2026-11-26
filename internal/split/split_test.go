@@ -310,9 +310,12 @@ func TestNotices(t *testing.T) {
 }
 
 func TestParseArgs(t *testing.T) {
-	a := ParseArgs([]string{"--service", "--login", "--open=feedback", "clash://install-config?url=x"})
-	if !a.Service || !a.Login || a.Open != "feedback" || a.Link != "clash://install-config?url=x" {
+	a := ParseArgs([]string{"--service", "--login", "--no-elevate", "--wait-exit=1234", "--open=feedback", "clash://install-config?url=x"})
+	if !a.Service || !a.Login || !a.NoElevate || a.WaitExit != 1234 || a.Open != "feedback" || a.Link != "clash://install-config?url=x" {
 		t.Fatalf("%+v", a)
+	}
+	if b := ParseArgs([]string{"--wait-exit=bad", "--wait-exit=0"}); b.WaitExit != 0 {
+		t.Fatalf("expected invalid/non-positive wait-exit to stay 0: %+v", b)
 	}
 	t.Setenv("LANFLOW_SINGLE", "")
 	dir := t.TempDir()
