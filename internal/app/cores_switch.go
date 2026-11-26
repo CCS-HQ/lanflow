@@ -20,8 +20,9 @@ import (
 // is registered with the TUN helper when one is installed), then the old
 // process is stopped and the new one started at once. The system proxy
 // keeps pointing at the same port throughout and is never touched, nor is
-// the DNS; applications only see a sub-second blip. Any failure puts the
-// previous core back and starts it again.
+// the DNS. Replacing a helper core after TUN was turned off also waits for
+// its ports to become reusable by the user process. Any start failure
+// puts the previous core back and starts it again.
 
 // UseCore implements API.UseCore.
 func (s *Service) UseCore(version string) (err error) {
@@ -134,8 +135,12 @@ func (s *Service) switchCore(target, desiredPath, version string) error {
 	if wasRunning {
 		s.stopStreams()
 		sctx, scancel := context.WithTimeout(ctx, 15*time.Second)
-		_ = s.d.mgr.Stop(sctx)
+		stopErr := s.d.mgr.Stop(sctx)
 		scancel()
+		if stopErr != nil {
+			return s.failStart(fmt.Errorf(i18n.T("停止内核失败：%v"), stopErr), model.CoreError)
+		}
+		s.noteCoreStopped()
 		s.mu.Lock()
 		s.state.st.Core = model.CoreStopped
 		s.mu.Unlock()
@@ -263,6 +268,9 @@ func (s *Service) relaunchLocked() error {
 	s.em.emit(TopicStatus)
 	if bin == "" {
 		return errors.New(coreMissingText(set.CorePath, core.ErrNotFound))
+	}
+	if err := s.waitStartPort(set, helperOK, model.CoreStopped); err != nil {
+		return s.failStart(err, model.CoreError)
 	}
 	return s.launchLocked(bin, set, helperOK, model.CoreStopped)
 }

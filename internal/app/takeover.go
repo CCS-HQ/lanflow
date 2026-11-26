@@ -67,6 +67,8 @@ func (s *Service) takeOver() bool {
 	sctx, scancel := context.WithTimeout(context.Background(), 15*time.Second)
 	if err := s.d.stray.Stop(sctx, s.workDir, stray.tun); err != nil {
 		s.alog.Errorf("stop the previous run's core: %v", err)
+	} else if stray.tun {
+		s.noteRootStopped()
 	}
 	scancel()
 	_, proxyOurs := s.leftoverProxy()
@@ -85,9 +87,13 @@ func (s *Service) takeOver() bool {
 
 // adoptedLocked records the adopted core as running and brings up what a
 // start brings up; opMu must be held.
-func (s *Service) adoptedLocked(set model.Settings, tun bool) {
+func (s *Service) adoptedLocked(set model.Settings, privileged bool) {
 	vctx, vcancel := s.svcCtx(ctrlTimeout)
 	version, _ := s.d.ctrl.Version(vctx)
+	tun := privileged && set.TUN
+	if cfg, err := s.d.ctrl.Configs(vctx); err == nil {
+		tun = cfg.Tun.Enable
+	}
 	vcancel()
 	s.mu.Lock()
 	st := &s.state.st
@@ -132,9 +138,7 @@ func (s *Service) stopStray() bool {
 	}
 	s.alog.Infof("stopped the previous run's core (tun=%v)", tun)
 	if tun {
-		s.mu.Lock()
-		s.state.rootStoppedAt = s.d.now()
-		s.mu.Unlock()
+		s.noteRootStopped()
 	}
 	return true
 }

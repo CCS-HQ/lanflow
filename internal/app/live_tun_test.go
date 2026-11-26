@@ -88,10 +88,11 @@ func TestLiveTUN(t *testing.T) {
 			t.Error("system DNS was not pointed at the TUN resolver")
 		}
 	}
-	if out, _ := exec.Command("pgrep", "-lf", "com.lanflow.mihomo").Output(); len(out) == 0 {
+	coreProcess, _ := exec.Command("pgrep", "-lf", "com.lanflow.mihomo").Output()
+	if len(coreProcess) == 0 {
 		t.Error("the core is not the helper-run root copy")
 	} else {
-		t.Logf("core process: %s", strings.TrimSpace(string(out)))
+		t.Logf("core process: %s", strings.TrimSpace(string(coreProcess)))
 	}
 
 	// A request with NO proxy configured must go through the TUN and show up
@@ -148,8 +149,13 @@ func TestLiveTUN(t *testing.T) {
 		}
 	}
 	checkProxy()
+	toggleStart := time.Now()
 	if err := s.SetTUN(false); err != nil {
 		t.Fatalf("SetTUN(false): %v", err)
+	}
+	t.Logf("TUN off without restarting: %v", time.Since(toggleStart))
+	if after, _ := exec.Command("pgrep", "-lf", "com.lanflow.mihomo").Output(); string(after) != string(coreProcess) {
+		t.Fatalf("TUN off replaced the helper core: before %s, after %s", coreProcess, after)
 	}
 	e2eWait(t, 30*time.Second, "TUN off", func() bool { st := s.Status(); return st.Core == model.CoreRunning && !st.TUN })
 	if s.Settings().MixedPort != port || s.Status().MixedPort != port {

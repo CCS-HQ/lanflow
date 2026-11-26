@@ -306,6 +306,7 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 	}
 	s.state.st = model.Status{Core: model.CoreStopped, Mode: set.Mode, MixedPort: set.MixedPort, AllowLAN: set.AllowLAN}
 	s.started = d.now()
+	s.state.rootStoppedAt = readRootStopped(o.DataDir, s.started)
 	s.openErrorLog()
 	if loadErr != nil {
 		s.state.notices = append(s.state.notices, Notice{Kind: "error", Title: i18n.T("设置文件有问题"), Detail: loadErr.Error()})
@@ -1043,6 +1044,8 @@ func (s *Service) Shutdown() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := s.d.mgr.Stop(ctx); err != nil {
 			s.alog.Errorf("quit: stop the core: %v", err)
+		} else if hadCore {
+			s.noteCoreStopped()
 		}
 		cancel()
 		if hadCore {

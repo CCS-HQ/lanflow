@@ -5,9 +5,48 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
+
+	"lanflow/internal/fsx"
+	"lanflow/internal/i18n"
+	"lanflow/internal/model"
 )
+
+const rootStoppedFile = "root-core-stopped"
+
+// The helper can keep running with TUN off. Remember its eventual exit
+// across app restarts too, before the next app starts an ordinary core.
+func (s *Service) noteRootStopped() {
+	now := s.d.now()
+	s.mu.Lock()
+	s.state.rootStoppedAt = now
+	s.mu.Unlock()
+	if err := writeRootStopped(s.opt.DataDir, now); err != nil {
+		s.alog.Warnf("remember the privileged core's exit: %v", err)
+	}
+}
+
+func writeRootStopped(dataDir string, when time.Time) error {
+	return fsx.WriteFile(filepath.Join(dataDir, rootStoppedFile), []byte(when.Format(time.RFC3339Nano)), 0o600)
+}
+
+func readRootStopped(dataDir string, now time.Time) time.Time {
+	path := filepath.Join(dataDir, rootStoppedFile)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}
+	}
+	when, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(b)))
+	if err != nil || when.After(now) || now.Sub(when) >= rootTimeWait {
+		_ = os.Remove(path)
+		return time.Time{}
+	}
+	return when
+}
 
 var errPortListening = errors.New("proxy port has a listener")
 
@@ -82,4 +121,43 @@ func waitPortRelease(ctx context.Context, poll time.Duration, busy, listening fu
 		case <-tick.C:
 		}
 	}
+}
+
+// waitStartPort also covers a binary switch that reuses runtime.yaml.
+// opMu must be held.
+func (s *Service) waitStartPort(set model.Settings, helperOK bool, prev model.CoreState) error {
+	if prev != model.CoreRunning && s.d.portInUse(set.MixedPort, set.AllowLAN) {
+		// A core of ours the previous run left may hold it (takeover.go).
+		s.stopStray()
+		busy := s.d.portInUse(set.MixedPort, set.AllowLAN)
+		if busy && set.TUN && helperOK && runtime.GOOS == "darwin" {
+			// The probe runs as this user; a root core binds over the
+			// TIME_WAIT sockets that make it fail, so only a real listener
+			// is a conflict. (Should launchLocked fall back to a plain
+			// proxy because another TUN runs, the core logs the bind error.)
+			if s.d.portListening != nil && s.d.portListening(set.MixedPort) {
+				return s.portTaken(set.MixedPort)
+			}
+		} else if busy {
+			if s.d.waitPortFree == nil {
+				return s.portTaken(set.MixedPort)
+			}
+			s.mu.Lock()
+			timeout := portWaitTimeout(s.d.now(), s.state.rootStoppedAt)
+			s.mu.Unlock()
+			s.alog.Infof("waiting up to %v for proxy port %d to become reusable", timeout.Round(time.Second), set.MixedPort)
+			if timeout > portWaitShort {
+				s.notify(Notice{Kind: "toast", Title: i18n.T("正在等待系统释放代理端口"),
+					Detail: i18n.Tf("TUN 模式下的连接刚关闭，系统要再占用端口 %d 最多约 %d 秒。", set.MixedPort, int(timeout.Round(time.Second)/time.Second))})
+			}
+			err := s.d.waitPortFree(s.rootCtx, set.MixedPort, set.AllowLAN, timeout)
+			if errors.Is(err, errPortListening) {
+				return s.portTaken(set.MixedPort)
+			}
+			if err != nil {
+				return fmt.Errorf(i18n.T("等待代理端口 %d 释放失败：%v。请稍后重试。"), set.MixedPort, err)
+			}
+		}
+	}
+	return nil
 }

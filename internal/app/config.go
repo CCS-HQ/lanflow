@@ -17,7 +17,8 @@ import (
 // SaveSettings persists s and applies what changed. Each change takes the
 // cheapest path that applies it:
 //
-//   - restart (applySettingsRestart): the core binary or TUN changed;
+//   - restart: the core binary changed, or TUN needs a privileged runner;
+//   - TUN switch: reload an existing helper core without releasing its ports;
 //   - reload (reloadLocked): the composed config changed in a way PATCH
 //     /configs cannot apply (needsReload, aTrust coexistence, advanced);
 //   - hot patch (applySettingsHot): mode, log level, LAN, ports, sniffing.
@@ -124,13 +125,15 @@ func (s *Service) saveSettingsWith(edit func(cur model.Settings) model.Settings,
 		s.syncDNS()
 	}
 
-	needRestart := (in.CorePath != old.CorePath || in.TUN != old.TUN) && s.running()
+	needRestart := in.CorePath != old.CorePath && s.running()
 	needReload := needsReload(old, in) || coexistChanged || advancedNeedsReload(old.Advanced, in.Advanced) ||
 		(in.AllowLAN != old.AllowLAN && s.subscriptionListens(in.DNS.TakeOver))
 	var err error
 	switch {
 	case needRestart:
 		err = s.restartLocked()
+	case in.TUN != old.TUN:
+		err = s.applyTUNLocked()
 	case needReload:
 		err = s.reloadLocked()
 	default:

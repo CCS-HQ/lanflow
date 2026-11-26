@@ -767,7 +767,7 @@ func TestTUNRequiresHelperAndSwitchesRunner(t *testing.T) {
 	h.mgr.mu.Lock()
 	r = h.mgr.runner.(namedRunner).name
 	h.mgr.mu.Unlock()
-	if r != "exec" || h.s.Status().TUN {
+	if r != "helper" || h.s.Status().TUN {
 		t.Fatalf("runner = %s after TUN off", r)
 	}
 }
