@@ -103,7 +103,7 @@ GitHub Actions（`.github/workflows/release.yml`）随后：
 ```json
 "updates": {
   "publicKey": "<ed25519 公钥>",
-  "github": "Owlbay/lanflow"
+  "github": "CCS-HQ/lanflow"
 }
 ```
 

@@ -6,7 +6,7 @@
 
 ## 安装
 
-从 [最新 Release](https://github.com/Owlbay/lanflow/releases/latest) 下载：
+从 [最新 Release](https://github.com/CCS-HQ/lanflow/releases/latest) 下载：
 
 - **macOS**：Apple 芯片选 `lanflow-<版本>-arm64.dmg`，Intel 选 `-amd64.dmg`，把 Lanflow 拖到「应用程序」。安装包未经 Apple 签名公证，首次打开会被拦截：在「系统设置 › 隐私与安全性」里点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/Lanflow.app`。
 - **Windows**：运行 `lanflow-setup-<版本>-amd64.exe`。安装程序未签名，SmartScreen 提示时点「更多信息 › 仍要运行」。
@@ -25,7 +25,7 @@ Windows PowerShell 可用 `Get-FileHash .\lanflow-setup-<版本>-amd64.exe -Algo
 安装包由 GitHub Actions 构建并带有构建来源证明，可用 [GitHub CLI](https://cli.github.com/) 确认它出自本仓库的发布流程：
 
 ```sh
-gh attestation verify lanflow-<版本>-arm64.dmg --repo Owlbay/lanflow
+gh attestation verify lanflow-<版本>-arm64.dmg --repo CCS-HQ/lanflow
 ```
 
 ## 功能
