@@ -114,9 +114,20 @@ rules:
 		return ctx
 	}
 
-	conf, err := c.Configs(ctx())
-	if err != nil {
-		t.Fatal(err)
+	// The controller can answer before the config file is applied (it
+	// reports the defaults, mode rule, until then): wait for the file's
+	// mode before checking the rest.
+	var conf Configs
+	applied := time.Now().Add(10 * time.Second)
+	for {
+		conf, err = c.Configs(ctx())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if conf.Mode == "direct" || time.Now().After(applied) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	if conf.Mode != "direct" || conf.LogLevel != "silent" || conf.AllowLan {
 		t.Fatalf("Configs = %+v", conf)
