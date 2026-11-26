@@ -66,6 +66,8 @@ scripts/build-app.sh darwin arm64             # build/darwin-arm64/Lanflow.app �
 
 要用 `scripts/build-app.sh` 而不是直接 `go tool mygo build`：`prepare-resources.sh` 会把权限组件的版本和（macOS 上）它的 SHA-256 写到 `bin/<平台>/app-ldflags`，`build-app.sh` 通过 `MYGO_LDFLAGS` 把它们链接进应用，安装 TUN 权限组件前据此核对。直接构建出的应用没有这层校验，与发布版不一致。
 
+应用图标的源文件是 `scripts/icon/icon.svg`（菜单栏图标的三道波浪，见 `internal/view/trayart`，放大 45 倍放在天蓝到蓝的渐变圆角方块上）；改动后运行 `go run ./scripts/icon` 重新生成 MyGo 打包用的 `resources/icon.png`（1024×1024，各平台的 .icns / .ico 由它生成）。
+
 `prepare-resources.sh` 同时生成 `resources/<平台>/licenses/`（由 `scripts/collect-licenses.sh` 完成），随应用一起打包：Mihomo 的 GPL-3.0 许可证全文（`fetch-core.sh` 从 Mihomo 仓库的对应 tag 下载并校验）、指向该版本源代码的说明、地理数据库的来源与署名，以及编入程序的每个 Go 模块的许可证文件（从本机 Go module cache 复制）。清单见 [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)。
 
 没有设置 `MYGO_UPDATER_PRIVATE_KEY` 时，构建只产出应用和安装包，不产出更新包与更新清单（见下文「应用自动更新」）。

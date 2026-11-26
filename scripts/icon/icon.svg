@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- 澜流 Lanflow: the menu bar mark's three waves (internal/view/trayart),
+       45 times as large. The source of resources/icon.png: go run ./scripts/icon -->
+  <defs>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#sea)"/>
+  <g fill="none" stroke="#fff" stroke-width="63" stroke-linecap="round">
+    <path d="M260 368c85.5-67.5 166.5-67.5 252 0s166.5 67.5 252 0"/>
+    <path stroke-opacity=".8" d="M260 512c85.5-67.5 166.5-67.5 252 0s166.5 67.5 252 0"/>
+    <path stroke-opacity=".55" d="M260 656c85.5-67.5 166.5-67.5 252 0s166.5 67.5 252 0"/>
+  </g>
+</svg>
