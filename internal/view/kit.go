@@ -52,19 +52,19 @@ func (kit) Header(c *ui.Context, title, subtitle string, tools func()) {
 // separated by hairlines.
 func (kit) Section(c *ui.Context, title, note string, body func()) {
 	t := c.Theme()
-	sec := ui.Column(c).Gap(8).Shrink(0)
+	sec := ui.Column(c).Gap(6).Shrink(0)
 	lit := env.Reveal(sec, title) // a jump from the global search (env/reveal.go)
 	sec.Children(func() {
 		if title != "" || note != "" {
-			ui.Column(c).Gap(3).Padding(0, 4).Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Baseline).Padding(0, 4).Children(func() {
 				if title != "" {
-					tx := ui.Text(c, title).FontSize(14).FontWeight(600).SingleLine()
+					tx := ui.Text(c, title).FontSize(13).FontWeight(600).SingleLine().Shrink(0)
 					if lit {
 						tx.TextColor(t.Accent)
 					}
 				}
 				if note != "" {
-					ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).Shrink(1)
 				}
 			})
 		}
@@ -76,22 +76,22 @@ func (kit) Section(c *ui.Context, title, note string, body func()) {
 // children are separated by hairlines.
 func GroupBox(c *ui.Context) ui.Element {
 	t := c.Theme()
-	return ui.Column(c).Radius(12).Background(t.Surface).Border(1, t.Border.Alpha(0.65)).Clip().Dividers(1, t.Border.Alpha(0.65))
+	return ui.Column(c).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Dividers(1, t.Border)
 }
 
 // Row draws one settings-style row: label (+ muted description) on the
 // left, control on the right.
 func (kit) Row(c *ui.Context, label, desc string, control func()) {
 	t := c.Theme()
-	row := ui.Row(c).MinHeight(48).Padding(10, 16).Gap(16).AlignItems(ui.Center)
+	row := ui.Row(c).MinHeight(40).Padding(6, 12).Gap(12).AlignItems(ui.Center)
 	if env.Reveal(row, label) {
 		row.Background(t.Accent.Alpha(0.12))
 	}
 	row.Children(func() {
-		ui.Column(c).Gap(3).Shrink(1).Children(func() {
-			ui.Text(c, label).FontSize(13.5).FontWeight(500)
+		ui.Column(c).Gap(2).Shrink(1).Children(func() {
+			ui.Text(c, label).FontSize(13)
 			if desc != "" {
-				ui.Text(c, desc).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, desc).FontSize(11).TextColor(t.TextMuted)
 			}
 		})
 		ui.Spacer(c)
