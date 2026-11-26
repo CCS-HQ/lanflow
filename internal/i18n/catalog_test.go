@@ -65,6 +65,11 @@ var keyTables = map[string]string{
 	"internal/view/settings/atrust.go": "parse()",
 	// ATrustReferenceYAML returns T(atrustReference).
 	"internal/app/atrustcfg.go": "atrustReference",
+	// The global search (⌘K): group names and page titles looked up with
+	// T and Both, the actions' keys handed to job, which translates them,
+	// and the settings' search index (SearchIndex translates it).
+	"internal/view/palette.go":         "palGroupNames palItems() pageTitleKeys",
+	"internal/view/settings/search.go": "searchSections",
 	// The checks' names, which the 检测 page shows through T.
 	"internal/app/unlock.go": "unlockChecks",
 	// The chain notes, which app/chains.go shows through Tf.
@@ -205,7 +210,7 @@ func translated(file *ast.File) (viaT, counts map[*ast.BasicLit]bool) {
 			return true
 		}
 		switch pkg.Name + "." + sel.Sel.Name {
-		case "i18n.T", "i18n.Tf", "i18n.Error", "i18n.Has":
+		case "i18n.T", "i18n.Tf", "i18n.Error", "i18n.Has", "i18n.Both":
 			if lit := key(call.Args, 0); lit != nil {
 				viaT[lit] = true
 			}

@@ -257,6 +257,16 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	click(t, tt, i18n.T("取消"))
 	tt.Frame()
 
+	// The global search: empty, then matching every group.
+	s.OpenSearch()
+	c.frame("global search", tt)
+	for _, q := range []string{"dns", "a", "hong"} {
+		s.pal.query = q
+		c.frame("global search "+q, tt)
+	}
+	s.pal = palette{}
+	tt.Frame()
+
 	// Shell dialogs: quit confirmation, error detail, recovery.
 	s.AskQuit(func() {})
 	c.frame("quit confirmation", tt)

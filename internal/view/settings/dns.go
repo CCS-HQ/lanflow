@@ -197,7 +197,11 @@ func (p *Page) dnsTab(c *ui.Context, t *ui.Theme, s model.Settings) {
 
 // textRow is a multi-line list field.
 func (p *Page) textRow(c *ui.Context, t *ui.Theme, label, desc, key string, text *string, minLines int, ro bool) {
-	ui.Column(c).Gap(6).Padding(8, 12).Children(func() {
+	col := ui.Column(c).Gap(6).Padding(8, 12)
+	if env.Reveal(col, label) { // a jump from the global search
+		col.Background(t.Accent.Alpha(0.12))
+	}
+	col.Children(func() {
 		ui.Text(c, label)
 		if desc != "" {
 			ui.Text(c, desc).FontSize(11).TextColor(t.TextMuted)

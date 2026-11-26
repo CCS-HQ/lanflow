@@ -173,6 +173,9 @@ func (p *Page) saveHidden(hidden []string) {
 func (p *Page) View(c *ui.Context) {
 	e, t := p.e, c.Theme()
 	if a := e.Arg(env.Conns); a != "" {
+		if q, ok := env.TakeQuery(a); ok { // the global search
+			a = q
+		}
 		// The exit map opens the page filtered to one route (docs/exit-map.md §4).
 		p.query, p.tab, p.paused, p.view = a, 0, false, 0
 	}

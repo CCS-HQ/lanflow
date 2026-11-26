@@ -223,7 +223,11 @@ func (p *Page) View(c *ui.Context) {
 		return
 	}
 	if a := e.Arg(env.Capture); a != "" {
-		p.handleArg(a, st)
+		if q, ok := env.TakeQuery(a); ok { // the global search
+			p.query = q
+		} else {
+			p.handleArg(a, st)
+		}
 		st = e.API.CaptureStatus()
 	}
 	ui.Column(c).Fill().Children(func() {

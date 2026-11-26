@@ -160,9 +160,13 @@ func (p *Page) View(c *ui.Context) {
 	run := st.Core == model.CoreRunning
 	p.restore()
 	if arg := p.e.Arg(env.Proxies); arg != "" {
-		p.scrollTo = arg
+		if q, ok := env.TakeQuery(arg); ok { // the global search
+			p.query = q
+		} else {
+			p.scrollTo = arg
 		p.open[arg] = true
 		p.openInit[arg] = true
+		}
 	}
 	p.mu.Lock()
 	testingAll := p.testing

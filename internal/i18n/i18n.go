@@ -189,3 +189,17 @@ func Keys() []string {
 	}
 	return out
 }
+
+// Both returns the Chinese and the English text of key, space-separated,
+// so that a search matches it in either language whatever the language
+// shown (the global search, view/palette.go).
+func Both(key string) string {
+	zh := key
+	if i := strings.IndexByte(key, '|'); i >= 0 {
+		zh = key[:i]
+	}
+	if s, ok := en[key]; ok && s != zh {
+		return zh + " " + s
+	}
+	return zh
+}

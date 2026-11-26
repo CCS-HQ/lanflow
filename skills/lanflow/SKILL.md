@@ -44,12 +44,13 @@ Say what you are about to do before calling one of these, so the confirmation in
 - `route_domain` — make a domain go through a node, group, DIRECT or REJECT: rule test → rule → diff → apply → verify. Supports `dry_run`.
 - `diagnose_site` — why one site does not load: rule, chain, DNS answer, exit node delay, findings.
 - `switch_node` — select a node in a group (or the fastest after testing) and measure it.
+- `search` — find where something lives before reading or changing it: one query over the tools, proxy groups and nodes, subscriptions, custom and runtime rules, rule providers, overrides and every settings field by its path (the names `patch_settings` takes). Each hit names the tool to use next. Use it when you do not know a node's exact name, which setting controls something, or which tool does a job.
 
 Sensitive reads (`connections`, `logs`, `subscription_raw`, `runtime_config`) need the user's approval in Lanflow for this session; ask only when the task really needs them.
 
 ## Standard flow
 
-1. **Look**: `status` (and `diagnose` when something is wrong). Read names exactly as returned — node and group names are often Chinese with emoji.
+1. **Look**: `status` (and `diagnose` when something is wrong); `search` when you need a name or a setting's path. Read names exactly as returned — node and group names are often Chinese with emoji.
 2. **Preview**: use `dry_run` / `dryRun` (or `--dry-run`) and show the user the diff for any settings or rule change that is not a plain node switch.
 3. **Apply**: make the smallest change that does the job. The first write from you makes Lanflow ask the user (just this time / always / deny), and each session's first high-impact change asks again (allow / deny; through `lanflow ctl` the user may also allow those for good); the request shows your process, and the audit log records it. If denied, stop and tell the user — do not retry or look for another route (switching between the MCP tools and `lanflow ctl` does not change the answer).
 4. **Verify**: `test_rule` for routing, `test_proxy_delay` / `switch_node` for nodes, `diagnose_site` or `test_sites` for reachability. Report what changed and that `undo` reverts it.

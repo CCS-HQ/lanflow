@@ -66,6 +66,7 @@ func compositeTools() []tool {
 				"node":  str("Member to select; empty = the fastest after a delay test"),
 			})},
 			composite: switchNode},
+		searchTool(), // search.go
 	}
 }
 
