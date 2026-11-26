@@ -232,19 +232,12 @@ func subChoices(subs []model.Subscription, self string) []subChoice {
 // fullSpec builds the spec the form describes. Source cards left empty
 // are not part of it.
 func (d *aggEditor) fullSpec(subs []model.Subscription) model.AggregateSpec {
-	spec, _ := d.specOf(subs)
-	return spec
-}
-
-// specOf is fullSpec, with the index of the card of each of its sources.
-func (d *aggEditor) specOf(subs []model.Subscription) (model.AggregateSpec, []int) {
 	labels := subChoices(subs, d.id)
 	spec := d.spec.Clone()
 	spec.Version = model.AggregateSpecVersion
 	spec.Include, spec.Exclude = strings.TrimSpace(spec.Include), strings.TrimSpace(spec.Exclude)
 	spec.Sources = nil
-	var cards []int
-	for i, f := range d.sources {
+	for _, f := range d.sources {
 		src := model.AggregateSource{ID: f.id, Kind: aggKinds[f.kind], Name: strings.TrimSpace(f.name), Prefix: f.prefix, Disabled: !f.enabled}
 		switch src.Kind {
 		case model.AggSourceURL:
@@ -264,7 +257,6 @@ func (d *aggEditor) specOf(subs []model.Subscription) (model.AggregateSpec, []in
 			continue
 		}
 		spec.Sources = append(spec.Sources, src)
-		cards = append(cards, i)
 	}
 	var renames []model.RenameRule
 	for _, r := range spec.Renames {
@@ -277,7 +269,24 @@ func (d *aggEditor) specOf(subs []model.Subscription) (model.AggregateSpec, []in
 	if d.listenOn {
 		spec.ListenBase, _ = strconv.Atoi(strings.TrimSpace(d.listen))
 	}
-	return spec, cards
+	return spec
+}
+
+// nameSources gives the cards without one an ID, so a preview's reports
+// find their card and the spec stays the same after a preview.
+func (d *aggEditor) nameSources() {
+	used := map[string]bool{}
+	for _, f := range d.sources {
+		used[f.id] = true
+	}
+	for i := range d.sources {
+		for d.sources[i].id == "" {
+			if id := fmt.Sprintf("n%d", d.nextUID); !used[id] {
+				d.sources[i].id, used[id] = id, true
+			}
+			d.nextUID++
+		}
+	}
 }
 
 // record is the subscription record the form describes (download
@@ -591,7 +600,8 @@ func aggSourceDesc(src model.AggregateSource, subs []model.Subscription) string 
 // previewAggregate builds the profile in the background.
 func (p *Page) previewAggregate(subs []model.Subscription) {
 	d := &p.agg
-	spec, cards := d.specOf(subs)
+	d.nameSources()
+	spec := d.fullSpec(subs)
 	if msg := d.check(spec); msg != "" {
 		d.err = msg
 		return
@@ -615,12 +625,6 @@ func (p *Page) previewAggregate(subs []model.Subscription) {
 			p.agg.previewErr = err.Error()
 			if len(pv.Sources) == 0 {
 				p.agg.preview = nil
-			}
-		}
-		// Source IDs the service gave are kept, so the reports match the cards.
-		for j, r := range pv.Sources {
-			if j < len(cards) && cards[j] < len(p.agg.sources) && p.agg.sources[cards[j]].id == "" {
-				p.agg.sources[cards[j]].id = r.ID
 			}
 		}
 	})

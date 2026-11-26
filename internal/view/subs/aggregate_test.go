@@ -89,6 +89,11 @@ func TestAggregateEditorCreatePreviewSave(t *testing.T) {
 	if !tt.HasText("A · 香港 01") || !tt.HasText("🚀 节点选择") || !tt.HasText("✓ 5 节点") {
 		t.Fatalf("preview: %q", tt.Texts())
 	}
+	// Nothing changed since: no stale note.
+	tt.Frame()
+	if p.agg.previewStale(nil) || tt.HasText("设置改过了，预览可能已过时。") {
+		t.Fatalf("stale right after the preview: %+v / %+v", p.agg.previewOf.Sources, p.agg.fullSpec(nil).Sources)
+	}
 	if err := tt.Click("YAML"); err != nil {
 		t.Fatal(err)
 	}
