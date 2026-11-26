@@ -105,8 +105,8 @@ func TestLiveAggregate(t *testing.T) {
 	}
 	mod := func(id string) string { return profile.AggModule(id).Name() }
 	sel := mod(profile.AggModSelect)
-	e2eWait(t, 30*time.Second, "aggregate groups loaded", func() bool { return groupNow(s, sel) != "" && groupNow(s, mod("hk")) != "" })
-	for _, g := range []string{mod("auto"), mod("google"), mod("youtube"), mod("final"), mod("us"), mod("sg"), mod("jp")} {
+	e2eWait(t, 30*time.Second, "aggregate groups loaded", func() bool { return groupNow(s, sel) != "" && groupNow(s, mod("github")) != "" })
+	for _, g := range []string{mod("auto"), mod("google"), mod("youtube"), mod("final"), mod("telegram"), mod("cn")} {
 		if groupNow(s, g) == "" {
 			t.Errorf("group %s missing from the running core", g)
 		}

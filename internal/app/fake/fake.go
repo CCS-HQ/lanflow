@@ -48,6 +48,8 @@ type Fake struct {
 	chains             []model.ProxyChain
 	aggs               map[string]model.AggregateSpec // aggregate subscriptions' specs (aggregate.go)
 	aggTpls            []model.AggregateTemplate      // aggregate templates of the user's own
+	aggYAML            map[string][]byte              // the profile each aggregate subscription generated
+	pxSample           *model.ProxySnapshot           // the sample proxies, while an aggregate one is in use
 	provs              []model.RuleProvider
 	pprovs             []model.ProxyProvider
 	set                model.Settings
@@ -994,6 +996,7 @@ func (f *Fake) UseSubscription(id string) error {
 			return fmt.Errorf(i18n.T("「%s」的配置未通过校验"), s.Name)
 		}
 		f.setCurrent(id)
+		f.showAggProxies(id)
 		return nil
 	}, app.TopicSubs, app.TopicProxies, app.TopicRules, app.TopicNotice)
 }
@@ -1023,6 +1026,12 @@ func (f *Fake) DeleteSubscription(id string) error {
 	}, app.TopicSubs)
 }
 func (f *Fake) SubscriptionRaw(id string) (string, error) {
+	f.mu.Lock()
+	data, ok := f.aggYAML[id]
+	f.mu.Unlock()
+	if ok {
+		return string(data), nil
+	}
 	return "mixed-port: 7890\nproxies:\n  - name: 东京 03\n    type: trojan\n    server: jp3.example.com\n    port: 443\n", nil
 }
 

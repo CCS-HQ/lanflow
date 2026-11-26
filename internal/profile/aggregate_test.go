@@ -62,6 +62,11 @@ func TestBuildAggregateMergesSources(t *testing.T) {
 		model.AggregateSource{ID: "a", Kind: model.AggSourceURL, URL: "https://a.example.com/sub", Prefix: "A·"},
 		model.AggregateSource{ID: "b", Kind: model.AggSourceLinks, Links: "x"},
 	)
+	// 完整版, and two region groups of the user's own (filtered).
+	spec.Template, spec.Groups = "full", AggTemplate("full").Groups()
+	spec.Groups = append(spec.Groups,
+		model.AggregateGroup{ID: "c-hk", Custom: true, Name: "🇭🇰 香港节点", Type: model.AggTypeURLTest, Filter: "香港"},
+		model.AggregateGroup{ID: "c-kr", Custom: true, Name: "🇰🇷 韩国节点", Type: model.AggTypeURLTest, Filter: "韩国"})
 	b64 := base64.StdEncoding.EncodeToString([]byte(aggLinks()))
 	pv, data, err := BuildAggregate(spec, aggInputs(spec, aggYAMLSource, b64), nil)
 	if err != nil {
@@ -113,28 +118,49 @@ func TestBuildAggregateMergesSources(t *testing.T) {
 	if got := groups["🇭🇰 香港节点"]; len(got) != 1 || got[0] != "A·🇭🇰 香港 01" {
 		t.Fatalf("香港节点 = %q", got)
 	}
-	if got := groups["🇺🇸 美国节点"]; len(got) != 1 || got[0] != "US 洛杉矶" {
-		t.Fatalf("美国节点 = %q", got)
-	}
 	if _, ok := groups["🇰🇷 韩国节点"]; ok {
-		t.Fatal("a region that was not chosen was generated")
+		t.Fatal("a filtered group without a node was generated")
 	}
-	if got := groups["🍏 苹果服务"]; got[0] != "DIRECT" {
-		t.Fatalf("苹果服务 = %q, want DIRECT first", got)
-	}
-	if got := groups["🛑 广告拦截"]; got[0] != "REJECT" {
-		t.Fatalf("广告拦截 = %q", got)
-	}
-	if got := groups[sel]; got[0] != auto || got[len(got)-1] != "DIRECT" {
-		t.Fatalf("节点选择 = %q", got)
-	}
-	if doc.Rules[len(doc.Rules)-1] != "MATCH,"+final {
-		t.Fatalf("last rule = %q", doc.Rules[len(doc.Rules)-1])
-	}
-	for _, r := range []string{"GEOIP,CN,🔒 国内服务,no-resolve", "GEOIP,LAN,🏠 私有网络,no-resolve", "GEOSITE,youtube,📹 YouTube", "GEOSITE,geolocation-!cn,🌍 非中国", "IP-CIDR,91.108.4.0/22,📲 Telegram,no-resolve"} {
-		if !contains(doc.Rules, r) {
-			t.Fatalf("no rule %q in %q", r, doc.Rules)
+	// The members, as SubBoost writes them.
+	nodes := strings.Join(want, "|")
+	for name, wantM := range map[string]string{
+		sel:           auto + "|DIRECT|REJECT|" + nodes,
+		"🤖 AI 服务":    sel + "|" + auto + "|DIRECT|REJECT|" + nodes,
+		final:         sel + "|" + auto + "|DIRECT|REJECT|" + nodes,
+		"🍏 苹果服务":     sel + "|" + auto + "|DIRECT|REJECT|" + nodes,
+		"🛑 广告拦截":     "REJECT|DIRECT|" + sel,
+		"🔒 国内服务":     "DIRECT|REJECT|" + sel + "|" + auto + "|" + nodes,
+		auto:          nodes,
+	} {
+		if got := strings.Join(groups[name], "|"); got != wantM {
+			t.Errorf("%s = %q, want %q", name, got, wantM)
 		}
+	}
+	// The groups in SubBoost's order: the services, then 私有网络, 国内服务,
+	// 非中国, 漏网之鱼 (and the custom group after them).
+	if order[2] != "🛑 广告拦截" || order[3] != "🤖 AI 服务" || order[len(order)-2] != final || order[len(order)-3] != "🌍 非中国" {
+		t.Fatalf("group order = %q", order)
+	}
+	// The rules in SubBoost's order: Apple TV+ before Apple, the complete
+	// China list after 非中国, MATCH last.
+	at := func(rule string) int {
+		for i, r := range doc.Rules {
+			if r == rule {
+				return i
+			}
+		}
+		t.Fatalf("no rule %q in %q", rule, doc.Rules)
+		return -1
+	}
+	n := len(doc.Rules)
+	if doc.Rules[n-1] != "MATCH,"+final || doc.Rules[n-2] != "GEOSITE,cn,🔒 国内服务" || doc.Rules[n-3] != "GEOSITE,geolocation-!cn,🌍 非中国" {
+		t.Fatalf("last rules = %q", doc.Rules[n-3:])
+	}
+	if at("GEOSITE,apple-tvplus,📺 欧美流媒体") > at("GEOSITE,apple,🍏 苹果服务") || at("GEOSITE,openai,🤖 AI 服务") > at("GEOSITE,geolocation-cn,🔒 国内服务") {
+		t.Fatal("rules out of SubBoost's order")
+	}
+	for _, r := range []string{"GEOIP,CN,🔒 国内服务,no-resolve", "GEOIP,LAN,🏠 私有网络,no-resolve", "GEOSITE,youtube,📹 油管视频", "IP-CIDR,91.108.4.0/22,📲 电报消息,no-resolve"} {
+		at(r)
 	}
 	if len(pv.GroupViews) != len(doc.Groups) || len(pv.RuleViews) == 0 || pv.RuleSets == 0 {
 		t.Fatalf("views: %d groups, %d rules, %d sets", len(pv.GroupViews), len(pv.RuleViews), pv.RuleSets)
@@ -272,17 +298,26 @@ func TestValidateAggregateSpec(t *testing.T) {
 		if _, err := regexp.Compile(m.Filter); err != nil {
 			t.Errorf("module %s: filter: %v", m.ID, err)
 		}
-		for _, r := range m.Rules {
+		for _, r := range append(append([]string(nil), m.Rules...), m.Tail...) {
 			if !validRuleSetRef(r) {
 				t.Errorf("module %s: rule set %q not in the library", m.ID, r)
 			}
+			if seen["r:"+r] {
+				t.Errorf("module %s: rule set %q is another module's too", m.ID, r)
+			}
+			seen["r:"+r] = true
 		}
 	}
+	// The templates' sizes, as the quick mode shows them.
+	sizes := map[string][2]int{"lite": {7, 6}, "standard": {14, 21}, "full": {33, 91}}
 	for _, tp := range AggregateTemplates {
 		for _, id := range tp.Modules {
 			if AggModule(id) == nil {
 				t.Errorf("template %s: unknown module %s", tp.ID, id)
 			}
+		}
+		if got := [2]int{len(tp.Groups()), tp.RuleSets()}; got != sizes[tp.ID] {
+			t.Errorf("template %s: %d groups, %d rule sets", tp.ID, got[0], got[1])
 		}
 	}
 }

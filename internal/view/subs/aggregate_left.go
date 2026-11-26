@@ -212,11 +212,12 @@ func (p *Page) aggSourceBody(c *ui.Context, f *aggSrcForm, subLabels []string, m
 	case model.AggSourceURL:
 		ui.TextInput(c.Key("url"), &f.url).Placeholder("https://example.com/sub?token=xxx").Label(i18n.T("订阅链接")).FillWidth()
 	case model.AggSourceYAML:
-		ui.TextArea(c.Key("yaml"), &f.yaml).Font("monospace").FontSize(12).Lines(minL, maxL).
+		ui.TextArea(c.Key("yaml"), &f.yaml).Font("monospace").FontSize(12).Lines(max(minL, 6), max(maxL, 6)).
 			Placeholder("proxies:\n  - name: " + i18n.T("节点名称") + "\n    type: vmess\n    ...").Label(i18n.T("YAML 配置"))
 	case model.AggSourceLinks:
-		ui.TextArea(c.Key("links"), &f.links).Font("monospace").FontSize(12).Lines(minL, maxL).
-			Placeholder("ss://...\nvmess://...\nvless://...\ntrojan://...\nhysteria2://... / tuic://... / anytls://...\n- {name: " + i18n.T("节点名称") + ", type: ss, server: 1.2.3.4, port: 8388, cipher: aes-128-gcm, password: ...}").Label(i18n.T("节点链接"))
+		// Tall enough for the example of every scheme.
+		ui.TextArea(c.Key("links"), &f.links).Font("monospace").FontSize(12).Lines(max(minL, 10), max(maxL, 10)).
+			Placeholder("ss://...\nssr://...\nvmess://...\nvless://...\ntrojan://...\nanytls://...\nhysteria2://... / hy2://...\ntuic://...\n(socks5://... / http://...)").Label(i18n.T("节点链接"))
 		ui.Text(c, i18n.T("每行一条分享链接，也可以粘贴 Clash YAML 格式的节点（单个、列表或带 proxies 的配置），两种可以混在一起。")).FontSize(11).TextColor(t.TextMuted)
 	case model.AggSourceSub:
 		if len(subLabels) == 0 {
@@ -545,7 +546,7 @@ func (p *Page) aggModuleRow(c *ui.Context, m profile.AggregateModule) {
 				}
 			})
 			meta := i18n.T(m.Desc) + " · " + typeLabel(profile.AggGroupType(g))
-			if n := len(m.Rules); n > 0 {
+			if n := len(profile.AggGroupRules(g)); n > 0 {
 				meta += " · " + i18n.Tf("%d 规则集", n)
 			}
 			ui.Text(c, meta).FontSize(11.5).TextColor(t.TextMuted).SingleLine()

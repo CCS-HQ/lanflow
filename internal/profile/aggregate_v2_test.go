@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -54,9 +55,12 @@ func TestUpgradeAggregateSpecV1(t *testing.T) {
 	for _, g := range got.Groups {
 		ids = append(ids, g.ID)
 	}
-	want := "select|auto|private|cn|final|hk|jp|twitter|meta|steam|games"
+	want := "select|auto|region-hk|region-jp|twitter|meta|steam|pcgames|private|cn|final"
 	if strings.Join(ids, "|") != want || got.Version != model.AggregateSpecVersion || got.Regions != nil || got.AutoGroup {
 		t.Fatalf("upgraded = %q %+v", ids, got)
+	}
+	if hk := got.Groups[2]; !hk.Custom || hk.Name != "🇭🇰 香港节点" || hk.Type != model.AggTypeURLTest || hk.Filter == "" {
+		t.Fatalf("region group = %+v", hk)
 	}
 	if again := UpgradeAggregateSpec(got); len(again.Groups) != len(got.Groups) {
 		t.Fatal("upgrading twice changed the spec")
@@ -69,11 +73,12 @@ func TestBuildAggregateRemoteRules(t *testing.T) {
 		Groups:     AggTemplate("lite").Groups(),
 		RuleSource: model.AggRulesRemote, RuleBaseURL: "https://rules.example.com/geo/",
 	})
-	p := doc.Providers["geoip-private"]
+	// Named as SubBoost names them.
+	p := doc.Providers["private-ip"]
 	if p == nil || p["url"] != "https://rules.example.com/geo/geoip/private.mrs" || p["behavior"] != "ipcidr" || p["format"] != "mrs" {
 		t.Fatalf("providers = %v", doc.Providers)
 	}
-	if !contains(doc.Rules, "RULE-SET,geoip-cn,🔒 国内服务,no-resolve") || !contains(doc.Rules, "RULE-SET,geosite-geolocation-!cn,🌍 非中国") {
+	if !contains(doc.Rules, "RULE-SET,cn-ip,🔒 国内服务,no-resolve") || !contains(doc.Rules, "RULE-SET,geolocation-!cn,🌍 非中国") || !contains(doc.Rules, "RULE-SET,cn,🔒 国内服务") {
 		t.Fatalf("rules = %q", doc.Rules)
 	}
 	if pv.RuleSets != len(doc.Providers) || len(pv.Warnings) != 0 {
@@ -254,5 +259,79 @@ func TestAggregateLinksAcceptYAML(t *testing.T) {
 		if r := pv.Sources[0]; r.Kept != tc.kept || r.Skipped != tc.skiped {
 			t.Fatalf("%s: report %+v", tc.name, r)
 		}
+	}
+}
+
+func TestAggregateFullTemplateLoads(t *testing.T) {
+	t.Parallel()
+	for _, src := range []string{model.AggRulesGeo, model.AggRulesRemote} {
+		spec := aggSpec(model.AggregateSource{ID: "a", Kind: model.AggSourceLinks, Links: "x"})
+		spec.Template, spec.Groups, spec.RuleSource = "full", AggTemplate("full").Groups(), src
+		_, data, err := BuildAggregate(spec, aggInputs(spec, aggLinks()), nil)
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		checkAggregateWithCore(t, data)
+	}
+}
+
+func TestAggregateSSRLinks(t *testing.T) {
+	t.Parallel()
+	b := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	ssr := "ssr://" + b("1.2.3.4:8388:auth_aes128_md5:aes-256-cfb:tls1.2_ticket_auth:"+b("pw")+
+		"/?obfsparam="+b("cdn.example.com")+"&protoparam="+b("1:abc")+"&remarks="+b("香港 SSR")+"&group="+b("g"))
+	v6 := "ssr://" + b("2001:db8::1:443:origin:aes-128-ctr:plain:"+b("p2"))
+	spec := aggSpec(model.AggregateSource{ID: "a", Kind: model.AggSourceLinks, Links: "x"})
+	pv, data, err := BuildAggregate(spec, aggInputs(spec, ssr+"\n"+v6+"\nssr://broken"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := pv.Sources[0]; r.Kept != 2 || r.Skipped != 1 {
+		t.Fatalf("report %+v", r)
+	}
+	var doc struct {
+		Proxies []map[string]any `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	p := doc.Proxies[0]
+	if p["name"] != "香港 SSR" || p["type"] != "ssr" || p["server"] != "1.2.3.4" || p["port"] != 8388 || p["password"] != "pw" ||
+		p["cipher"] != "aes-256-cfb" || p["obfs"] != "tls1.2_ticket_auth" || p["protocol"] != "auth_aes128_md5" ||
+		p["obfs-param"] != "cdn.example.com" || p["protocol-param"] != "1:abc" {
+		t.Fatalf("ssr node = %v", p)
+	}
+	if q := doc.Proxies[1]; q["server"] != "2001:db8::1" || q["port"] != 443 || q["name"] != "[2001:db8::1]:443" {
+		t.Fatalf("ipv6 ssr node = %v", q)
+	}
+	checkAggregateWithCore(t, data)
+}
+
+func TestUpgradeAggregateSpecOldModules(t *testing.T) {
+	t.Parallel()
+	old := model.AggregateSpec{Version: model.AggregateSpecVersion, Template: "standard",
+		Groups: []model.AggregateGroup{{ID: "select"}, {ID: "hk", Name: "香港"}, {ID: "spotify"}, {ID: "streaming"}, {ID: "speedtest"}, {ID: "final"}},
+		Rules: []model.AggregateRule{
+			{Type: model.AggRuleDomain, Value: "a.example.com", Target: "hk"},
+			{Type: model.AggRuleDomain, Value: "b.example.com", Target: "spotify"},
+			{Type: model.AggRuleDomain, Value: "c.example.com", Target: "speedtest"},
+		}}
+	got := UpgradeAggregateSpec(old)
+	var ids []string
+	for _, g := range got.Groups {
+		ids = append(ids, g.ID)
+	}
+	if strings.Join(ids, "|") != "select|region-hk|western|final" || got.Groups[1].Name != "香港" || got.Template != "" {
+		t.Fatalf("groups = %q %+v", ids, got.Groups)
+	}
+	if got.Rules[0].Target != "region-hk" || got.Rules[1].Target != "western" || got.Rules[2].Target != AggModSelect {
+		t.Fatalf("rules = %+v", got.Rules)
+	}
+	if err := ValidateAggregateSpec(func() model.AggregateSpec {
+		s := got
+		s.Sources = []model.AggregateSource{{ID: "a", Kind: model.AggSourceLinks, Links: "ss://x"}}
+		return s
+	}(), nil); err != nil {
+		t.Fatal(err)
 	}
 }
