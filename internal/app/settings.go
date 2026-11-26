@@ -47,6 +47,9 @@ func defaultSettings() model.Settings {
 
 		DelayURL:       defaultDelayURL,
 		DelayTimeoutMs: int(defaultDelayTimeout / time.Millisecond),
+		// unified-delay on: without it Mihomo's delay counts the TCP, proxy
+		// and TLS handshakes too, about twice what other Clash clients show.
+		Advanced: model.AdvancedSettings{UnifiedDelay: true},
 
 		DNS: model.DNSSettings{
 			EnhancedMode:          "fake-ip",

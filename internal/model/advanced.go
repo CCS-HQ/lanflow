@@ -47,7 +47,7 @@ type AdvancedSettings struct {
 
 	// ---- core behaviour ----
 	IPv6              bool   `json:"ipv6,omitempty"`              // `ipv6`: let the core resolve and connect over IPv6
-	UnifiedDelay      bool   `json:"unifiedDelay,omitempty"`      // `unified-delay`
+	UnifiedDelay      bool   `json:"unifiedDelay"`                // `unified-delay`; on by default, written even when false so turning it off sticks
 	TCPConcurrent     bool   `json:"tcpConcurrent,omitempty"`     // `tcp-concurrent`
 	FindProcessMode   string `json:"findProcessMode,omitempty"`   // `find-process-mode`: "" (core default) / off / strict / always
 	KeepAliveInterval int    `json:"keepAliveInterval,omitempty"` // `keep-alive-interval`, seconds
