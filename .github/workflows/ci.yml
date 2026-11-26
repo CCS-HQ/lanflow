@@ -54,9 +54,9 @@ jobs:
           path: |
             ~/.cache/staticcheck
             ~/.cache/lanflow-ci-tools
-          key: lint-tools-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-sc0.8.2-gv1.9.0-${{ hashFiles('go.sum') }}
+          key: lint-tools-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-sc0.8.2-gv1.10.0-${{ hashFiles('go.sum') }}
           restore-keys: |
-            lint-tools-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-sc0.8.2-gv1.9.0-
+            lint-tools-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-sc0.8.2-gv1.10.0-
 
       # The release workflow refuses a tag whose helper changed without a
       # cmd/lanflow-helper/VERSION bump (scripts/check-helper-version.sh); the
@@ -125,7 +125,7 @@ jobs:
       - name: govulncheck
         run: |
           TOOLS_BIN="$HOME/.cache/lanflow-ci-tools"
-          [ -x "$TOOLS_BIN/govulncheck" ] || GOBIN="$TOOLS_BIN" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          [ -x "$TOOLS_BIN/govulncheck" ] || GOBIN="$TOOLS_BIN" go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
           status=0
           for target in darwin/arm64 windows/amd64; do
             echo "::group::govulncheck ${target}"
