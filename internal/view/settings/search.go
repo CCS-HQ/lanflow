@@ -67,7 +67,7 @@ var searchSections = []searchSection{
 	{tabGeneral, "数据", []searchRow{r("配置文件夹", "config folder directory"), r("导出 / 导入设置", "export import lanflow.yaml"), r("诊断信息", "diagnostics zip"), r("缓存", "cache")}},
 	{tabGeneral, "配置同步", []searchRow{r("同步位置", "icloud sync"), rc("同步文件", "lanflow.yaml sync"), rc("用口令加密链接", "passphrase encrypt"), rc("同步口令", "passphrase")}},
 	{tabGeneral, "备份与同步", []searchRow{r("WebDAV 网盘", "webdav"), rc("密码", "webdav password"), r("备份", "backup"), rc("保留份数", "backup keep"), rc("自动备份", "backup auto")}},
-	{tabGeneral, "关于", []searchRow{r("应用更新", "update version"), rc("自动检查更新", "update"), r("反馈问题", "feedback bug report"), r("反馈上报", "feedback"), r("上报地址", "feedback url"), rc("访问令牌", "feedback token"), rc("出错时自动上报", "feedback crash")}},
+	{tabGeneral, "关于", []searchRow{r("应用更新", "update version"), rc("自动检查更新", "update"), r("在 GitHub 上点 Star", "github star repo"), r("反馈问题", "feedback bug report"), r("反馈上报", "feedback"), r("上报地址", "feedback url"), rc("访问令牌", "feedback token"), rc("出错时自动上报", "feedback crash")}},
 	// 代理
 	{tabProxy, "代理", []searchRow{r("代理端口", "mixed-port port http socks"), r("允许局域网连接", "allow-lan lan"), r("不走代理的地址", "bypass skip-proxy"), r("实测节点出口位置", "exit probe")}},
 	{tabProxy, "延迟测试", []searchRow{r("测速地址", "delay url latency"), r("测速超时", "delay timeout latency"), r("切换节点时断开该组的连接", "close connections switch")}},
