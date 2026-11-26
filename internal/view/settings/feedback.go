@@ -17,7 +17,7 @@ import (
 // can then only be saved to a file.
 
 // feedbackDocURL explains the report contract for a self-hosted endpoint.
-const feedbackDocURL = "https://github.com/Owlbay/lanflow/blob/main/docs/feedback-api.md"
+const feedbackDocURL = "https://github.com/CCS-HQ/lanflow/blob/main/docs/feedback-api.md"
 
 type feedbackUI struct {
 	open         bool

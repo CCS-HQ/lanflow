@@ -6,7 +6,7 @@
   "out": "build",
   "updates": {
     "publicKey": "UKej6Hn9Mhc/rYMULlUmhe1cfJH06cqewjsbRK0739Y=",
-    "github": "Owlbay/lanflow"
+    "github": "CCS-HQ/lanflow"
   },
   "windows": {
     "installerInclude": "scripts/installer.nsh"

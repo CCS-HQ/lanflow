@@ -126,7 +126,7 @@ POST {endpoint}/v1/reports
 | --- | --- |
 | `README.txt` | 说明 |
 | `system.txt` | 应用与内核状态、局域网 IP、网关、系统 DNS、订阅名称与链接主机名（不含路径与令牌） |
-| `config/settings.json` | 澜流设置，去掉不走代理列表、检测站点、Wi-Fi 规则、aTrust 列表、WebDAV、代理认证、界面状态等，只留条数 |
+| `config/settings.json` | 澜流设置，去掉不走代理列表、检测站点、Wi-Fi 规则、aTrust 列表、Tailscale 列表、WebDAV、代理认证、界面状态等，只留条数 |
 | `config/runtime.yaml`、`config/override-*.yaml` | 运行时配置与覆写：节点服务器、密码、UUID、密钥去除；`rules`、`rule-providers`、`hosts`、`nameserver-policy`、`fake-ip-filter` 等只留条数 |
 | `logs/mihomo*.log` | 内核日志中 warning / error / fatal 级的行，**不含任何连接行**（`来源 --> 目标`） |
 | `logs/lanflow.log*` | 仅当用户勾选「附带最近的澜流运行日志」 |
@@ -172,7 +172,7 @@ Cloudflare Workers 免费版请求体上限为 100 MB，KV 单个值上限 25 MB
 - 配置中的节点服务器、认证信息、UUID、密钥、证书全部替换为 `***`。
 - **公网 IP**（IPv4 与 IPv6）替换为 `x.x.x.x` / `x:x:x:x`；局域网、回环、链路本地、CGNAT、Mihomo fake-ip（198.18.0.0/15）地址保留，便于排查局域网问题。
 - 不收集连接明细、访问过的域名、规则与域名列表、Wi-Fi 名称、订阅链接。
-- 报告附带的运行时配置与设置里，内容是域名、地址、名称、凭据或本机路径的列表只保留条数（`<omitted: N items>`，`feedback_redact.go` 的 `privateKeys` / `privatePairs`，键名忽略大小写与 `-`、`_`）：规则与规则集（`rules`、`sub-rules`、`rule-providers`、`payload`）、`hosts`、`nameserver-policy`、`proxy-server-nameserver-policy`、`fake-ip-filter`、`authentication`、`skip-auth-prefixes`、`lan-allowed-ips`、`lan-disallowed-ips`、嗅探的 `skip-domain` / `force-domain` / `skip-src-address` / `skip-dst-address`、系统代理的 `bypass`、TUN 的 `route-address` / `route-exclude-address` / `include-uid` / `include-package` / `exclude-package`，`dns.fallback-filter` 下的 `domain` 与 `ipcidr`；设置里对应的 `DNS.Policy`、`Advanced.TUNRouteAddress`、`Advanced.TUNRouteExcludeAddress`、`Advanced.DNSFallbackFilter` 的 `Domain` / `IPCIDR`，自定义规则、Wi-Fi 规则、aTrust、WebDAV、agent 授权与界面状态各节，以及内核路径 `CorePath` 和同步文件夹 `Sync.Dir`（本机路径，带用户名）。其中本次新增的是 `proxy-server-nameserver-policy`、`lan-allowed-ips`、`lan-disallowed-ips`、`skip-auth-prefixes`、`fallback-filter` 的两项、`DNS.Policy`、两个 `TUNRoute*Address`、`CorePath` 与 `Sync.Dir`。保留的列表只有解析器地址、快捷键、TUN 劫持端口和网卡名（`reportKeptLists`）；测试保证 `model.Settings` 里新增的列表必须归入其中一类。
+- 报告附带的运行时配置与设置里，内容是域名、地址、名称、凭据或本机路径的列表只保留条数（`<omitted: N items>`，`feedback_redact.go` 的 `privateKeys` / `privatePairs`，键名忽略大小写与 `-`、`_`）：规则与规则集（`rules`、`sub-rules`、`rule-providers`、`payload`）、`hosts`、`nameserver-policy`、`proxy-server-nameserver-policy`、`fake-ip-filter`、`authentication`、`skip-auth-prefixes`、`lan-allowed-ips`、`lan-disallowed-ips`、嗅探的 `skip-domain` / `force-domain` / `skip-src-address` / `skip-dst-address`、系统代理的 `bypass`、TUN 的 `route-address` / `route-exclude-address` / `include-uid` / `include-package` / `exclude-package`，`dns.fallback-filter` 下的 `domain` 与 `ipcidr`；设置里对应的 `DNS.Policy`、`Advanced.TUNRouteAddress`、`Advanced.TUNRouteExcludeAddress`、`Advanced.DNSFallbackFilter` 的 `Domain` / `IPCIDR`，自定义规则、Wi-Fi 规则、aTrust、Tailscale、WebDAV、agent 授权与界面状态各节，以及内核路径 `CorePath` 和同步文件夹 `Sync.Dir`（本机路径，带用户名）。其中本次新增的是 `proxy-server-nameserver-policy`、`lan-allowed-ips`、`lan-disallowed-ips`、`skip-auth-prefixes`、`fallback-filter` 的两项、`DNS.Policy`、两个 `TUNRoute*Address`、`CorePath` 与 `Sync.Dir`。保留的列表只有解析器地址、快捷键、TUN 劫持端口和网卡名（`reportKeptLists`）；测试保证 `model.Settings` 里新增的列表必须归入其中一类。
 - 访问令牌（`Authorization`）只在请求头里，不进入报告。
 - `contact` 是用户主动填写的，会原样发送。
 - 用户的描述也经过同样的脱敏（误贴的订阅链接会被截掉）。

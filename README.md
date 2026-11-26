@@ -6,7 +6,7 @@
 
 ## 安装
 
-从 [最新 Release](https://github.com/Owlbay/lanflow/releases/latest) 下载：
+从 [最新 Release](https://github.com/CCS-HQ/lanflow/releases/latest) 下载：
 
 - **macOS**：Apple 芯片选 `lanflow-<版本>-arm64.dmg`，Intel 选 `-amd64.dmg`，把 Lanflow 拖到「应用程序」。安装包未经 Apple 签名公证，首次打开会被拦截：在「系统设置 › 隐私与安全性」里点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/Lanflow.app`。
 - **Windows**：运行 `lanflow-setup-<版本>-amd64.exe`。安装程序未签名，SmartScreen 提示时点「更多信息 › 仍要运行」。
@@ -25,14 +25,14 @@ Windows PowerShell 可用 `Get-FileHash .\lanflow-setup-<版本>-amd64.exe -Algo
 安装包由 GitHub Actions 构建并带有构建来源证明，可用 [GitHub CLI](https://cli.github.com/) 确认它出自本仓库的发布流程：
 
 ```sh
-gh attestation verify lanflow-<版本>-arm64.dmg --repo Owlbay/lanflow
+gh attestation verify lanflow-<版本>-arm64.dmg --repo CCS-HQ/lanflow
 ```
 
 ## 功能
 
 - **侧栏控制中心**（常驻）：规则 / 全局 / 直连模式切换，系统代理（全局或 PAC）与 TUN 快捷开关，当前订阅与流量用量（一键更新），连接数与实时速度，内核版本、内存与一键重启；内核的启停在托盘菜单里。TUN 通过权限组件 `lanflow-helper` 运行，应用本身不提权，IPv4 与 IPv6 一并接管
 - **概览**：可拖动旋转、缩放的 3D 地球出口图（请求流向、实时速度、自动聚焦）、终端代理命令；内核异常、找不到内核或配置同步出错时在这里提示
-- **代理与订阅**：代理组、节点切换、测速（可设测速地址与超时）、组图标、定位当前节点；订阅链接 / 文件 / 拖入导入、自动更新、按 Wi-Fi 自动切换订阅；聚合订阅：把多个订阅链接、节点分享链接和已有订阅合并成一个，在界面里筛选重命名节点、勾选地区分组与分流规则，由澜流在本机生成配置（[docs/aggregate.md](docs/aggregate.md)）；多个有序 YAML 覆写（本地或链接）
+- **代理与订阅**：代理组、节点切换、测速（可设测速地址与超时）、组图标、定位当前节点；订阅链接 / 文件 / 拖入导入、自动更新、按 Wi-Fi 自动切换订阅；聚合订阅：把多个订阅链接、YAML 配置、节点分享链接和已有订阅合并成一个，在左右两栏的配置生成器里套用模板或逐项设置节点处理、中转组、分流代理组、自定义规则与排序，由澜流在本机生成配置并预览（[docs/aggregate.md](docs/aggregate.md)）；多个有序 YAML 覆写（本地或链接）
 - **连接**：列表与网络拓扑两种视图（来源 → 进程 → 规则 → 代理组 → 节点 → 目标），应用图标，从连接添加规则
 - **日志**：内核日志与澜流运行日志，级别筛选、搜索；一键导出脱敏的诊断信息
 - **规则**：自定义规则、命中统计、临时停用、规则测试、规则集
