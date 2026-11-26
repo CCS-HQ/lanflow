@@ -63,6 +63,9 @@ type AggregateModule struct {
 	Desc     string
 	Type     string   // model.AggType…
 	Rules    []string // rule sets: "geosite:youtube", "geoip:telegram"
+	// Extra are the extended rule sets (扩展规则集): a group with
+	// Extended set (the 完整版 template's) has them besides Rules.
+	Extra []string
 	// Filter limits the group to the nodes whose name matches (region
 	// groups, set from aggRegionFilter); a group with no node left is not
 	// generated.
@@ -79,7 +82,7 @@ var AggregateModules = []AggregateModule{
 	// 核心组
 	{ID: AggModSelect, Category: AggCatCore, Emoji: "🚀", Label: "节点选择", Desc: "手动选择节点，其他代理组默认跟随它", Type: model.AggTypeSelect, Required: true},
 	{ID: AggModAuto, Category: AggCatCore, Emoji: "⚡", Label: "自动选择", Desc: "按延迟自动选用最快的节点", Type: model.AggTypeURLTest},
-	{ID: "ads", Category: AggCatCore, Emoji: "🛑", Label: "广告拦截", Desc: "拦截常见广告与跟踪域名", Type: model.AggTypeRejectFirst, Rules: []string{"geosite:category-ads-all"}},
+	{ID: "ads", Category: AggCatCore, Emoji: "🛑", Label: "广告拦截", Desc: "拦截常见广告与跟踪域名", Type: model.AggTypeRejectFirst, Rules: []string{"geosite:category-ads-all"}, Extra: []string{"geosite:win-spy", "geosite:win-extra"}},
 	{ID: "private", Category: AggCatCore, Emoji: "🏠", Label: "私有网络", Desc: "局域网与私有地址直连", Type: model.AggTypeDirectFirst, Rules: []string{"geosite:private", "geoip:private"}},
 	{ID: "cn", Category: AggCatCore, Emoji: "🔒", Label: "国内服务", Desc: "国内域名与 IP 直连", Type: model.AggTypeDirectFirst, Rules: []string{"geosite:cn", "geoip:cn"}},
 	{ID: "global", Category: AggCatCore, Emoji: "🌍", Label: "非中国", Desc: "境外域名走代理", Type: model.AggTypeSelect, Rules: []string{"geosite:geolocation-!cn"}},
@@ -96,17 +99,17 @@ var AggregateModules = []AggregateModule{
 	{ID: "de", Category: AggCatRegion, Emoji: "🇩🇪", Label: "德国节点", Desc: "名称含德国 / DE 的节点", Type: model.AggTypeURLTest},
 
 	// 常用服务
-	{ID: "ai", Category: AggCatService, Emoji: "🤖", Label: "AI 服务", Desc: "ChatGPT、Claude、Gemini 等", Type: model.AggTypeSelect, Rules: []string{"geosite:openai", "geosite:anthropic", "geosite:google-gemini", "geosite:category-ai-!cn"}},
+	{ID: "ai", Category: AggCatService, Emoji: "🤖", Label: "AI 服务", Desc: "ChatGPT、Claude、Gemini 等", Type: model.AggTypeSelect, Rules: []string{"geosite:openai", "geosite:anthropic", "geosite:google-gemini", "geosite:category-ai-!cn"}, Extra: []string{"geosite:perplexity", "geosite:xai", "geosite:category-ai-chat-!cn", "geosite:huggingface", "geosite:cursor", "geosite:github-copilot"}},
 	{ID: "youtube", Category: AggCatService, Emoji: "📹", Label: "YouTube", Desc: "YouTube 与 YouTube Music", Type: model.AggTypeSelect, Rules: []string{"geosite:youtube"}},
-	{ID: "google", Category: AggCatService, Emoji: "🔍", Label: "谷歌服务", Desc: "搜索、Gmail、云端硬盘等", Type: model.AggTypeSelect, Rules: []string{"geosite:google", "geoip:google"}},
-	{ID: "microsoft", Category: AggCatService, Emoji: "Ⓜ️", Label: "微软服务", Desc: "Microsoft 365、OneDrive、Bing", Type: model.AggTypeDirectFirst, Rules: []string{"geosite:microsoft", "geosite:onedrive"}},
-	{ID: "apple", Category: AggCatService, Emoji: "🍏", Label: "苹果服务", Desc: "iCloud、App Store", Type: model.AggTypeDirectFirst, Rules: []string{"geosite:apple", "geosite:icloud"}},
-	{ID: "speedtest", Category: AggCatService, Emoji: "📶", Label: "网络测速", Desc: "Speedtest 等测速站点", Type: model.AggTypeSelect, Rules: []string{"geosite:ookla-speedtest"}},
+	{ID: "google", Category: AggCatService, Emoji: "🔍", Label: "谷歌服务", Desc: "搜索、Gmail、云端硬盘等", Type: model.AggTypeSelect, Rules: []string{"geosite:google", "geoip:google"}, Extra: []string{"geosite:google-play", "geosite:googlefcm", "geosite:android", "geosite:google-scholar"}},
+	{ID: "microsoft", Category: AggCatService, Emoji: "Ⓜ️", Label: "微软服务", Desc: "Microsoft 365、OneDrive、Bing", Type: model.AggTypeDirectFirst, Rules: []string{"geosite:microsoft", "geosite:onedrive"}, Extra: []string{"geosite:bing", "geosite:msn", "geosite:azure"}},
+	{ID: "apple", Category: AggCatService, Emoji: "🍏", Label: "苹果服务", Desc: "iCloud、App Store", Type: model.AggTypeDirectFirst, Rules: []string{"geosite:apple", "geosite:icloud"}, Extra: []string{"geosite:apple-tvplus", "geosite:apple-music", "geosite:apple-dev"}},
+	{ID: "speedtest", Category: AggCatService, Emoji: "📶", Label: "网络测速", Desc: "Speedtest 等测速站点", Type: model.AggTypeSelect, Rules: []string{"geosite:ookla-speedtest"}, Extra: []string{"geosite:speedtest", "geosite:category-speedtest"}},
 
 	// 社交通讯
 	{ID: "telegram", Category: AggCatSocial, Emoji: "📲", Label: "Telegram", Desc: "Telegram 消息与通话", Type: model.AggTypeSelect, Rules: []string{"geosite:telegram", "geoip:telegram"}},
 	{ID: "twitter", Category: AggCatSocial, Emoji: "🐦", Label: "X / Twitter", Desc: "X（Twitter）", Type: model.AggTypeSelect, Rules: []string{"geosite:twitter"}},
-	{ID: "meta", Category: AggCatSocial, Emoji: "📘", Label: "Meta", Desc: "Facebook、Instagram、WhatsApp", Type: model.AggTypeSelect, Rules: []string{"geosite:facebook", "geosite:instagram", "geosite:whatsapp"}},
+	{ID: "meta", Category: AggCatSocial, Emoji: "📘", Label: "Meta", Desc: "Facebook、Instagram、WhatsApp", Type: model.AggTypeSelect, Rules: []string{"geosite:facebook", "geosite:instagram", "geosite:whatsapp"}, Extra: []string{"geosite:threads"}},
 	{ID: "discord", Category: AggCatSocial, Emoji: "💬", Label: "Discord", Desc: "Discord 社区与语音", Type: model.AggTypeSelect, Rules: []string{"geosite:discord"}},
 	{ID: "messaging", Category: AggCatSocial, Emoji: "📞", Label: "海外通讯", Desc: "LINE、Signal", Type: model.AggTypeSelect, Rules: []string{"geosite:line", "geosite:signal"}},
 
@@ -115,23 +118,23 @@ var AggregateModules = []AggregateModule{
 	{ID: "disney", Category: AggCatMedia, Emoji: "🏰", Label: "Disney+", Desc: "Disney+ 流媒体", Type: model.AggTypeSelect, Rules: []string{"geosite:disney"}},
 	{ID: "spotify", Category: AggCatMedia, Emoji: "🎵", Label: "Spotify", Desc: "Spotify 音乐", Type: model.AggTypeSelect, Rules: []string{"geosite:spotify"}},
 	{ID: "tiktok", Category: AggCatMedia, Emoji: "🎶", Label: "TikTok", Desc: "TikTok 国际版", Type: model.AggTypeSelect, Rules: []string{"geosite:tiktok"}},
-	{ID: "streaming", Category: AggCatMedia, Emoji: "📺", Label: "海外流媒体", Desc: "HBO、Prime Video、Twitch、巴哈姆特", Type: model.AggTypeSelect, Rules: []string{"geosite:hbo", "geosite:primevideo", "geosite:twitch", "geosite:bahamut"}},
+	{ID: "streaming", Category: AggCatMedia, Emoji: "📺", Label: "海外流媒体", Desc: "HBO、Prime Video、Twitch、巴哈姆特", Type: model.AggTypeSelect, Rules: []string{"geosite:hbo", "geosite:primevideo", "geosite:twitch", "geosite:bahamut"}, Extra: []string{"geosite:hulu", "geosite:dazn", "geosite:abema", "geosite:niconico", "geosite:kick", "geosite:soundcloud", "geosite:deezer", "geosite:tidal"}},
 	{ID: "bilibili", Category: AggCatMedia, Emoji: "📺", Label: "哔哩哔哩", Desc: "B 站，港澳台番剧可切代理", Type: model.AggTypeDirectFirst, Rules: []string{"geosite:bilibili"}},
 
 	// 游戏平台
 	{ID: "steam", Category: AggCatGame, Emoji: "🎮", Label: "Steam", Desc: "Steam 商店与社区", Type: model.AggTypeSelect, Rules: []string{"geosite:steam"}},
 	{ID: "epic", Category: AggCatGame, Emoji: "🎯", Label: "Epic Games", Desc: "Epic 商店", Type: model.AggTypeSelect, Rules: []string{"geosite:epicgames"}},
 	{ID: "console", Category: AggCatGame, Emoji: "🕹️", Label: "主机平台", Desc: "PlayStation、Nintendo", Type: model.AggTypeSelect, Rules: []string{"geosite:playstation", "geosite:nintendo"}},
-	{ID: "games", Category: AggCatGame, Emoji: "👾", Label: "游戏服务", Desc: "暴雪、EA、育碧", Type: model.AggTypeSelect, Rules: []string{"geosite:blizzard", "geosite:ea", "geosite:ubisoft"}},
+	{ID: "games", Category: AggCatGame, Emoji: "👾", Label: "游戏服务", Desc: "暴雪、EA、育碧", Type: model.AggTypeSelect, Rules: []string{"geosite:blizzard", "geosite:ea", "geosite:ubisoft"}, Extra: []string{"geosite:category-games", "geosite:rockstar", "geosite:xbox", "geosite:activision", "geosite:2kgames", "geosite:gog", "geosite:origin"}},
 
 	// 技术服务
 	{ID: "github", Category: AggCatTech, Emoji: "🐱", Label: "GitHub", Desc: "GitHub 与其资源下载", Type: model.AggTypeSelect, Rules: []string{"geosite:github"}},
-	{ID: "dev", Category: AggCatTech, Emoji: "🧰", Label: "开发者服务", Desc: "GitLab、Docker、JetBrains", Type: model.AggTypeSelect, Rules: []string{"geosite:gitlab", "geosite:docker", "geosite:jetbrains"}},
+	{ID: "dev", Category: AggCatTech, Emoji: "🧰", Label: "开发者服务", Desc: "GitLab、Docker、JetBrains", Type: model.AggTypeSelect, Rules: []string{"geosite:gitlab", "geosite:docker", "geosite:jetbrains"}, Extra: []string{"geosite:npmjs", "geosite:python", "geosite:gitbook", "geosite:stackexchange", "geosite:atlassian", "geosite:vercel", "geosite:netlify", "geosite:category-dev"}},
 	{ID: "cloudflare", Category: AggCatTech, Emoji: "☁️", Label: "Cloudflare", Desc: "Cloudflare 服务", Type: model.AggTypeSelect, Rules: []string{"geosite:cloudflare"}},
 	{ID: "scholar", Category: AggCatTech, Emoji: "🎓", Label: "学术网站", Desc: "海外论文与学术资源", Type: model.AggTypeSelect, Rules: []string{"geosite:category-scholar-!cn"}},
 
 	// 金融服务
-	{ID: "paypal", Category: AggCatFinance, Emoji: "💳", Label: "海外支付", Desc: "PayPal、Stripe", Type: model.AggTypeSelect, Rules: []string{"geosite:paypal", "geosite:stripe"}},
+	{ID: "paypal", Category: AggCatFinance, Emoji: "💳", Label: "海外支付", Desc: "PayPal、Stripe", Type: model.AggTypeSelect, Rules: []string{"geosite:paypal", "geosite:stripe"}, Extra: []string{"geosite:wise", "geosite:visa", "geosite:mastercard"}},
 	{ID: "crypto", Category: AggCatFinance, Emoji: "🪙", Label: "加密货币", Desc: "交易所与钱包站点", Type: model.AggTypeSelect, Rules: []string{"geosite:category-cryptocurrency", "geosite:binance"}},
 
 	// 其他
@@ -156,14 +159,19 @@ type AggregateTemplate struct {
 	Label   string
 	Desc    string
 	Modules []string // IDs, in catalog order
+	// Extended: the groups also have their modules' extended rule sets.
+	Extended bool
 }
 
 // The built-in templates.
 var AggregateTemplates = []AggregateTemplate{
 	{ID: "lite", Label: "精简版", Desc: "基础代理组 + 国内外分流", Modules: []string{"select", "auto", "ads", "private", "cn", "global", "final"}},
-	{ID: "standard", Label: "标准版", Desc: "地区分组 + 常用服务分流", Modules: []string{"select", "auto", "ads", "private", "cn", "global", "final",
-		"hk", "tw", "jp", "sg", "us", "ai", "youtube", "google", "microsoft", "apple", "telegram", "netflix", "github"}},
-	{ID: "full", Label: "完整版", Desc: "全部代理组与规则集", Modules: nil}, // nil: every module
+	{ID: "standard", Label: "标准版", Desc: "完整代理组 + 常用规则", Modules: []string{"select", "auto", "ads", "private", "cn", "global", "final",
+		"ai", "youtube", "google", "microsoft", "apple", "telegram", "netflix"}},
+	{ID: "full", Label: "完整版", Desc: "全部功能 + 扩展规则集", Extended: true, Modules: []string{"select", "auto", "ads", "private", "cn", "global", "final",
+		"hk", "tw", "jp", "sg", "us", "kr",
+		"ai", "youtube", "google", "microsoft", "apple", "speedtest", "telegram", "twitter", "meta", "discord",
+		"netflix", "disney", "spotify", "tiktok", "streaming", "steam", "games", "github", "dev", "paypal"}},
 }
 
 // AggTemplate returns the built-in template id, nil if there is none.
@@ -180,8 +188,8 @@ func AggTemplate(id string) *AggregateTemplate {
 func (t AggregateTemplate) Groups() []model.AggregateGroup {
 	var out []model.AggregateGroup
 	for _, m := range AggregateModules {
-		if t.Modules == nil || contains(t.Modules, m.ID) {
-			out = append(out, model.AggregateGroup{ID: m.ID})
+		if contains(t.Modules, m.ID) {
+			out = append(out, model.AggregateGroup{ID: m.ID, Extended: t.Extended && len(m.Extra) > 0})
 		}
 	}
 	return out
@@ -191,7 +199,7 @@ func (t AggregateTemplate) Groups() []model.AggregateGroup {
 func (t AggregateTemplate) RuleSets() int {
 	n := 0
 	for _, g := range t.Groups() {
-		n += len(AggModule(g.ID).Rules)
+		n += len(AggGroupRules(g))
 	}
 	return n
 }

@@ -114,7 +114,10 @@ func (p *Page) openAggregate(sub *model.Subscription) {
 		d.name = i18n.T("聚合订阅")
 		d.auto = autoIndex(12)
 		d.fillSpec(profile.DefaultAggregateSpec(), nil)
+		// One card of each kind to fill in; the empty ones are left out.
 		d.addSource(model.AggSourceURL)
+		d.addSource(model.AggSourceYAML)
+		d.addSource(model.AggSourceLinks)
 		return
 	}
 	s := *sub
@@ -226,14 +229,22 @@ func subChoices(subs []model.Subscription, self string) []subChoice {
 	return out
 }
 
-// fullSpec builds the spec the form describes.
+// fullSpec builds the spec the form describes. Source cards left empty
+// are not part of it.
 func (d *aggEditor) fullSpec(subs []model.Subscription) model.AggregateSpec {
+	spec, _ := d.specOf(subs)
+	return spec
+}
+
+// specOf is fullSpec, with the index of the card of each of its sources.
+func (d *aggEditor) specOf(subs []model.Subscription) (model.AggregateSpec, []int) {
 	labels := subChoices(subs, d.id)
 	spec := d.spec.Clone()
 	spec.Version = model.AggregateSpecVersion
 	spec.Include, spec.Exclude = strings.TrimSpace(spec.Include), strings.TrimSpace(spec.Exclude)
 	spec.Sources = nil
-	for _, f := range d.sources {
+	var cards []int
+	for i, f := range d.sources {
 		src := model.AggregateSource{ID: f.id, Kind: aggKinds[f.kind], Name: strings.TrimSpace(f.name), Prefix: f.prefix, Disabled: !f.enabled}
 		switch src.Kind {
 		case model.AggSourceURL:
@@ -249,7 +260,11 @@ func (d *aggEditor) fullSpec(subs []model.Subscription) model.AggregateSpec {
 				}
 			}
 		}
+		if src.URL == "" && src.YAML == "" && src.Links == "" && src.SubID == "" {
+			continue
+		}
 		spec.Sources = append(spec.Sources, src)
+		cards = append(cards, i)
 	}
 	var renames []model.RenameRule
 	for _, r := range spec.Renames {
@@ -262,7 +277,7 @@ func (d *aggEditor) fullSpec(subs []model.Subscription) model.AggregateSpec {
 	if d.listenOn {
 		spec.ListenBase, _ = strconv.Atoi(strings.TrimSpace(d.listen))
 	}
-	return spec
+	return spec, cards
 }
 
 // record is the subscription record the form describes (download
@@ -286,10 +301,8 @@ func (d *aggEditor) check(spec model.AggregateSpec) string {
 	if d.listenOn && spec.ListenBase == 0 {
 		return i18n.Tf("监听端口须为 1024–%d 之间的数字", profile.AggMaxListen)
 	}
-	for i, src := range spec.Sources {
-		if src.Kind == model.AggSourceSub && src.SubID == "" {
-			return i18n.Tf("第 %d 个来源没有选择订阅。", i+1)
-		}
+	if len(spec.Sources) == 0 {
+		return i18n.T("请至少填写一个来源：订阅链接、YAML 配置、节点链接或已有订阅。")
 	}
 	if err := profile.ValidateAggregateSpec(spec, i18n.Tf); err != nil {
 		return err.Error()
@@ -367,7 +380,9 @@ func (d *aggEditor) applyTemplate(id string) {
 	// Keep the renames and type changes of groups that stay.
 	for i := range groups {
 		if k := d.groupIndex(groups[i].ID); k >= 0 {
+			ext := groups[i].Extended
 			groups[i] = d.spec.Groups[k]
+			groups[i].Extended = ext
 		}
 	}
 	d.spec.Groups = append(groups, custom...)
@@ -576,7 +591,7 @@ func aggSourceDesc(src model.AggregateSource, subs []model.Subscription) string 
 // previewAggregate builds the profile in the background.
 func (p *Page) previewAggregate(subs []model.Subscription) {
 	d := &p.agg
-	spec := d.fullSpec(subs)
+	spec, cards := d.specOf(subs)
 	if msg := d.check(spec); msg != "" {
 		d.err = msg
 		return
@@ -603,9 +618,9 @@ func (p *Page) previewAggregate(subs []model.Subscription) {
 			}
 		}
 		// Source IDs the service gave are kept, so the reports match the cards.
-		for i, r := range pv.Sources {
-			if i < len(p.agg.sources) && p.agg.sources[i].id == "" {
-				p.agg.sources[i].id = r.ID
+		for j, r := range pv.Sources {
+			if j < len(cards) && cards[j] < len(p.agg.sources) && p.agg.sources[cards[j]].id == "" {
+				p.agg.sources[cards[j]].id = r.ID
 			}
 		}
 	})

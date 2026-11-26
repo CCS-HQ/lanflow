@@ -14,7 +14,7 @@ func TestAggregateEditorCreatePreviewSave(t *testing.T) {
 	api := fake.NewInstant()
 	e, toasts := testEnv(api)
 	p := NewAggregates(e)
-	tt := ui.NewTester(p.View, 1200, 800)
+	tt := ui.NewTester(p.View, 1200, 1600)
 	tt.Frame()
 	if !tt.HasText("还没有聚合订阅") {
 		t.Fatalf("empty list: %q", tt.Texts())
@@ -36,29 +36,36 @@ func TestAggregateEditorCreatePreviewSave(t *testing.T) {
 		t.Fatalf("saved an empty source: err %q", p.agg.err)
 	}
 
-	// Quick mode: the source card's kind icons, a template.
+	// Quick mode: a card of each kind to start with; the empty ones are
+	// left out. The kind icons of a new card, a template.
+	if len(p.agg.sources) != 3 || aggKinds[p.agg.sources[1].kind] != model.AggSourceYAML || aggKinds[p.agg.sources[2].kind] != model.AggSourceLinks {
+		t.Fatalf("starting cards = %+v", p.agg.sources)
+	}
 	p.agg.sources[0].url = "https://air.example.com/sub"
 	p.agg.sources[0].prefix = "A · "
+	p.agg.sources[2].links = "trojan://pw@tw.example.com:443?sni=tw.example.com#台湾%2009"
 	if err := tt.Click("添加订阅/节点源"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	// the second card's 节点链接 kind button
+	// the new card's 节点链接 kind button
 	var kinds []ui.AccessInfo
 	for _, a := range tt.AccessAll() {
 		if a.Role == ui.RoleButton && a.Name == "节点链接" {
 			kinds = append(kinds, a)
 		}
 	}
-	if len(kinds) != 2 {
+	if len(kinds) != 4 {
 		t.Fatalf("kind buttons: %d", len(kinds))
 	}
-	tt.ClickAt(kinds[1].Bounds.X+kinds[1].Bounds.W/2, kinds[1].Bounds.Y+kinds[1].Bounds.H/2)
+	tt.ClickAt(kinds[3].Bounds.X+kinds[3].Bounds.W/2, kinds[3].Bounds.Y+kinds[3].Bounds.H/2)
 	tt.Frame()
-	if aggKinds[p.agg.sources[1].kind] != model.AggSourceLinks {
-		t.Fatalf("kind = %d", p.agg.sources[1].kind)
+	if aggKinds[p.agg.sources[3].kind] != model.AggSourceLinks {
+		t.Fatalf("kind = %d", p.agg.sources[3].kind)
 	}
-	p.agg.sources[1].links = "trojan://pw@tw.example.com:443?sni=tw.example.com#台湾%2009"
+	if spec := p.agg.fullSpec(nil); len(spec.Sources) != 2 {
+		t.Fatalf("empty cards in the spec: %+v", spec.Sources)
+	}
 	if err := tt.Click("精简版"); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +184,7 @@ func TestAggregateTemplates(t *testing.T) {
 	api := fake.NewInstant()
 	e, _ := testEnv(api)
 	p := New(e)
-	tt := ui.NewTester(p.View, 1200, 800)
+	tt := ui.NewTester(p.View, 1200, 1600)
 	tt.Frame()
 	p.openAggregate(nil)
 	tt.Frame()
@@ -209,7 +216,7 @@ func TestAggregateTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if len(d.spec.Rules) != 1 || d.spec.Template != "my:"+list[0].ID || len(d.sources) != 1 {
+	if len(d.spec.Rules) != 1 || d.spec.Template != "my:"+list[0].ID || len(d.sources) != 3 {
 		t.Fatalf("applied: %+v", d.spec)
 	}
 }

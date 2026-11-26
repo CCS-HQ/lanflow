@@ -81,8 +81,8 @@ func init() {
 		"标准版":                         "Standard",
 		"完整版":                         "Full",
 		"基础代理组 + 国内外分流":               "Basic groups + China / overseas split",
-		"地区分组 + 常用服务分流":               "Region groups + common services",
-		"全部代理组与规则集":                   "Every group and rule set",
+		"完整代理组 + 常用规则":                "Full proxy groups + common rules",
+		"全部功能 + 扩展规则集":                "Everything + extended rule sets",
 
 		// internal/profile/aggregate_catalog.go: validation and building
 		"自定义规则不能超过 %d 条":                           "No more than %d custom rules",
@@ -271,13 +271,15 @@ func init() {
 		"从订阅链接、节点链接或 YAML 生成自己的订阅：节点筛选、代理组和分流规则都可以在这里编辑，之后随时回来修改、更新。":    "Build your own subscription from subscription links, node links or YAML: node filters, proxy groups and routing rules are all edited here, and you can come back to change or update it at any time.",
 		"多个来源合成一个订阅，在本机编辑维护":                                             "Several sources in one subscription, edited on this computer",
 		"聚合订阅也会出现在「订阅」页，可以和其他订阅一样切换使用。":                                  "Aggregate subscriptions also appear on the Subscriptions page and can be switched to like any other.",
-		"还没有聚合订阅":       "No aggregate subscriptions yet",
-		"重新下载来源并生成":     "Download the sources again and rebuild",
-		"高级配置":          "Advanced",
-		"%d 个来源":        "%d sources",
-		"已用 %s / %s GB": "%s / %s GB used",
-		"更新于 %s":        "Updated %s",
-		"编辑 %s":         "Edit %s",
+		"还没有聚合订阅":         "No aggregate subscriptions yet",
+		"重新下载来源并生成":       "Download the sources again and rebuild",
+		"高级配置":            "Advanced",
+		"%d 个来源":          "%d sources",
+		"已用 %s / %s GB":   "%s / %s GB used",
+		"更新于 %s":          "Updated %s",
+		"编辑 %s":           "Edit %s",
+		"包含扩展规则集（另 %d 个）": "Include the extended rule sets (%d more)",
+		"请至少填写一个来源：订阅链接、YAML 配置、节点链接或已有订阅。": "Fill in at least one source: a subscription link, YAML, node links or an existing subscription.",
 	} {
 		en[k] = v
 	}

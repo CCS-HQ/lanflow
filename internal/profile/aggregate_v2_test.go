@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -255,4 +256,49 @@ func TestAggregateLinksAcceptYAML(t *testing.T) {
 			t.Fatalf("%s: report %+v", tc.name, r)
 		}
 	}
+}
+
+func TestAggregateFullTemplateLoads(t *testing.T) {
+	t.Parallel()
+	for _, src := range []string{model.AggRulesGeo, model.AggRulesRemote} {
+		spec := aggSpec(model.AggregateSource{ID: "a", Kind: model.AggSourceLinks, Links: "x"})
+		spec.Template, spec.Groups, spec.RuleSource = "full", AggTemplate("full").Groups(), src
+		_, data, err := BuildAggregate(spec, aggInputs(spec, aggLinks()), nil)
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		checkAggregateWithCore(t, data)
+	}
+}
+
+func TestAggregateSSRLinks(t *testing.T) {
+	t.Parallel()
+	b := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	ssr := "ssr://" + b("1.2.3.4:8388:auth_aes128_md5:aes-256-cfb:tls1.2_ticket_auth:"+b("pw")+
+		"/?obfsparam="+b("cdn.example.com")+"&protoparam="+b("1:abc")+"&remarks="+b("香港 SSR")+"&group="+b("g"))
+	v6 := "ssr://" + b("2001:db8::1:443:origin:aes-128-ctr:plain:"+b("p2"))
+	spec := aggSpec(model.AggregateSource{ID: "a", Kind: model.AggSourceLinks, Links: "x"})
+	pv, data, err := BuildAggregate(spec, aggInputs(spec, ssr+"\n"+v6+"\nssr://broken"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := pv.Sources[0]; r.Kept != 2 || r.Skipped != 1 {
+		t.Fatalf("report %+v", r)
+	}
+	var doc struct {
+		Proxies []map[string]any `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	p := doc.Proxies[0]
+	if p["name"] != "香港 SSR" || p["type"] != "ssr" || p["server"] != "1.2.3.4" || p["port"] != 8388 || p["password"] != "pw" ||
+		p["cipher"] != "aes-256-cfb" || p["obfs"] != "tls1.2_ticket_auth" || p["protocol"] != "auth_aes128_md5" ||
+		p["obfs-param"] != "cdn.example.com" || p["protocol-param"] != "1:abc" {
+		t.Fatalf("ssr node = %v", p)
+	}
+	if q := doc.Proxies[1]; q["server"] != "2001:db8::1" || q["port"] != 443 || q["name"] != "[2001:db8::1]:443" {
+		t.Fatalf("ipv6 ssr node = %v", q)
+	}
+	checkAggregateWithCore(t, data)
 }

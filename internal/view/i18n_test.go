@@ -191,6 +191,7 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.frame("aggregate editor (quick)", tt)
+	scrollTo(t, tt, i18n.T("我的模板"))
 	click(t, tt, i18n.T("我的模板"))
 	c.frame("aggregate my templates", tt)
 	click(t, tt, i18n.T("关闭"))
@@ -338,5 +339,26 @@ func TestLanguageSettingAppliesAtOnce(t *testing.T) {
 	// The selector names each language in itself.
 	if !tt.HasText("简体中文") {
 		t.Skip("selector only on the settings page")
+	}
+}
+
+// scrollTo scrolls the panel under text until text is well inside the
+// window (a panel's footer covers its bottom).
+func scrollTo(t *testing.T, tt *ui.Tester, text string) {
+	t.Helper()
+	for range 12 {
+		r, ok := tt.Find(text)
+		if !ok {
+			t.Fatalf("find %q", text)
+		}
+		if r.Y >= 120 && r.Y+r.H <= float32(tt.Image().Bounds().Dy())-120 {
+			return
+		}
+		dy := float32(200)
+		if r.Y < 120 {
+			dy = -200
+		}
+		tt.Scroll(r.X, 300, 0, dy)
+		tt.Frame()
 	}
 }

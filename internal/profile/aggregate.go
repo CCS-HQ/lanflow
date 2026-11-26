@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -206,12 +208,16 @@ func aggGroupFilter(g model.AggregateGroup) string {
 	return ""
 }
 
-// aggGroupRules are the rule sets of g.
-func aggGroupRules(g model.AggregateGroup) []string {
+// AggGroupRules are the rule sets of g: a custom group's own, else its
+// module's, with the extended ones when g.Extended.
+func AggGroupRules(g model.AggregateGroup) []string {
 	if g.Custom {
 		return g.Rules
 	}
 	if m := AggModule(g.ID); m != nil {
+		if g.Extended {
+			return append(append([]string(nil), m.Rules...), m.Extra...)
+		}
 		return m.Rules
 	}
 	return nil
@@ -948,7 +954,7 @@ func (g *aggGen) profile() *yaml.Node {
 		if p.skip {
 			continue
 		}
-		for _, ref := range aggGroupRules(p.g) {
+		for _, ref := range AggGroupRules(p.g) {
 			kind, name, _ := strings.Cut(ref, ":")
 			typ := model.AggRuleGeoSite
 			if kind == "geoip" {
@@ -1125,7 +1131,7 @@ func AggregateRuleViews(spec model.AggregateSpec, tr Translator) []model.Aggrega
 		gr.Filter = ""
 		if !gr.Custom {
 			if mod := AggModule(gr.ID); mod != nil && mod.Filter != "" {
-				gr = model.AggregateGroup{ID: gr.ID, Custom: true, Name: AggGroupName(gr), Type: AggGroupType(gr), Rules: mod.Rules}
+				gr = model.AggregateGroup{ID: gr.ID, Custom: true, Name: AggGroupName(gr), Type: AggGroupType(gr), Rules: AggGroupRules(gr)}
 			}
 		}
 		groups = append(groups, gr)
@@ -1180,6 +1186,15 @@ func parseAggSource(data []byte, tr Translator) (nodes []aggNode, skipped int, w
 		return nil, 0, "", tr.err("unknownContent")
 	}
 	for _, line := range lines {
+		if len(line) > 6 && strings.EqualFold(line[:6], "ssr://") {
+			m, name, serr := parseSSRLink(line[6:])
+			if serr != nil {
+				skipped++
+				continue
+			}
+			nodes = append(nodes, aggNode{m: m, name: name, typ: "ssr"})
+			continue
+		}
 		mn, perr := parseNodeURI(line)
 		if perr != nil {
 			skipped++
@@ -1196,6 +1211,58 @@ func parseAggSource(data []byte, tr Translator) (nodes []aggNode, skipped int, w
 		return nil, skipped, "", tr.err("noLinkUsable", skipped)
 	}
 	return nodes, skipped, warn, nil
+}
+
+// parseSSRLink reads a ShadowsocksR share link (what follows ssr://):
+// Base64 of server:port:protocol:method:obfs:Base64(password), then
+// /?obfsparam=…&protoparam=…&remarks=… with Base64 values.
+func parseSSRLink(payload string) (*yaml.Node, string, error) {
+	dec, err := decodeBase64Flex(strings.TrimRight(strings.TrimSpace(payload), "="))
+	if err != nil {
+		if dec, err = decodeBase64Flex(strings.TrimSpace(payload)); err != nil {
+			return nil, "", err
+		}
+	}
+	text := strings.TrimSpace(string(dec))
+	head, query, _ := strings.Cut(text, "?")
+	head = strings.TrimSuffix(head, "/")
+	// The server may be an IPv6 address: the five other fields are the
+	// last ones.
+	parts := strings.Split(head, ":")
+	if len(parts) < 6 {
+		return nil, "", errors.New("ssr: not enough fields")
+	}
+	n := len(parts)
+	server := strings.Trim(strings.Join(parts[:n-5], ":"), "[]")
+	port, perr := strconv.Atoi(parts[n-5])
+	protocol, method, obfs := parts[n-4], parts[n-3], parts[n-2]
+	pass, berr := decodeBase64Flex(parts[n-1])
+	if server == "" || perr != nil || port <= 0 || port > 65535 || berr != nil || method == "" {
+		return nil, "", errors.New("ssr: bad server, port or password")
+	}
+	param := func(v url.Values, key string) string {
+		if raw := v.Get(key); raw != "" {
+			if b, err := decodeBase64Flex(strings.ReplaceAll(raw, " ", "+")); err == nil {
+				return strings.TrimSpace(string(b))
+			}
+		}
+		return ""
+	}
+	v, _ := url.ParseQuery(query)
+	name := param(v, "remarks")
+	if name == "" {
+		name = net.JoinHostPort(server, strconv.Itoa(port))
+	}
+	m := mapNode("name", strNode(name), "type", strNode("ssr"), "server", strNode(server), "port", intNode(port),
+		"cipher", strNode(method), "password", strNode(string(pass)), "obfs", strNode(obfs), "protocol", strNode(protocol))
+	if op := param(v, "obfsparam"); op != "" {
+		m.Content = append(m.Content, strNode("obfs-param"), strNode(op))
+	}
+	if pp := param(v, "protoparam"); pp != "" {
+		m.Content = append(m.Content, strNode("protocol-param"), strNode(pp))
+	}
+	m.Content = append(m.Content, strNode("udp"), boolNode(true))
+	return m, name, nil
 }
 
 // aggYAMLProxies reads text as Clash YAML holding proxies: a profile with

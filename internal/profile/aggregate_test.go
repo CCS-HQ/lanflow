@@ -62,6 +62,8 @@ func TestBuildAggregateMergesSources(t *testing.T) {
 		model.AggregateSource{ID: "a", Kind: model.AggSourceURL, URL: "https://a.example.com/sub", Prefix: "A·"},
 		model.AggregateSource{ID: "b", Kind: model.AggSourceLinks, Links: "x"},
 	)
+	// 完整版: region groups, and the extended rule sets.
+	spec.Template, spec.Groups = "full", AggTemplate("full").Groups()
 	b64 := base64.StdEncoding.EncodeToString([]byte(aggLinks()))
 	pv, data, err := BuildAggregate(spec, aggInputs(spec, aggYAMLSource, b64), nil)
 	if err != nil {
@@ -118,6 +120,9 @@ func TestBuildAggregateMergesSources(t *testing.T) {
 	}
 	if _, ok := groups["🇰🇷 韩国节点"]; ok {
 		t.Fatal("a region that was not chosen was generated")
+	}
+	if !strings.Contains(y, "GEOSITE,perplexity,🤖 AI 服务") || !strings.Contains(y, "GEOSITE,openai,🤖 AI 服务") {
+		t.Fatal("the extended rule sets of 完整版 are missing")
 	}
 	if got := groups["🍏 苹果服务"]; got[0] != "DIRECT" {
 		t.Fatalf("苹果服务 = %q, want DIRECT first", got)
@@ -272,17 +277,26 @@ func TestValidateAggregateSpec(t *testing.T) {
 		if _, err := regexp.Compile(m.Filter); err != nil {
 			t.Errorf("module %s: filter: %v", m.ID, err)
 		}
-		for _, r := range m.Rules {
+		for _, r := range append(append([]string(nil), m.Rules...), m.Extra...) {
 			if !validRuleSetRef(r) {
 				t.Errorf("module %s: rule set %q not in the library", m.ID, r)
 			}
+			if seen["r:"+r] {
+				t.Errorf("module %s: rule set %q is another module's too", m.ID, r)
+			}
+			seen["r:"+r] = true
 		}
 	}
+	// The templates' sizes, as the quick mode shows them.
+	sizes := map[string][2]int{"lite": {7, 6}, "standard": {14, 21}, "full": {33, 91}}
 	for _, tp := range AggregateTemplates {
 		for _, id := range tp.Modules {
 			if AggModule(id) == nil {
 				t.Errorf("template %s: unknown module %s", tp.ID, id)
 			}
+		}
+		if got := [2]int{len(tp.Groups()), tp.RuleSets()}; got != sizes[tp.ID] {
+			t.Errorf("template %s: %d groups, %d rule sets", tp.ID, got[0], got[1])
 		}
 	}
 }
