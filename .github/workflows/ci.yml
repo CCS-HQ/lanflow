@@ -211,6 +211,24 @@ jobs:
           mkdir -p ci-diagnostics
           go test ${{ matrix.test_flags }} ./... 2>&1 | tee ci-diagnostics/go-test.log
 
+      # mobile/ios/tunnelcore (Mihomo as a library for the iOS packet tunnel)
+      # is a module of its own, which ./... above leaves out: test it, and
+      # build it for an iPhone as scripts/build-ios.sh does, with the
+      # runner's Xcode, so a dependency update that breaks Mihomo's build
+      # fails here and not at release.
+      - name: iOS tunnel core
+        if: runner.os == 'macOS'
+        working-directory: mobile/ios/tunnelcore
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test ./...
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          GOOS=ios GOARCH=arm64 CC="$(xcrun --sdk iphoneos -f clang) -isysroot $sdk -target arm64-apple-ios17.0" \
+            go build -trimpath -buildmode=c-archive \
+            -tags with_gvisor,with_low_memory,no_tailscale,no_zerotier,no_easytier \
+            -o "$RUNNER_TEMP/libtunnelcore.a" .
+
       # The whole test output of a failed run, kept as a file: the interface
       # tests print where every element of the page was when a click missed,
       # which is what a layout difference between platforms is found with.

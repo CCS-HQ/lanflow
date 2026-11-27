@@ -17,3 +17,22 @@ updates:
     groups:
       golang-x:
         patterns: ["golang.org/x/*"]
+
+  # Mihomo as a library for the iOS packet tunnel (its own module). Nearly
+  # all of its dependencies are Mihomo's and stay at the versions Mihomo is
+  # built with: no version updates (a limit of 0 turns them off, security
+  # updates go on), and the security updates of any of them come as one
+  # pull request. Mihomo is upgraded by hand, together with
+  # scripts/fetch-core.sh, scripts/build-core-android.sh and
+  # iosvpn.CoreVersion (iosvpn_test checks go.mod against it).
+  - package-ecosystem: gomod
+    directory: /mobile/ios/tunnelcore
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: github.com/metacubex/mihomo
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
