@@ -159,6 +159,19 @@ jobs:
           echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/29.0.14206865" >> "$GITHUB_ENV"
           echo "JAVA_HOME=${JAVA_HOME_17_X64}" >> "$GITHUB_ENV"
 
+      # Gradle's downloads (Kotlin, AGP and their dependencies) from Maven
+      # Central: without them cached, every run fetches them again, and a
+      # 429 from Maven Central fails the build.
+      - name: Cache Gradle dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: Build APK
         run: scripts/build-android.sh
 
