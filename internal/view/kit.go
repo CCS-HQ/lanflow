@@ -36,6 +36,9 @@ func statusColor(t *ui.Theme, kind string) ui.Color {
 	}
 }
 
+// headerHeight is the least height of a page's header (Header).
+const headerHeight = 60
+
 // Header draws the page title row: 20 pt semibold title, muted subtitle,
 // tools right-aligned. It stays put while the content below scrolls, and
 // its background drags the window (the title bar is hidden on macOS);
@@ -46,7 +49,7 @@ func (k kit) Header(c *ui.Context, title, subtitle string, tools func()) {
 		k.phoneHeader(c, subtitle, tools)
 		return
 	}
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(20, 24, 12, 24).Shrink(0).MinHeight(60).DragWindow().Children(func() {
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(20, 24, 12, 24).Shrink(0).MinHeight(headerHeight).DragWindow().Children(func() {
 		ui.Text(c, title).FontSize(20).FontWeight(600).SingleLine().Shrink(0)
 		if subtitle != "" {
 			ui.Text(c, subtitle).FontSize(13).TextColor(t.TextMuted).SingleLine().Margin(0, 0, 0, 4).FontFeatures("tnum")

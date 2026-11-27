@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/mobile"
 
+	"lanflow/internal/app"
 	"lanflow/internal/app/fake"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
@@ -42,6 +43,24 @@ var phoneSnapshots = []snapshot{
 		setCore(s, model.CoreError, "start mihomo: permission denied")
 	}},
 	{name: "home-first-run", page: env.Overview, prep: snapFirstRun},
+	// Notifications (docs/notifications.md): a confirmation, a failure with
+	// its action, the same note twice, a core crash from the service.
+	{name: "toast-done", page: env.Overview, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, tt *ui.Tester) {
+		showNote(s, tt, env.Note{Title: i18n.Tf("已切换到 %s", "东京 03")})
+	}},
+	{name: "toast-error", page: env.Subs, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, tt *ui.Tester) {
+		s.errorToast(i18n.T("订阅更新失败：连接超时。仍在使用上次的配置。"), "")
+		settleToast(tt)
+	}},
+	{name: "toast-merged", page: env.Proxies, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, tt *ui.Tester) {
+		showNote(s, tt, env.Note{Title: i18n.T("已复制")})
+		showNote(s, tt, env.Note{Title: i18n.T("已复制")})
+		showNote(s, tt, env.Note{Level: env.News, Title: i18n.T("已重新连接澜流后台服务")})
+	}},
+	{name: "toast-core-crash", page: env.Overview, prep: func(_ *testing.T, _ *fake.Fake, s *Shell, tt *ui.Tester) {
+		queueNotice(s, app.Notice{Kind: "core-crash", Detail: "exit status 1"})
+		settleToast(tt)
+	}},
 	{name: "home-scrolled", page: env.Overview, prep: func(_ *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
 		tt.Scroll(195, 500, 0, 300)
 		tt.Advance(time.Second)

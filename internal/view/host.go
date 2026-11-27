@@ -59,7 +59,7 @@ func toggleSystemProxy(h host) {
 func (s *Shell) hostAPI() app.API                      { return s.api }
 func (s *Shell) mac() bool                             { return s.opts.Mac }
 func (s *Shell) runJob(job func() error, okMsg string) { s.run(job, okMsg) }
-func (s *Shell) note(msg string)                       { s.toast(toastReq{msg: msg}) }
+func (s *Shell) note(msg string)                       { s.toast(env.Note{Title: msg}) }
 func (s *Shell) failed(msg string)                     { s.errorToast(msg, "") }
 func (s *Shell) live() bool                            { return s.win != nil }
 func (s *Shell) quit()                                 { mygo.App.Quit() }
@@ -123,10 +123,10 @@ func (s *Shell) ServiceConnection(up bool) {
 		s.mu.Lock()
 		s.notices = nil
 		s.mu.Unlock()
-		s.toast(toastReq{msg: i18n.T("已重新连接澜流后台服务")})
+		s.toast(env.Note{Level: env.News, Title: i18n.T("已重新连接澜流后台服务")})
 		return
 	}
-	s.toast(toastReq{msg: i18n.T("与澜流后台服务的连接已断开，正在重新连接"), isError: true})
+	s.toast(env.Note{Level: env.Attention, Title: i18n.T("与澜流后台服务的连接已断开，正在重新连接")})
 }
 
 // AskRestartService offers to restart a service process of another

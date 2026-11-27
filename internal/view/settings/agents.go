@@ -24,11 +24,11 @@ func (p *Page) agentSection(c *ui.Context, s model.Settings) {
 			ui.Row(c).Gap(8).Children(func() {
 				if ui.Button(c.Key("mcp-copy-cmd"), i18n.T("复制命令")).Clicked() {
 					c.WriteClipboard(MCPCommand(executable()))
-					c.Toast(i18n.T("已复制"))
+					e.Toast(i18n.T("已复制"), false)
 				}
 				if ui.PrimaryButton(c.Key("mcp-copy-json"), i18n.T("复制 MCP 配置")).Clicked() {
 					c.WriteClipboard(MCPConfig(executable()))
-					c.Toast(i18n.T("已复制"))
+					e.Toast(i18n.T("已复制"), false)
 				}
 			})
 		})

@@ -95,15 +95,6 @@ type topicPage interface{ Topics() []app.Topic }
 // language and appearance (Settings). They rebuild whatever page shows.
 var shellTopics = []app.Topic{app.TopicStatus, app.TopicTraffic, app.TopicNotice, app.TopicSettings, app.TopicCapture}
 
-// toastReq is a queued toast, shown on the next build.
-type toastReq struct {
-	msg, detail string
-	isError     bool
-	info        bool // news, not the outcome of what the user did
-	action      string
-	onAction    func()
-}
-
 // Shell is the state of the main window.
 type Shell struct {
 	api  app.API
@@ -127,8 +118,14 @@ type Shell struct {
 
 	mu      sync.Mutex
 	pending []func()
-	toasts  []toastReq
-	notices []app.Notice
+	toasts  []env.Note
+	// noteCount counts, by merge key, how many times a notification that
+	// is still showing came (env.Note.Key): the toast reads ×N. UI thread.
+	noteCount map[string]int
+	// toastSwipe is how far a finger moved each toast it drags, by toast
+	// ID (shell_toast.go). UI thread.
+	toastSwipe map[string]float32
+	notices    []app.Notice
 
 	asked []*confirmReq // confirmations asked from any goroutine, under mu (ask)
 
@@ -191,19 +188,20 @@ func New(api app.API, opts Options) *Shell {
 		API:      api,
 		Navigate: s.navigate,
 		Arg:      s.takeArg,
+		Notify:   s.toast,
 		Toast: func(msg string, isError bool) {
 			if isError {
 				s.errorToast(msg, "")
 				return
 			}
-			s.toast(toastReq{msg: msg})
+			s.toast(env.Note{Title: msg})
 		},
 		ToastDetail: func(msg, detail string, isError bool) {
 			if isError {
 				s.errorToast(msg, detail)
 				return
 			}
-			s.toast(toastReq{msg: msg, detail: detail})
+			s.toast(env.Note{Title: msg, Detail: detail})
 		},
 		Run:     s.run,
 		RunThen: s.runThen,
@@ -480,7 +478,9 @@ func (s *Shell) post(fn func()) {
 	s.Redraw()
 }
 
-func (s *Shell) toast(t toastReq) {
+// toast queues the notification n, shown on the next build (from any
+// goroutine).
+func (s *Shell) toast(t env.Note) {
 	s.mu.Lock()
 	s.toasts = append(s.toasts, t)
 	s.mu.Unlock()
@@ -494,7 +494,7 @@ func (s *Shell) run(job func() error, okMsg string) {
 		if err != nil {
 			s.errorToast(err.Error(), "")
 		} else if okMsg != "" {
-			s.toast(toastReq{msg: okMsg})
+			s.toast(env.Note{Title: okMsg})
 		}
 		s.Redraw()
 	}
@@ -762,14 +762,31 @@ func (s *Shell) drain(c *ui.Context) {
 	}
 }
 
-func (s *Shell) showToast(c *ui.Context, tr toastReq) {
-	tt := ui.Toast{Title: tr.msg, Description: tr.detail, Timeout: 3 * time.Second, Action: tr.action, OnAction: tr.onAction}
-	tt.Type = toastSuccess
-	if tr.info {
-		tt.Type = toastInfo
+// showToast shows n as a toast. A note whose merge key is showing replaces
+// that toast, which then counts the times it came (×2) and starts its time
+// anew, so a repeated message never piles up.
+func (s *Shell) showToast(c *ui.Context, n env.Note) {
+	key := n.MergeKey()
+	if s.noteCount == nil {
+		s.noteCount = map[string]int{}
 	}
-	if tr.isError {
-		tt.Type, tt.Timeout = "error", 5*time.Second
+	s.noteCount[key]++
+	tt := ui.Toast{
+		ID: key, Title: n.Title, Timeout: n.Level.Timeout(),
+		Action: n.Action, OnAction: n.OnAction,
+		Data:    noteLook{level: n.Level, count: s.noteCount[key]},
+		OnClose: func() { delete(s.noteCount, key) },
+	}
+	if n.Level != env.Attention || n.Action != "" {
+		tt.Description = n.Detail
+	}
+	switch n.Level {
+	case env.Attention:
+		tt.Type = "error"
+	case env.News:
+		tt.Type = toastInfo
+	default:
+		tt.Type = toastSuccess
 	}
 	c.AddToast(tt)
 }
@@ -777,8 +794,8 @@ func (s *Shell) showToast(c *ui.Context, tr toastReq) {
 func (s *Shell) handleNotice(c *ui.Context, n app.Notice) {
 	switch n.Kind {
 	case "core-crash":
-		s.showToast(c, toastReq{msg: firstNonEmpty(n.Title, i18n.T("Mihomo 内核意外退出")), detail: n.Detail, isError: true,
-			action: i18n.T("查看日志"), onAction: func() { s.navigate(env.Logs, "") }})
+		s.showToast(c, env.Note{Level: env.Attention, Title: firstNonEmpty(n.Title, i18n.T("Mihomo 内核意外退出")), Detail: n.Detail,
+			Action: i18n.T("查看日志"), OnAction: func() { s.navigate(env.Logs, "") }})
 	case "invalid-config":
 		nn := n
 		s.invalid, s.invalidOpen = &nn, true
@@ -789,7 +806,7 @@ func (s *Shell) handleNotice(c *ui.Context, n app.Notice) {
 	case "error":
 		s.errorToast(firstNonEmpty(n.Title, n.Detail), detailIf(n))
 	default:
-		s.showToast(c, toastReq{msg: firstNonEmpty(n.Title, n.Detail), detail: detailIf(n), info: true})
+		s.showToast(c, env.Note{Level: env.News, Title: firstNonEmpty(n.Title, n.Detail), Detail: detailIf(n)})
 	}
 }
 
