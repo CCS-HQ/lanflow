@@ -90,11 +90,11 @@ scripts/build-app.sh darwin arm64             # build/darwin-arm64/Lanflow.app �
 
 GitHub Actions（`.github/workflows/release.yml`）随后：
 
-- **校验**（validate）：tag 与上述版本号一致；tag 指向的提交在 main 上；更新签名密钥 `MYGO_UPDATER_PRIVATE_KEY` 已配置；权限组件版本检查通过。地理数据库上游只有每天滚动更新的 `latest`，所以在这里只下载一次，两个平台的构建作业使用同一份并按 SHA-256 核对；三个文件的 SHA-256 写进 Release 说明、附件 `lanflow-<tag>-geodata.sha256` 和各平台的构建信息。
+- **校验**（validate）：tag 与上述版本号一致；tag 指向的提交在 main 上；更新签名密钥 `MYGO_UPDATER_PRIVATE_KEY` 已配置；权限组件版本检查通过。地理数据库上游只有每天滚动更新的 `latest`，所以在这里只下载一次，两个平台的构建作业使用同一份并按 SHA-256 核对；三个文件的 SHA-256 写进 Release 说明和各平台的构建信息。
 - **等待 CI**（wait-ci，与构建并行）：该提交要有一次成功的 CI 运行（推送到 main 或在 tag 上手动触发的才算，PR 的不算）；还在运行就等待，最多 45 分钟；没有或失败则终止，可以在 tag 上手动触发 CI 后重跑。vet、竞态检测、staticcheck、govulncheck、交叉编译和完整的单元 / 界面测试都依赖这次 CI 的结果，构建作业里不再重复。
 - **构建**（macOS、Windows）：准备资源后，只对用到真实内核和地理数据的包（`internal/core`、`controller`、`locate`、`profile`、`capture/agent`、`app`）运行测试，确保它们针对将要发布的内核与数据通过；再用 `scripts/build-app.sh` 构建 macOS arm64 / amd64 的 `.dmg` 和 Windows 安装程序，以及签名的更新包、增量包和更新清单；最后核对包内的权限组件摘要、地理数据库和许可证材料。
 - **构建**（Android）：仓库有发布密钥（`ANDROID_KEYSTORE_BASE64` 等，见 [phone-android.md](phone-android.md#发布)）时，用 `scripts/build-android.sh` 构建并签名 `lanflow-<版本>-android-arm64.apk`，Release 说明里加一段安卓说明；没有密钥时跳过并在运行页给出警告，Release 不带 APK。
-- **发布**（需要以上全部通过）：附上 SBOM（`lanflow-<tag>.spdx.json`）、各二进制的 `go version -m` 构建信息、`THIRD-PARTY-NOTICES.md`，生成 `SHA256SUMS.txt` 与构建来源证明（attestation），创建 Release（更新说明由 GitHub 自动生成），最后上传更新清单——清单一上传，已安装的应用就能看到新版本。
+- **发布**（需要以上全部通过）：Release 页只放安装包（dmg、exe、apk）、自动更新文件（`.tar.gz`、`.delta`、`update-*.json`）和 `SHA256SUMS.txt`，并为它们生成构建来源证明（attestation）。SBOM（`lanflow-<tag>.spdx.json`）、各二进制的 `go version -m` 构建信息和地理数据库的 SHA-256 作为这次运行的附件 `release-records` 保留 90 天，不上传到 Release。说明开头是按设备和系统列出该下哪个文件的表格，之后是随包组件（Mihomo 版本与源代码、第三方声明链接、地理数据库 SHA-256），再接 GitHub 自动生成的更新列表。最后上传更新清单——清单一上传，已安装的应用就能看到新版本。
 
 带 `-` 的 tag（如 `v1.0.0-beta.1`）发布为预发布版。发布流程不使用 Go 构建缓存，所用 action 固定到 commit SHA，由 Dependabot 更新。安装包目前没有 Apple Developer ID 签名、公证和 Windows 代码签名（macOS 为 ad hoc 签名）。
 
