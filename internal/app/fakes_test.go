@@ -62,6 +62,9 @@ type fakeCtrl struct {
 	closedIDs []string
 	// delays records the (url, timeout) of every ProxyDelay call.
 	delays [][2]string
+	// UpdateGeo tracking and optional injection.
+	geoUpdates  int
+	updateGeoFn func() error
 }
 
 func newFakeCtrl() *fakeCtrl {
@@ -111,7 +114,16 @@ func (f *fakeCtrl) ReloadConfig(_ context.Context, path string) error {
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeCtrl) UpdateGeo(context.Context) error { return nil }
+func (f *fakeCtrl) UpdateGeo(context.Context) error {
+	f.mu.Lock()
+	f.geoUpdates++
+	fn := f.updateGeoFn
+	f.mu.Unlock()
+	if fn != nil {
+		return fn()
+	}
+	return nil
+}
 func (f *fakeCtrl) Proxies(context.Context) (map[string]controller.Proxy, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

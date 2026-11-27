@@ -1,6 +1,8 @@
 package view
 
 import (
+	"bytes"
+	"image/png"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/app/fake"
 	"lanflow/internal/model"
+	"lanflow/internal/view/trayart"
 )
 
 // TestDelayRebuildWait: node delays alone rebuild the tray menu at most
@@ -96,5 +99,79 @@ func TestTrayTrafficAndMetricsSkipProxiesClone(t *testing.T) {
 	tr.changed(app.TopicCapture)
 	if api.proxies.Load() != 1 {
 		t.Fatalf("CaptureStatus change should refresh tray once, got Proxies=%d", api.proxies.Load())
+	}
+}
+
+func TestTrayStatusMenuItemAndColoredDots(t *testing.T) {
+	for _, tc := range []struct {
+		state model.CoreState
+		dark  bool
+		want  string
+	}{
+		{model.CoreRunning, false, "green"},
+		{model.CoreRunning, true, "green"},
+		{model.CoreStarting, false, "orange"},
+		{model.CoreError, false, "red"},
+		{model.CoreMissing, true, "red"},
+		{model.CoreStopped, false, "ring"},
+	} {
+		raw := trayart.StatusDotPNG(tc.state, tc.dark)
+		img, err := png.Decode(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("StatusDotPNG(%v, %v): %v", tc.state, tc.dark, err)
+		}
+		if img.Bounds().Dx() != 32 || img.Bounds().Dy() != 32 {
+			t.Fatalf("StatusDotPNG(%v, %v) size = %v, want 32x32", tc.state, tc.dark, img.Bounds())
+		}
+		r, g, b, a := img.At(15, 15).RGBA()
+		r8, g8, b8, a8 := r>>8, g>>8, b>>8, a>>8
+		switch tc.want {
+		case "green":
+			if a8 != 255 || !(g8 > r8 && g8 > b8) {
+				t.Fatalf("%v/%v center RGBA=(%d,%d,%d,%d), want solid green", tc.state, tc.dark, r8, g8, b8, a8)
+			}
+		case "orange":
+			if a8 != 255 || !(r8 > g8 && g8 > b8) {
+				t.Fatalf("%v/%v center RGBA=(%d,%d,%d,%d), want solid orange", tc.state, tc.dark, r8, g8, b8, a8)
+			}
+		case "red":
+			if a8 != 255 || !(r8 > g8 && r8 > b8) {
+				t.Fatalf("%v/%v center RGBA=(%d,%d,%d,%d), want solid red", tc.state, tc.dark, r8, g8, b8, a8)
+			}
+		case "ring":
+			if a8 != 0 {
+				t.Fatalf("%v/%v center alpha=%d, want hollow ring center (0)", tc.state, tc.dark, a8)
+			}
+			_, _, _, ra := img.At(15, 10).RGBA()
+			if ra>>8 != 255 {
+				t.Fatalf("%v/%v ring perimeter alpha=%d, want 255", tc.state, tc.dark, ra>>8)
+			}
+		}
+	}
+
+	api := fake.NewInstant()
+	if err := api.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	tr := &tray{h: testTrayHost{api: api}}
+	tr.refresh(true)
+	tr.mu.Lock()
+	menu := tr.menu
+	tr.mu.Unlock()
+	if menu == nil {
+		t.Fatal("expected tray menu to be built")
+	}
+	it := menu.ItemByID("status")
+	if it == nil {
+		t.Fatal("missing status menu item")
+	}
+	if it.Disabled {
+		t.Fatal("status menu item must be enabled so the colored dot is not dimmed gray")
+	}
+	if it.Icon == nil {
+		t.Fatal("status menu item must have a colored dot Icon")
+	}
+	if got := it.Label; got == statusLine(api.Status()) || got != statusMenuLabel(api.Status()) {
+		t.Fatalf("status menu label = %q, want %q without monochrome dot prefix", got, statusMenuLabel(api.Status()))
 	}
 }

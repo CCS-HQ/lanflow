@@ -118,6 +118,7 @@ func (s *Service) adoptedLocked(set model.Settings, privileged bool) {
 	s.afterConfigChange()
 	s.scheduleMainProbe()
 	s.goBackground(s.fetchYou)
+	s.signalGeoAutoUpdate()
 }
 
 // stopStray stops a core of ours that runs without the manager knowing

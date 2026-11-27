@@ -28,7 +28,8 @@ import (
 func (s *Service) UseCore(version string) (err error) {
 	version = normalizeVersion(version)
 	var target, desiredPath string
-	if version == "" {
+	if version == "" || s.isBundledVersion(version) {
+		version = ""
 		bin, _ := s.bundledCore()
 		if bin == "" {
 			return errors.New(coreMissingText("", core.ErrNotFound))

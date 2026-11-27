@@ -118,7 +118,11 @@ func (s *Service) saveSettingsWith(edit func(cur model.Settings) model.Settings,
 	tsToggled := in.TailscaleCompat != old.TailscaleCompat || in.TailscaleBuiltin.Enabled != old.TailscaleBuiltin.Enabled
 	tsChanged := (tsToggled && s.detectTailscale()) || s.tailscaleSettingsChanged(old, in)
 	coexistChanged := (in.ATrustCompat != old.ATrustCompat && s.detectCoexist()) || s.coexistSettingsChanged(old, in) || tsChanged
+	geoSignal := in.Geo.AutoUpdate && (!old.Geo.AutoUpdate || in.Geo.IntervalHours != old.Geo.IntervalHours)
 	if !running {
+		if geoSignal {
+			s.signalGeoAutoUpdate()
+		}
 		return nil // a stopped core picks the new settings up at its next start
 	}
 	if (in.TUNSetDNS != old.TUNSetDNS || coexistChanged) && in.TUN == old.TUN {
@@ -147,6 +151,9 @@ func (s *Service) saveSettingsWith(edit func(cur model.Settings) model.Settings,
 	}
 	if in.Mode != old.Mode {
 		s.rebuildRoutes()
+	}
+	if geoSignal {
+		s.signalGeoAutoUpdate()
 	}
 	return nil
 }
@@ -481,20 +488,35 @@ func (s *Service) RuntimeConfig() ([]model.RuntimeLine, error) {
 
 // UpdateGeoData asks the running core to download the geo databases.
 func (s *Service) UpdateGeoData() error {
+	_, err := s.updateGeoData(false)
+	return err
+}
+
+func (s *Service) updateGeoData(auto bool) (bool, error) {
+	if auto {
+		if !s.geoUpd.runMu.TryLock() {
+			return false, nil
+		}
+	} else {
+		s.geoUpd.runMu.Lock()
+	}
+	defer s.geoUpd.runMu.Unlock()
+
 	if !s.running() {
-		return errors.New(i18n.T("请先启动内核，再更新地理数据库。"))
+		return false, errors.New(i18n.T("请先启动内核，再更新地理数据库。"))
 	}
 	ctx, cancel := s.svcCtx(5 * time.Minute)
 	defer cancel()
 	if err := s.d.ctrl.UpdateGeo(ctx); err != nil {
-		return fmt.Errorf(i18n.T("更新地理数据库失败：%v"), err)
+		return false, fmt.Errorf(i18n.T("更新地理数据库失败：%v"), err)
 	}
+	s.clearGeoRetry()
 	err := s.updateSettings(func(set *model.Settings) {
 		set.Geo.UpdatedAt = s.d.now()
 		s.state.geoInfoAt = time.Time{} // GeoDataInfo re-reads the files
 	})
 	s.em.emit(TopicSettings)
-	return err
+	return true, err
 }
 
 // changedSettings names the top-level settings that differ (the

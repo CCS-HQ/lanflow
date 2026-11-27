@@ -102,6 +102,7 @@ type Service struct {
 	fb      feedbackState  // reports built for 反馈问题 and the automatic report (feedback.go); its own lock
 	capst   captureState   // HTTPS 选择性解密 (capture.go); its own locks
 	tsb     tsBuiltinState // 内置 Tailscale (tailscale_builtin.go); its own lock
+	geoUpd  geoUpdateState // overdue geo database auto-update (geoupdate.go)
 }
 
 // state is everything the reads return. Every slice/map handed out is copied.
@@ -299,6 +300,7 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 		rootCtx:    ctx,
 		rootCancel: cancel,
 		em:         newEmitter(),
+		geoUpd:     geoUpdateState{checkCh: make(chan struct{}, 1)},
 	}
 	nw.clock = func() time.Time { return s.d.now() }
 	s.alog, _ = applog.Open(o.LogDir) // a failure keeps the log in memory only
@@ -365,6 +367,7 @@ func (s *Service) run() {
 	s.goBackground(s.watchTailscale)
 	s.goBackground(s.bootstrap)
 	s.goBackground(s.coreUpdateLoop)
+	s.goBackground(s.geoAutoUpdateLoop)
 	s.goBackground(func() { s.stats.loop(s.rootCtx) })
 	s.goBackground(s.captureLoop)
 }

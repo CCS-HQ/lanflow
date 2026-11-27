@@ -372,6 +372,7 @@ func (s *Service) launchLocked(bin string, set model.Settings, helperOK bool, pr
 	s.afterConfigChange()
 	s.scheduleMainProbe()
 	s.goBackground(s.fetchYou)
+	s.signalGeoAutoUpdate()
 	return nil
 }
 

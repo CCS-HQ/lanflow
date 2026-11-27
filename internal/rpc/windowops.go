@@ -166,7 +166,8 @@ func (s *Server) UIAttached() bool {
 	return s.ui != nil
 }
 
-// SendUI sends a command to the attached window process; false when none.
+// SendUI sends a command to the attached window process; false when none
+// or when the attached session is closing or failed before sending.
 func (s *Server) SendUI(cmd, arg string) bool {
 	s.mu.Lock()
 	cur := s.ui
@@ -174,24 +175,29 @@ func (s *Server) SendUI(cmd, arg string) bool {
 	if cur == nil {
 		return false
 	}
-	cur.sendUI(UICommand{Cmd: cmd, Arg: arg})
-	return true
+	return cur.sendUI(UICommand{Cmd: cmd, Arg: arg})
 }
 
-func (ss *session) sendUI(u UICommand) {
+func (ss *session) sendUI(u UICommand) bool {
+	if ss.ctx.Err() != nil {
+		return false
+	}
 	b, err := json.Marshal(u)
 	if err != nil {
 		log.Printf("lanflow: local api: ui command: %v", err)
-		return
+		return false
 	}
 	// Waited for, briefly: the caller may quit right after (UIQuit).
 	om := ss.enqueue(message{Method: "ui", Params: b}, "", true)
 	if om == nil {
-		return
+		return false
 	}
 	select {
 	case <-om.done:
+		return true
 	case <-ss.wdone:
+		return false
 	case <-time.After(flushTimeout):
+		return true
 	}
 }

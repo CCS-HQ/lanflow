@@ -1654,7 +1654,7 @@ func (f *Fake) CoreReleases(channel string, refresh bool) ([]model.CoreRelease, 
 	copy(out, list)
 	for i := range out {
 		for _, c := range f.coresLocked() {
-			if !c.Bundled && c.Version == out[i].Version {
+			if c.Version != "" && c.Version == out[i].Version {
 				out[i].Installed = true
 			}
 		}
@@ -1682,6 +1682,12 @@ func (f *Fake) InstallCore(channel, version string) error {
 	}
 	const total = int64(18 << 20)
 	f.mu.Lock()
+	for _, c := range f.coresLocked() {
+		if c.Bundled && c.Version != "" && c.Version == version {
+			f.mu.Unlock()
+			return nil
+		}
+	}
 	if f.coreDL.Active {
 		f.mu.Unlock()
 		return errors.New(i18n.T("内核正在下载中，请稍候。"))
@@ -1729,6 +1735,11 @@ func (f *Fake) UseCore(version string) error {
 	}
 	installed := version == ""
 	for _, c := range f.coresLocked() {
+		if c.Bundled && c.Version != "" && c.Version == version {
+			version = ""
+			installed = true
+			break
+		}
 		if !c.Bundled && c.Version == version {
 			installed = true
 		}
@@ -1811,6 +1822,12 @@ func (f *Fake) DownloadCore(version string) error {
 	}
 	const total = int64(18 << 20)
 	f.mu.Lock()
+	for _, c := range f.coresLocked() {
+		if c.Bundled && c.Version != "" && c.Version == version {
+			f.mu.Unlock()
+			return nil
+		}
+	}
 	if f.coreDL.Active {
 		f.mu.Unlock()
 		return errors.New(i18n.T("内核正在下载中，请稍候。"))

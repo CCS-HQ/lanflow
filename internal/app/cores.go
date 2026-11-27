@@ -283,6 +283,16 @@ func (s *Service) bundledCore() (bin, version string) {
 	return s.cores.bundleBin, s.cores.bundled
 }
 
+// isBundledVersion reports whether version matches the bundled core's
+// known version.
+func (s *Service) isBundledVersion(version string) bool {
+	if version == "" {
+		return false
+	}
+	bin, bv := s.bundledCore()
+	return bin != "" && bv != "" && bv == version
+}
+
 // learnBundledVersion runs the bundled core once (-v) and remembers its
 // version; called from bootstrap, off the UI thread.
 func (s *Service) learnBundledVersion() {
@@ -296,10 +306,39 @@ func (s *Service) learnBundledVersion() {
 	if err != nil {
 		return
 	}
+	ver := normalizeVersion(got)
 	s.cores.mu.Lock()
-	s.cores.bundled = normalizeVersion(got)
+	s.cores.bundled = ver
 	s.cores.mu.Unlock()
+	if ver != "" {
+		s.pruneBundledDuplicate(ver)
+	}
 	s.em.emit(TopicCores)
+}
+
+// pruneBundledDuplicate deletes an unused managed copy under cores/<version>
+// when it matches the bundled core so upgrades that promote a release into the
+// bundle leave no redundant duplicate behind.
+func (s *Service) pruneBundledDuplicate(version string) {
+	if version == "" {
+		return
+	}
+	if active, _ := s.activeCore(); active == version {
+		return
+	}
+	s.mu.Lock()
+	dl := s.coreDLLocked()
+	busy := dl.Active && dl.Version == version
+	s.mu.Unlock()
+	if busy || !s.isInstalled(version) {
+		return
+	}
+	if err := os.RemoveAll(s.coreVersionDir(version)); err != nil {
+		s.alog.Warnf("remove duplicate managed core %s: %v", version, err)
+		return
+	}
+	s.alog.Infof("removed duplicate managed core %s (matches bundled)", version)
+	s.refreshCores()
 }
 
 // activeCore returns the version in use: Settings.CoreVersion when its
@@ -326,7 +365,13 @@ func (s *Service) InstalledCores() []model.InstalledCore {
 	managed := s.installedLocked()
 	out := make([]model.InstalledCore, 0, len(managed)+1)
 	if bundleBin != "" {
-		b := model.InstalledCore{Version: bundleVer, Bundled: true, Active: active == "" && !custom, Path: bundleBin, Source: "bundled"}
+		b := model.InstalledCore{
+			Version: bundleVer,
+			Bundled: true,
+			Active:  (active == "" && !custom) || (bundleVer != "" && active == bundleVer),
+			Path:    bundleBin,
+			Source:  "bundled",
+		}
 		if st := &s.cores.bundleStat; st.path == bundleBin {
 			b.Size, b.InstalledAt = st.size, st.mod
 		} else if fi, err := os.Stat(bundleBin); err == nil {
@@ -339,6 +384,9 @@ func (s *Service) InstalledCores() []model.InstalledCore {
 		out = append(out, b)
 	}
 	for _, c := range managed {
+		if bundleBin != "" && bundleVer != "" && c.Version == bundleVer {
+			continue
+		}
 		c.Active = c.Version == active
 		out = append(out, c)
 	}

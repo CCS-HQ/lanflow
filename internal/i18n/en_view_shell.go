@@ -50,6 +50,7 @@ func init() {
 
 		// internal/view/tray.go
 		"● 运行中 · ↓ %s": "● Running · ↓ %s",
+		"运行中 · ↓ %s":   "Running · ↓ %s",
 		"◌ 启动中…":       "◌ Starting…",
 		"● 内核异常":       "● Core error",
 		"● 未找到内核":      "● Core not found",

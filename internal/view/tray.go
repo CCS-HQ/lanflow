@@ -31,9 +31,10 @@ type tray struct {
 	drawn string                    // look.key() + ink of the icon set last
 	node  string                    // the main group's current node, for the title
 	title string                    // text beside the icon (macOS)
-	tip   string                    // notification area tooltip (Windows)
-	tipAt time.Time                 // last live speed tooltip update
-	icons map[string]*mygo.MenuIcon // group icons by reference (traycmd.go)
+	tip         string                            // notification area tooltip (Windows)
+	tipAt       time.Time                         // last live speed tooltip update
+	icons       map[string]*mygo.MenuIcon         // group icons by reference (traycmd.go)
+	statusIcons map[model.CoreState]*mygo.MenuIcon // colored status indicator dots
 
 	// The node delays the menu shows: a change of them alone rebuilds the
 	// menu at most every trayDelayGap (refresh).
@@ -79,24 +80,14 @@ func startTray(h host) (*tray, error) {
 	t.OnAppearanceChange(func() {
 		tr.mu.Lock()
 		tr.icons = nil
+		tr.statusIcons = nil
 		tr.mu.Unlock()
 		tr.drawIcon(true)
 		tr.refresh(true)
 	})
 	if runtime.GOOS == "windows" {
-		// Left click opens the window, right click the menu.
+		// Left click opens the window; right click pops up the installed menu.
 		t.OnClick(func() { h.showWindow("") })
-		t.OnRightClick(func() {
-			tr.mu.Lock()
-			m := tr.menu
-			tr.mu.Unlock()
-			if m == nil {
-				return
-			}
-			t.SetMenu(m)
-			t.PopUpMenu()
-			t.SetMenu(nil)
-		})
 	}
 	tr.refresh(true)
 	return tr, nil
@@ -130,7 +121,7 @@ func (tr *tray) changed(t app.Topic) {
 		tr.mu.Unlock()
 		if menu != nil {
 			if it := menu.ItemByID("status"); it != nil {
-				it.SetLabel(statusLine(st))
+				it.SetLabel(statusMenuLabel(st))
 			}
 		}
 		if runtime.GOOS == "windows" {
@@ -219,12 +210,12 @@ func (tr *tray) refresh(force bool) {
 		tr.mu.Lock()
 		tr.menu = menu
 		tr.mu.Unlock()
-		if tr.t != nil && runtime.GOOS != "windows" {
+		if tr.t != nil {
 			tr.t.SetMenu(menu)
 		}
 		tr.setToolTip(st, capOn, true)
 	} else if it := menu.ItemByID("status"); it != nil {
-		it.SetLabel(statusLine(st))
+		it.SetLabel(statusMenuLabel(st))
 		if runtime.GOOS == "windows" {
 			tr.setToolTip(st, capOn, true)
 		}
@@ -316,6 +307,47 @@ func statusLine(st model.Status) string {
 	}
 }
 
+func statusMenuLabel(st model.Status) string {
+	switch st.Core {
+	case model.CoreRunning:
+		return i18n.Tf("运行中 · ↓ %s", env.FmtSpeed(st.Down))
+	case model.CoreStarting:
+		return i18n.T("启动中…")
+	case model.CoreError:
+		return i18n.T("内核异常")
+	case model.CoreMissing:
+		return i18n.T("未找到内核")
+	default:
+		return i18n.T("未启动")
+	}
+}
+
+func (tr *tray) statusIcon(state model.CoreState) *mygo.MenuIcon {
+	tr.mu.Lock()
+	ic := tr.statusIcons[state]
+	tr.mu.Unlock()
+	if ic != nil {
+		return ic
+	}
+	dark := tr.t != nil && tr.t.Dark()
+	built, err := mygo.NewMenuIcon(trayart.StatusDotPNG(state, dark), false)
+	if err != nil {
+		return nil
+	}
+	tr.mu.Lock()
+	if tr.statusIcons == nil {
+		tr.statusIcons = make(map[model.CoreState]*mygo.MenuIcon, 5)
+	}
+	if existing := tr.statusIcons[state]; existing != nil {
+		ic = existing
+	} else {
+		tr.statusIcons[state] = built
+		ic = built
+	}
+	tr.mu.Unlock()
+	return ic
+}
+
 // build makes the menu template (docs/design.md §7). acc is the global
 // shortcut of the settings, shown beside 系统代理 ("" = none).
 func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subscription, g model.ProxyGroup, hasGroup bool, acc string, extra []*mygo.MenuItem) *mygo.Menu {
@@ -324,7 +356,7 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 	run := st.Core == model.CoreRunning
 	busy := st.Core == model.CoreStarting || st.Core == model.CoreMissing
 	items := []*mygo.MenuItem{
-		{ID: "status", Label: statusLine(st), Disabled: true},
+		{ID: "status", Label: statusMenuLabel(st), Icon: tr.statusIcon(st.Core), Click: func(*mygo.MenuItem, *mygo.Window) { h.showWindow("") }},
 		mygo.Separator(),
 	}
 	if len(extra) > 0 {
