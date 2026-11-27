@@ -102,8 +102,14 @@ type Env struct {
 	// Arg returns and clears the pending navigation arg for p.
 	Arg func(p Page) string
 
-	// Toast shows a transient message at the bottom of the window. Error
-	// toasts stay 5 s and offer 「查看详情」 with the full text (docs/design.md §6.5).
+	// Notify shows a transient notification (docs/notifications.md): its
+	// Level decides how long it shows and how it looks, the shell where.
+	// Safe from any goroutine. Nil in Env values built before the shell
+	// existed.
+	Notify func(n Note)
+
+	// Toast is Notify for the common cases: Done, or Attention with
+	// 「查看详情」 opening the full text when isError.
 	Toast func(msg string, isError bool)
 
 	// ToastDetail is Toast with a separate detail: the toast shows msg and

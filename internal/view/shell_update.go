@@ -26,8 +26,8 @@ func (s *Shell) CheckUpdatesAtLaunch() {
 		return
 	}
 	page.CheckAppUpdate(true, func(version string) {
-		s.toast(toastReq{msg: i18n.Tf("澜流有新版本 %s", version), detail: i18n.T("在「设置 › 常规 › 关于」中下载并重启。"), action: i18n.T("前往设置"),
-			onAction: func() { s.post(func() { s.navigate(env.Settings, "general") }) }})
+		s.toast(env.Note{Level: env.News, Title: i18n.Tf("澜流有新版本 %s", version), Detail: i18n.T("在「设置 › 常规 › 关于」中下载并重启。"), Action: i18n.T("前往设置"),
+			OnAction: func() { s.post(func() { s.navigate(env.Settings, "general") }) }})
 	})
 }
 

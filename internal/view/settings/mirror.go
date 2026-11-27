@@ -237,7 +237,7 @@ func (p *Page) testMirrors() {
 			}
 		}
 		if best == "" {
-			e.Toast(i18n.T("所有镜像站都无法访问"), false)
+			e.Note(env.Note{Level: env.Attention, Title: i18n.T("所有镜像站都无法访问")})
 		} else {
 			e.Toast(i18n.Tf("最快的镜像：%s", mirrorLabel(best)), false)
 		}

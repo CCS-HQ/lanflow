@@ -85,7 +85,7 @@ func (s *Shell) importFiles(paths []string) {
 		}
 	}
 	if len(yaml) == 0 {
-		s.toast(toastReq{msg: i18n.T("只能导入 .yaml / .yml 配置文件"), isError: true})
+		s.toast(env.Note{Level: env.Attention, Title: i18n.T("只能导入 .yaml / .yml 配置文件")})
 		return
 	}
 	// Without a subscription yet, the first dropped file becomes the

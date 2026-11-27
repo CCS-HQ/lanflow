@@ -126,7 +126,7 @@ func (s *Shell) palItems() []palItem {
 			s.run(api.TestSites, "")
 		})
 	}
-	add(palActions, "doc", i18n.T("清空日志"), "", i18n.Both("清空日志")+" clear logs", func() { api.ClearLogs(); s.toast(toastReq{msg: i18n.T("日志已清空")}) })
+	add(palActions, "doc", i18n.T("清空日志"), "", i18n.Both("清空日志")+" clear logs", func() { api.ClearLogs(); s.toast(env.Note{Title: i18n.T("日志已清空")}) })
 	job("down", "更新地理数据库", i18n.T("地理数据库已更新"), "geoip geosite update", api.UpdateGeoData)
 	add(palActions, "doc", i18n.T("查看运行时配置"), "", i18n.Both("查看运行时配置")+" runtime config yaml", func() { s.navigate(env.Settings, "override#"+i18n.T("运行时配置")) })
 	add(palActions, "info", i18n.T("反馈问题"), "", i18n.Both("反馈问题")+" feedback bug report", func() { s.OpenFeedback("") })

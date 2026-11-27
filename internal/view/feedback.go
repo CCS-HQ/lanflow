@@ -322,7 +322,7 @@ func (s *Shell) feedbackPreviewButtons(c *ui.Context, info model.FeedbackInfo) {
 			if sent.URL != "" {
 				detail += "\n" + sent.URL
 			}
-			s.toast(toastReq{msg: msg, detail: detail})
+			s.toast(env.Note{Title: msg, Detail: detail})
 		})
 	}
 }
@@ -347,7 +347,7 @@ func (s *Shell) saveFeedback(id string) {
 				return
 			}
 			env.RevealInFolder(path)
-			s.toast(toastReq{msg: i18n.Tf("已保存到 %s", filepath.Base(path))})
+			s.toast(env.Note{Title: i18n.Tf("已保存到 %s", filepath.Base(path))})
 		})
 	})
 }

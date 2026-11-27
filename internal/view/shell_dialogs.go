@@ -110,7 +110,7 @@ func (s *Shell) errorToast(msg, detail string) {
 	if detail != "" {
 		full = strings.TrimSpace(msg + "\n\n" + detail)
 	}
-	s.toast(toastReq{msg: short, isError: true, action: i18n.T("查看详情"), onAction: func() { s.showDetail(full) }})
+	s.toast(env.Note{Level: env.Attention, Title: short, Action: i18n.T("查看详情"), OnAction: func() { s.showDetail(full) }})
 }
 
 // splitError returns the toast line of an error message and the full text:
@@ -162,7 +162,7 @@ func (s *Shell) dialogs(c *ui.Context, st model.Status) {
 		}, func() {
 			if ui.Button(c, i18n.T("复制")).Clicked() {
 				c.WriteClipboard(d.text)
-				c.Toast(i18n.T("已复制"))
+				s.toast(env.Note{Title: i18n.T("已复制")})
 			}
 			if ui.PrimaryButton(c, i18n.T("好")).Clicked() {
 				s.detailOpen = false
@@ -187,7 +187,7 @@ func (s *Shell) dialogs(c *ui.Context, st model.Status) {
 		}, func() {
 			if n.Detail != "" && ui.Button(c, i18n.T("复制错误")).Clicked() {
 				c.WriteClipboard(n.Detail)
-				c.Toast(i18n.T("已复制"))
+				s.toast(env.Note{Title: i18n.T("已复制")})
 			}
 			if ui.PrimaryButton(c, i18n.T("好")).Clicked() {
 				s.invalidOpen = false
@@ -216,7 +216,7 @@ func (s *Shell) dialogs(c *ui.Context, st model.Status) {
 				if err != nil {
 					s.errorToast(err.Error(), "")
 				} else if ok != "" {
-					s.toast(toastReq{msg: ok})
+					s.toast(env.Note{Title: ok})
 				}
 			})
 		}

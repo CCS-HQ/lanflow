@@ -579,7 +579,7 @@ func (p *Page) nodeChainMenu(m *ui.Menu, g model.ProxyGroup, n string, px model.
 		ok := g.Name != "GLOBAL" && !chainNames[g.Name]
 		if m.Item(i18n.T("以所在代理组为入口新建链路…")).Disabled(!ok).Chosen() {
 			p.newChain(g.Name, "")
-			p.e.Toast(i18n.Tf("订阅提供方的节点不能直接做入口，已改用它所在的代理组「%s」", g.Name), false)
+			p.e.Note(env.Note{Level: env.News, Title: i18n.Tf("订阅提供方的节点不能直接做入口，已改用它所在的代理组「%s」", g.Name)})
 		}
 	default:
 		if m.Item(i18n.T("以此为落地新建链路…")).Chosen() {
