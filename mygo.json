@@ -6,7 +6,7 @@
   "out": "build",
   "updates": {
     "publicKey": "UKej6Hn9Mhc/rYMULlUmhe1cfJH06cqewjsbRK0739Y=",
-    "github": "CCS-HQ/lanflow"
+    "github": "Owlbay/lanflow"
   },
   "ios": {
     "infoPlist": {
