@@ -71,6 +71,17 @@ func TestHandOver(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(p.Home, "geoip.metadb")); string(b) != "geo2" {
 		t.Errorf("geoip.metadb = %q after update", b)
 	}
+
+	// StageConfig before a start returns source.yaml, which Start then
+	// hands over again: the file stays as it is.
+	staged := filepath.Join(p.Home, sourceName)
+	before, _ := os.ReadFile(staged)
+	if err := handOver(p, work, staged); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(staged); string(after) != string(before) {
+		t.Errorf("handing source.yaml over again changed it: %q", after)
+	}
 }
 
 func TestRebaseLeavesOtherPaths(t *testing.T) {

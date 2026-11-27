@@ -107,5 +107,5 @@ codesign -dv --entitlements - build/ios-simulator/Lanflow.app
 - 改变 `dns.fake-ip-range` 后热重载，TUN 地址与隧道网络会不一致，需要重启 VPN。
 - `tun.route-exclude-address` 等路由类设置不生效（路由由 NetworkExtension 设置，目前是全局路由）。
 - 内核日志在 App Group 的 `core/mihomo.log`，服务层的 `spec.LogFile` 不会被写入。
-- 服务层要让热重载经过 `ConfigStager`，手机上需要始终走 "TUN runner" 分支（`state.tunRunner`）；否则会把主 App 沙盒里的 `runtime.yaml` 路径交给扩展，Mihomo 以路径不安全拒绝。
+- 服务层在手机上启动和热重载都经 `ConfigStager.StageConfig`（`reloadPath` 的手机分支由 Android 分支提交），与设置里的 TUN 开关无关。VPN 未连接时（启动前）`StageConfig` 只把配置交到 App Group，返回 `source.yaml`，由扩展启动时生成 `config.yaml`；已连接时经扩展生成并返回 `config.yaml`。
 - 每次 App 启动若服务层直接 `Start`，正在运行的 VPN 会先停后起；接管运行中的 VPN 已实现为 `core.Adopter`，服务层手机分支目前没有调用。

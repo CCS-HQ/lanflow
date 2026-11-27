@@ -225,6 +225,12 @@ func (v *VPN) StageConfig(ctx context.Context, spec core.Spec) (string, error) {
 	if err := handOver(p, spec.WorkDir, spec.Config); err != nil {
 		return "", fmt.Errorf("无法把配置交给系统 VPN：%w", err)
 	}
+	// Before a start the tunnel is not up to stage it: the handed-over
+	// copy is the config, and the extension stages it as it starts (Start
+	// hands that same file over again, unchanged).
+	if st, err := v.queryStatus(ctx); err != nil || (st != "connected" && st != "reasserting") {
+		return filepath.Join(p.Home, sourceName), nil
+	}
 	var reply struct {
 		Data string `json:"data"`
 	}
