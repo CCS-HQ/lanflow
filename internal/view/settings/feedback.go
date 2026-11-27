@@ -19,11 +19,11 @@ import (
 // can then only be saved to a file.
 
 // feedbackDocURL explains the report contract for a self-hosted endpoint.
-const feedbackDocURL = "https://github.com/CCS-HQ/lanflow/blob/main/docs/feedback-api.md"
+const feedbackDocURL = "https://github.com/Owlbay/lanflow/blob/main/docs/feedback-api.md"
 
 // repoURL is the project's GitHub page, where 关于 › 在 GitHub 上点 Star
 // sends the user.
-const repoURL = "https://github.com/CCS-HQ/lanflow"
+const repoURL = "https://github.com/Owlbay/lanflow"
 
 type feedbackUI struct {
 	open         bool
