@@ -581,8 +581,8 @@ func (s *Shell) ShowWindow() {
 	if s.win == nil {
 		return
 	}
-	s.win.Show()
 	s.win.Restore()
+	s.win.Show()
 	s.win.Focus()
 }
 

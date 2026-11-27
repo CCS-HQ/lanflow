@@ -431,12 +431,14 @@ func (s *Service) coreReleases(channel string, refresh bool) (list []model.CoreR
 	return s.markInstalled(list), nil, nil
 }
 
-// markInstalled copies list with Installed set from the cores directory.
+// markInstalled copies list with Installed set from the cores directory or
+// the bundled core.
 func (s *Service) markInstalled(list []model.CoreRelease) []model.CoreRelease {
+	bundleBin, bundleVer := s.bundledCore()
 	out := make([]model.CoreRelease, len(list))
 	copy(out, list)
 	for i := range out {
-		out[i].Installed = s.isInstalled(out[i].Version)
+		out[i].Installed = s.isInstalled(out[i].Version) || (bundleBin != "" && bundleVer != "" && out[i].Version == bundleVer)
 	}
 	return out
 }

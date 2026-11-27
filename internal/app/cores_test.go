@@ -694,3 +694,83 @@ func TestCoreUpdateLoopNotifiesOrInstalls(t *testing.T) {
 		t.Fatalf("expected a fast restart: stops=%d running=%v", h.mgr.stops-stops, h.mgr.Running())
 	}
 }
+
+func TestBundledStableCoreDeduplicated(t *testing.T) {
+	_, _ = apiServer(t, sampleReleases(), http.StatusOK)
+	srv, hits := coreServer(t, []byte("dup core"), http.StatusOK)
+	useCoreServer(t, srv)
+
+	h := newHarness(t, func(h *harness) {
+		h.core.findFn = func(custom string) (string, error) {
+			if custom == "" {
+				return filepath.Join(h.dir, "bundled-mihomo"), nil
+			}
+			return realFind(custom)
+		}
+		h.core.versionFn = func(string) (string, error) { return "v1.19.34", nil }
+	})
+	_ = os.WriteFile(filepath.Join(h.dir, "bundled-mihomo"), []byte("bundled"), 0o700)
+
+	// Simulate an existing managed v1.19.34 on disk (active first, then bundled active).
+	dupBin := h.s.coreVersionPath("v1.19.34")
+	if err := os.MkdirAll(filepath.Dir(dupBin), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dupBin, []byte("dup core"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	set := h.s.Settings()
+	set.CoreVersion = "v1.19.34"
+	set.CorePath = dupBin
+	if err := h.s.SaveSettings(set); err != nil {
+		t.Fatal(err)
+	}
+
+	h.s.learnBundledVersion()
+
+	// Active managed core matching bundled still shows as one active bundled row
+	// and is preserved on disk while in use.
+	list := h.s.InstalledCores()
+	if len(list) != 1 || !list[0].Bundled || !list[0].Active || list[0].Version != "v1.19.34" {
+		t.Fatalf("InstalledCores (managed active) = %+v, want single active bundled v1.19.34", list)
+	}
+	if _, err := os.Stat(dupBin); err != nil {
+		t.Fatalf("active managed core should not be removed while active: %v", err)
+	}
+
+	// CoreReleases marks the bundled version as already installed, and InstallCore skips downloading it.
+	rels, err := h.s.CoreReleases(model.CoreChannelStable, false)
+	if err != nil {
+		t.Fatalf("CoreReleases: %v", err)
+	}
+	if len(rels) == 0 || rels[0].Version != "v1.19.34" || !rels[0].Installed {
+		t.Fatalf("bundled release should be marked Installed: %+v", rels)
+	}
+	hitsBefore := hits.Load()
+	if err := h.s.InstallCore(model.CoreChannelStable, "v1.19.34"); err != nil {
+		t.Fatalf("InstallCore(bundled version): %v", err)
+	}
+	if hits.Load() != hitsBefore {
+		t.Fatalf("InstallCore downloaded bundled version %d times, want 0", hits.Load()-hitsBefore)
+	}
+
+	// Switching by the bundled version string resolves to the bundled binary.
+	if err := h.s.UseCore("v1.19.34"); err != nil {
+		t.Fatalf("UseCore(v1.19.34): %v", err)
+	}
+	if s := h.s.Settings(); s.CorePath != "" || s.CoreVersion != "" {
+		t.Fatalf("UseCore(bundled version) should clear CorePath/CoreVersion, got %+v", s)
+	}
+
+	// Unused duplicate copy is pruned when bundled version is learned.
+	h.s.cores.mu.Lock()
+	h.s.cores.bundled = ""
+	h.s.cores.mu.Unlock()
+	h.s.learnBundledVersion()
+	if _, err := os.Stat(dupBin); !os.IsNotExist(err) {
+		t.Fatalf("unused duplicate managed core should be pruned, err=%v", err)
+	}
+	if list := h.s.InstalledCores(); len(list) != 1 || !list[0].Bundled || !list[0].Active {
+		t.Fatalf("InstalledCores after prune = %+v", list)
+	}
+}

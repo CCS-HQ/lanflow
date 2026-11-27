@@ -37,7 +37,7 @@ func (s *Service) InstallCore(channel, version string) (err error) {
 	if channelOf(version) != channel {
 		return fmt.Errorf(i18n.T("版本 %s 不属于所选的更新通道。"), version)
 	}
-	if s.isInstalled(version) {
+	if s.isInstalled(version) || s.isBundledVersion(version) {
 		return nil
 	}
 

@@ -357,6 +357,58 @@ func PNG(l Look, ink Ink) []byte {
 	return buf.Bytes()
 }
 
+// StatusDotPNG renders a 32×32 PNG status indicator for the tray menu
+// "status" row, colored according to CoreState so enabled menu items stay
+// vivid on both Windows and macOS.
+func StatusDotPNG(state model.CoreState, dark bool) []byte {
+	const size = 32
+	img := image.NewNRGBA(image.Rect(0, 0, size, size))
+	const (
+		cx     = 15.5
+		cy     = 15.5
+		outerR = 6.5
+		innerR = 4.0
+	)
+	var col color.NRGBA
+	hollow := false
+	switch state {
+	case model.CoreRunning:
+		col = color.NRGBA{52, 199, 89, 255}
+		if dark {
+			col = color.NRGBA{48, 209, 88, 255}
+		}
+	case model.CoreStarting:
+		col = color.NRGBA{255, 159, 10, 255}
+	case model.CoreError, model.CoreMissing:
+		col = color.NRGBA{255, 59, 48, 255}
+		if dark {
+			col = color.NRGBA{255, 69, 58, 255}
+		}
+	default:
+		col = color.NRGBA{142, 142, 147, 255}
+		hollow = true
+	}
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			d := math.Hypot(float64(x)-cx, float64(y)-cy)
+			cov := math.Max(0, math.Min(1, outerR+0.5-d))
+			if hollow && cov > 0 {
+				hole := math.Max(0, math.Min(1, innerR+0.5-d))
+				cov = math.Max(0, cov-hole)
+			}
+			if cov <= 0 {
+				continue
+			}
+			c := col
+			c.A = uint8(math.Round(float64(col.A) * cov))
+			img.SetNRGBA(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
 // Graph turns the traffic history (bytes/s, oldest first) into bar
 // heights: the last GraphBars seconds of up + down, square-root scaled
 // against the window's peak (at least 32 KiB/s, so idle noise stays low).

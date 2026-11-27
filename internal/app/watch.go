@@ -249,6 +249,7 @@ func (s *Service) watchSystem() {
 		fingerprint: ifaceFingerprint,
 		interval:    watchInterval,
 		onWake: func(slept time.Duration) {
+			s.signalGeoAutoUpdate()
 			s.systemChanged(srcWake, "clock jumped "+slept.Round(time.Second).String())
 		},
 		onNetChange: func() { s.systemChanged(srcInterfaces, "") },
@@ -269,7 +270,10 @@ func (s *Service) watchSystem() {
 }
 
 // Resumed tells the service the system woke up (main.go wires the OS event).
-func (s *Service) Resumed() { s.systemChanged(srcWake, "OS resume event") }
+func (s *Service) Resumed() {
+	s.signalGeoAutoUpdate()
+	s.systemChanged(srcWake, "OS resume event")
+}
 
 // NetworkChanged tells the service the network connection changed.
 func (s *Service) NetworkChanged() { s.systemChanged(srcNetwork, "OS network event") }
