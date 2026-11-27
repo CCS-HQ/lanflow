@@ -85,11 +85,13 @@ func TestHandOver(t *testing.T) {
 }
 
 func TestRebaseLeavesOtherPaths(t *testing.T) {
-	got := string(rebase([]byte("a: /data/core/x\nb: /data/core2/y\nc: /data/core\n"), "/data/core", "/g/core"))
-	if got != "a: /g/core/x\nb: /data/core2/y\nc: /data/core\n" {
-		t.Errorf("rebase = %q", got)
+	f := filepath.FromSlash // the separator is the platform's, as in handOver
+	in := "a: " + f("/data/core/x") + "\nb: " + f("/data/core2/y") + "\nc: " + f("/data/core") + "\n"
+	want := "a: " + f("/g/core/x") + "\nb: " + f("/data/core2/y") + "\nc: " + f("/data/core") + "\n"
+	if got := string(rebase([]byte(in), f("/data/core"), f("/g/core"))); got != want {
+		t.Errorf("rebase = %q, want %q", got, want)
 	}
-	if got := string(rebase([]byte("/x/y"), "/", "/g")); got != "/x/y" {
+	if got := string(rebase([]byte(f("/x/y")), "/", f("/g"))); got != f("/x/y") {
 		t.Errorf("rebase from / = %q", got)
 	}
 }
