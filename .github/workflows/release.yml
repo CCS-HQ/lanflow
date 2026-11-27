@@ -362,9 +362,84 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # The Android APK (arm64), signed with the release key: a phone installs
+  # an update only when it is signed by the key of the installed app, so
+  # every release must use the same one. The keystore is the repository
+  # secret ANDROID_KEYSTORE_BASE64 (base64 of the .jks) with its password in
+  # ANDROID_KEYSTORE_PASSWORD (and ANDROID_KEY_PASSWORD when the key's
+  # differs); the alias is the variable ANDROID_KEY_ALIAS (default lanflow),
+  # and the variable ANDROID_CERT_SHA256, when set, is the certificate the
+  # APK must be signed by. Without the keystore the release goes out without
+  # an APK (a warning says so) rather than with one signed by a runner's
+  # debug key, which no later release could update.
+  build-android:
+    name: Build Android
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check for the signing key
+        id: key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "${ANDROID_KEYSTORE_BASE64}" ]; then
+            echo "::warning title=No Android APK::secret ANDROID_KEYSTORE_BASE64 is not set: this release has no Android APK (docs/phone-android.md, 发布)"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.key.outputs.present == 'true'
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        if: steps.key.outputs.present == 'true'
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Android SDK packages
+        if: steps.key.outputs.present == 'true'
+        run: |
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" >/dev/null
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=${JAVA_HOME_17_X64}" >> "$GITHUB_ENV"
+
+      - name: Build and sign APK
+        if: steps.key.outputs.present == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          MYGO_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MYGO_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          LANFLOW_ANDROID_KEY_ALIAS: ${{ vars.ANDROID_KEY_ALIAS || 'lanflow' }}
+          LANFLOW_ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+        run: |
+          export LANFLOW_ANDROID_KEYSTORE="${RUNNER_TEMP}/release.jks"
+          base64 -d <<<"${ANDROID_KEYSTORE_BASE64}" > "${LANFLOW_ANDROID_KEYSTORE}"
+          trap 'rm -f "${LANFLOW_ANDROID_KEYSTORE}"' EXIT
+          scripts/build-android.sh
+
+      - name: Collect artifacts
+        if: steps.key.outputs.present == 'true'
+        run: |
+          mkdir -p dist
+          cp build/android/lanflow-*-android-arm64.apk dist/
+          ls -la dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.key.outputs.present == 'true'
+        with:
+          name: lanflow-android
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: Create GitHub Release
-    needs: [validate, wait-ci, build-macos, build-windows]
+    needs: [validate, wait-ci, build-macos, build-windows, build-android]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -435,6 +510,14 @@ jobs:
             echo '```'
             echo
           } > release-body.md
+          if ls artifacts/*-android-arm64.apk >/dev/null 2>&1; then
+            {
+              echo "### 安卓"
+              echo
+              echo "- \`lanflow-*-android-arm64.apk\`：Android 10 及以上、arm64 设备。应用内不检查更新，新版本请到 Release 页下载后覆盖安装。"
+              echo
+            } >> release-body.md
+          fi
           cat release-body.md
 
       - name: Generate SHA-256 checksums

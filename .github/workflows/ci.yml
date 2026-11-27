@@ -134,6 +134,34 @@ jobs:
           done
           exit "$status"
 
+  # The Android app as the release builds it (scripts/build-android.sh),
+  # signed with the runner's debug key: a change that breaks the APK, its
+  # Mihomo core built from source, or MyGo's Gradle project fails here and
+  # not at release. The SDK packages are the ones docs/phone-android.md
+  # names: API 36 (MyGo's compileSdk), JDK 17 (its jvmToolchain), NDK 29.
+  android:
+    name: Android build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Android SDK packages
+        run: |
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" >/dev/null
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=${JAVA_HOME_17_X64}" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        run: scripts/build-android.sh
+
   test:
     name: Test (${{ matrix.os }})
     strategy:

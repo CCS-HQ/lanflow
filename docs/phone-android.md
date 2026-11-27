@@ -68,6 +68,36 @@ scripts/build-core-android.sh
 JAVA_HOME=<JDK 17> go tool mygo build -platform android/arm64
 ```
 
+两步合在 `scripts/build-android.sh` 里，产物为 `build/android/lanflow-<版本>-android-arm64.apk`，最后用 `apksigner` 打出签名证书。CI 的「Android build」每次用 runner 的调试密钥跑一遍这个脚本，发布时同一个脚本用发布密钥签名。
+
+## 发布
+
+发布流程（`.github/workflows/release.yml` 的 Build Android）把 APK 附在 Release 上。手机只接受与已安装版本**同一把密钥**签名的更新，所以所有版本必须用同一把发布密钥：调试密钥每台机器（每个 CI runner）都不一样，用它签的版本以后无法覆盖升级。仓库里没有发布密钥时，Release 照常发出桌面版，只是没有 APK，运行页上有一条警告。
+
+生成发布密钥（只做一次，密钥和密码要离线备份；丢了之后的版本就不能给已安装的用户升级）：
+
+```bash
+keytool -genkeypair -keystore lanflow-release.jks -storetype PKCS12 -alias lanflow -keyalg RSA -keysize 4096 -validity 10000
+```
+
+```bash
+keytool -list -v -keystore lanflow-release.jks -alias lanflow
+```
+
+在仓库 Settings › Secrets and variables › Actions 里设置：
+
+| 名称 | 类型 | 内容 |
+|---|---|---|
+| `ANDROID_KEYSTORE_BASE64` | Secret | `base64 -i lanflow-release.jks` 的输出 |
+| `ANDROID_KEYSTORE_PASSWORD` | Secret | 密钥库密码 |
+| `ANDROID_KEY_PASSWORD` | Secret | 密钥密码，与密钥库密码相同时不设（PKCS12 两者总是相同） |
+| `ANDROID_KEY_ALIAS` | Variable | 别名，不设为 `lanflow` |
+| `ANDROID_CERT_SHA256` | Variable | 上面 `keytool -list` 打出的 SHA256 指纹；设了之后，签出来的证书不是它就停止发布 |
+
+本地签名构建：`LANFLOW_ANDROID_KEYSTORE=<jks> MYGO_ANDROID_KEYSTORE_PASSWORD=<密码> scripts/build-android.sh`（只在这次构建里把 `android.keystore` 写进 `mygo.json`，结束后还原）。
+
+`versionCode` 由 MyGo 从版本号算出（主×10000 + 次×100 + 修订，0.1.22 为 122），只要版本号递增，覆盖安装就成立。应用内不检查更新（设置里不显示「应用更新」），用户到 Release 页下载新 APK 覆盖安装。
+
 调试时 `go tool mygo dev -platform android -device emulator-5554` 装可调试版（包名 `com.lanflow.app.dev`），可以 `adb shell run-as com.lanflow.app.dev cat files/Lanflow/logs/mihomo.log` 看内核日志。
 
 ## 验证情况（模拟器 armadra-api36，arm64，Android 16 / API 36）
