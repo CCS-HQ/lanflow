@@ -1,0 +1,14 @@
+{
+  "mobile": {
+    "id": "lanflowtunnel",
+    "ios": {
+      "sources": ["ios/*.swift"],
+      "class": "LanflowTunnelPlugin",
+      "frameworks": ["NetworkExtension"],
+      "entitlements": {
+        "com.apple.developer.networking.networkextension": ["packet-tunnel-provider"],
+        "com.apple.security.application-groups": ["group.com.lanflow.app"]
+      }
+    }
+  }
+}
