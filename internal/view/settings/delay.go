@@ -35,7 +35,18 @@ func (p *Page) delaySection(c *ui.Context, t *ui.Theme, s model.Settings) {
 	if !e.Mac {
 		delayDesc = i18n.T("代理页、代理组和托盘菜单的测速都用这里的地址和超时")
 	}
+	if e.Phone { // no tray, no menu bar
+		delayDesc = i18n.T("代理页和代理组的测速都用这里的地址和超时")
+	}
 	e.Kit.Section(c, i18n.T("延迟测试"), delayDesc, func() {
+		if e.Phone {
+			p.phoneDelayRows(c, s)
+			p.switchRow(c, i18n.T("切换节点时断开该组的连接"), i18n.T("切换后立即断开经过该代理组的连接，让它们改走新节点"), s.DisconnectOnSwitch, func(on bool) {
+				s.DisconnectOnSwitch = on
+				p.save(s, "", nil)
+			})
+			return
+		}
 		stackedRow(c, t, i18n.T("测速地址"), i18n.T("节点经代理访问该地址，默认 www.gstatic.com/generate_204"), func() {
 			ui.Column(c).Gap(4).Children(func() {
 				if p.delayURLErr == "" {

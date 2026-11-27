@@ -60,12 +60,15 @@ type Page struct {
 	list     ui.ListState
 	selected int    // row index the table chooses
 	sel      string // ID of the connection shown in the detail panel
+	selHost  string // its host, the phone's title of the detail (PhoneSub)
 	hoverRow int
 	// detailW is the detail panel's width, which the user drags its edge
 	// to change (env.DetailEdge), remembered in the UI state; 0 = default.
 	detailW float32
 	form    ruleform.Form
 	icons   *procicon.Cache // application icons of the 进程 column
+	// plist is the phone's list of connections (phone.go).
+	plist ui.ListState
 
 	// hidden holds the IDs of the columns the user hid through the header's
 	// context menu; it mirrors Settings.ConnHiddenColumns.
@@ -179,6 +182,9 @@ func (p *Page) View(c *ui.Context) {
 		// The exit map opens the page filtered to one route (docs/exit-map.md §4).
 		p.query, p.tab, p.paused, p.view = a, 0, false, 0
 	}
+	if e.Phone {
+		p.view = 0 // no topology on a phone
+	}
 	st := e.API.Status()
 	running := st.Core == model.CoreRunning
 	if !running {
@@ -189,6 +195,13 @@ func (p *Page) View(c *ui.Context) {
 	subtitle := ""
 	if running {
 		subtitle = i18n.Tn(nActive, "%d 个活动连接", nActive)
+	}
+	if e.Phone {
+		ui.Column(c).Fill().Children(func() {
+			p.phoneView(c, t, running, active, closed, nActive, subtitle)
+		})
+		p.form.View(c, e)
+		return
 	}
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("连接"), subtitle, func() { p.tools(c, running, nActive) })
@@ -428,60 +441,78 @@ func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, cn model.Connection, active bo
 }
 
 func (p *Page) detail(c *ui.Context, t *ui.Theme, cn model.Connection, active bool) {
-	e := p.e
 	panel := ui.Column(c.Key("detail")).FillHeight().Shrink(0).BorderWidth(0, 0, 0, 1).BorderColor(t.Border)
 	panel.Children(func() {
 		p.e.PaneSize(env.SizeConnsDetail, &p.detailW)
 		panel.Width(env.DetailEdge(c, &p.detailW, detailWidth))
-		ui.Scroll(c).Grow(1).Padding(14, 16).Gap(12).Children(func() {
-			ui.Row(c).Gap(6).AlignItems(ui.Start).Children(func() {
-				ui.Text(c, cn.Host).Bold().Grow(1).Selectable()
+		p.detailBody(c, t, cn, active, false)
+	})
+}
+
+// detailBody is the detail's scrolling content: in the panel beside the
+// table on the desktop, in place of the list on a phone (phone.go), where
+// the back button above it closes it and the buttons are a finger's size.
+func (p *Page) detailBody(c *ui.Context, t *ui.Theme, cn model.Connection, active, phone bool) {
+	e := p.e
+	sc := ui.Scroll(c).Grow(1).Padding(14, 16).Gap(12)
+	if phone {
+		sc.Basis(0).MinHeight(0).Padding(14, 16, 24, 16).Gap(14)
+	}
+	sc.Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Start).Children(func() {
+			ui.Text(c, cn.Host).Bold().Grow(1).Selectable()
+			if !phone {
 				ui.Button(c, "").Label(i18n.T("关闭详情")).Tooltip(i18n.T("关闭")).Padding(0, 4).Children(func() {
 					ui.Text(c, "✕").FontSize(11)
 				}).OnClick(func() { p.sel = "" })
-			})
-			meta := strings.ToUpper(cn.Network)
-			if cn.Type != "" {
-				meta += " · " + cn.Type
 			}
-			if !cn.ClosedAt.IsZero() {
-				meta += i18n.Tf(" · 已关闭 %s", env.FmtAgo(cn.ClosedAt))
+		})
+		meta := strings.ToUpper(cn.Network)
+		if cn.Type != "" {
+			meta += " · " + cn.Type
+		}
+		if !cn.ClosedAt.IsZero() {
+			meta += i18n.Tf(" · 已关闭 %s", env.FmtAgo(cn.ClosedAt))
+		}
+		ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted)
+		ui.Column(c).Gap(6).Selectable().Children(func() {
+			kv := func(k, v string) { p.kv(c, t, k, v, "") }
+			src := cn.SourceIP
+			if cn.SourcePort != "" {
+				src += ":" + cn.SourcePort
 			}
-			ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted)
-			ui.Column(c).Gap(6).Selectable().Children(func() {
-				kv := func(k, v string) { p.kv(c, t, k, v, "") }
-				src := cn.SourceIP
-				if cn.SourcePort != "" {
-					src += ":" + cn.SourcePort
-				}
-				kv(i18n.T("源地址"), src)
-				kv(i18n.T("目标地址"), cn.Host)
-				kv(i18n.T("目标 IP"), env.Dash(cn.DstIP))
-				if cn.RemoteDestination != "" && cn.RemoteDestination != cn.DstIP {
-					kv(i18n.T("实际连接"), cn.RemoteDestination)
-				}
-				p.kv(c, t, i18n.T("进程"), env.Dash(cn.Process), cn.ProcessPath)
-				kv(i18n.T("规则"), ruleName(cn))
-				kv(i18n.T("规则载荷"), env.Dash(cn.RulePayload))
-				kv(i18n.T("链路"), chain(cn))
-				kv(i18n.T("下行"), i18n.Tf("%s · 共 %s", env.FmtSpeed(cn.DownSpeed), env.FmtBytes(cn.Download)))
-				kv(i18n.T("上行"), i18n.Tf("%s · 共 %s", env.FmtSpeed(cn.UpSpeed), env.FmtBytes(cn.Upload)))
-				kv(i18n.T("时长"), env.FmtDuration(duration(cn)))
-			})
-			ui.Column(c).Gap(6).AlignItems(ui.Start).Children(func() {
-				ui.Button(c, "").Children(func() {
-					e.Kit.Icon(c, "rules", 13)
-					ui.Text(c, i18n.T("此域名始终走…"))
-				}).OnClick(func() { p.addRuleForHost(cn) })
-				ui.Button(c, "").Disabled(cn.Process == "").Children(func() {
-					e.Kit.Icon(c, "rules", 13)
-					ui.Text(c, i18n.T("此程序始终走…"))
-				}).OnClick(func() { p.addRuleForProcess(cn) })
-				if active && cn.ClosedAt.IsZero() {
-					id := cn.ID
-					ui.Button(c, i18n.T("断开此连接")).OnClick(func() { p.closeConn(id) })
-				}
-			})
+			kv(i18n.T("源地址"), src)
+			kv(i18n.T("目标地址"), cn.Host)
+			kv(i18n.T("目标 IP"), env.Dash(cn.DstIP))
+			if cn.RemoteDestination != "" && cn.RemoteDestination != cn.DstIP {
+				kv(i18n.T("实际连接"), cn.RemoteDestination)
+			}
+			p.kv(c, t, i18n.T("进程"), env.Dash(cn.Process), cn.ProcessPath)
+			kv(i18n.T("规则"), ruleName(cn))
+			kv(i18n.T("规则载荷"), env.Dash(cn.RulePayload))
+			kv(i18n.T("链路"), chain(cn))
+			kv(i18n.T("下行"), i18n.Tf("%s · 共 %s", env.FmtSpeed(cn.DownSpeed), env.FmtBytes(cn.Download)))
+			kv(i18n.T("上行"), i18n.Tf("%s · 共 %s", env.FmtSpeed(cn.UpSpeed), env.FmtBytes(cn.Upload)))
+			kv(i18n.T("时长"), env.FmtDuration(duration(cn)))
+		})
+		if phone {
+			p.phoneActions(c, cn, active)
+			return
+		}
+		acts := ui.Column(c).Gap(6).AlignItems(ui.Start)
+		acts.Children(func() {
+			ui.Button(c, "").Children(func() {
+				e.Kit.Icon(c, "rules", 13)
+				ui.Text(c, i18n.T("此域名始终走…"))
+			}).OnClick(func() { p.addRuleForHost(cn) })
+			ui.Button(c, "").Disabled(cn.Process == "").Children(func() {
+				e.Kit.Icon(c, "rules", 13)
+				ui.Text(c, i18n.T("此程序始终走…"))
+			}).OnClick(func() { p.addRuleForProcess(cn) })
+			if active && cn.ClosedAt.IsZero() {
+				id := cn.ID
+				ui.Button(c, i18n.T("断开此连接")).OnClick(func() { p.closeConn(id) })
+			}
 		})
 	})
 }

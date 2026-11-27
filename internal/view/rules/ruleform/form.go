@@ -90,8 +90,13 @@ func (f *Form) View(c *ui.Context, e *env.Env) {
 	if f.rule.ID != "" {
 		title = i18n.T("编辑规则")
 	}
+	width := float32(420)
+	if e.Phone {
+		// Within the narrow screen (the desktop keeps its fixed width).
+		width = env.DialogWidth(c, 420)
+	}
 	ui.Modal(c, &f.open, func() {
-		ui.Column(c.Key(f.session)).Width(420).Gap(12).Children(func() {
+		ui.Column(c.Key(f.session)).Width(width).Gap(12).Children(func() {
 			ui.Text(c, title).FontSize(15).Bold()
 			ui.Form(c, func() {
 				ui.Field(c, i18n.T("类型"), func() {

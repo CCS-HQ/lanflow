@@ -105,8 +105,25 @@ func (p *Page) applyDNS() {
 	})
 }
 
+// dnsFollowMsg is the banner of 跟随订阅: whose dns section the
+// read-only fields show.
+func dnsFollowMsg(eff model.EffectiveDNS, subName string) string {
+	msg := i18n.Tf("正在使用订阅「%s」中的 DNS 设置，以下内容只读。如需修改，请切换到「由澜流接管」。", subName)
+	switch {
+	case eff.Source == model.EffectiveDefault:
+		msg = i18n.Tf("订阅「%s」中没有 DNS 设置，内核使用 Mihomo 的默认值：不启用内置 DNS 服务器，由系统解析器解析域名。以下内容只读。如需修改，请切换到「由澜流接管」。", subName)
+	case !eff.Enabled:
+		msg += i18n.T("该订阅没有启用内置 DNS（dns.enable 为 false），内核直接用系统解析器解析域名。")
+	}
+	return msg
+}
+
 func (p *Page) dnsTab(c *ui.Context, t *ui.Theme, s model.Settings) {
 	e := p.e
+	if e.Phone {
+		p.dnsPhone(c, t)
+		return
+	}
 	f := &p.dns
 	take := f.takeOver
 	ro := !take
@@ -137,14 +154,7 @@ func (p *Page) dnsTab(c *ui.Context, t *ui.Theme, s model.Settings) {
 				if !take {
 					// docs/design.md:536: the banner names the subscription whose
 					// dns section the read-only fields show.
-					msg := i18n.Tf("正在使用订阅「%s」中的 DNS 设置，以下内容只读。如需修改，请切换到「由澜流接管」。", subName)
-					switch {
-					case eff.Source == model.EffectiveDefault:
-						msg = i18n.Tf("订阅「%s」中没有 DNS 设置，内核使用 Mihomo 的默认值：不启用内置 DNS 服务器，由系统解析器解析域名。以下内容只读。如需修改，请切换到「由澜流接管」。", subName)
-					case !eff.Enabled:
-						msg += i18n.T("该订阅没有启用内置 DNS（dns.enable 为 false），内核直接用系统解析器解析域名。")
-					}
-					e.Kit.Banner(c, "info", msg, nil)
+					e.Kit.Banner(c, "info", dnsFollowMsg(eff, subName), nil)
 				} else {
 					e.Kit.Row(c, i18n.T("接管后，以下设置整体替换订阅中的 dns 段"), "", func() {
 						ui.Button(c, i18n.T("使用推荐设置")).OnClick(func() {
@@ -195,8 +205,93 @@ func (p *Page) dnsTab(c *ui.Context, t *ui.Theme, s model.Settings) {
 	_ = s
 }
 
+// dnsPhone is the DNS tab on a phone: list rows — the source and the mode
+// as choices, the lists and hosts pushing editors, the per-domain servers
+// a row each — edits collecting for the 应用 bar as on a desktop.
+func (p *Page) dnsPhone(c *ui.Context, t *ui.Theme) {
+	e := p.e
+	f := &p.dns
+	take := f.takeOver
+	ro := !take
+	view := f
+	var eff model.EffectiveDNS
+	if ro {
+		eff = e.API.EffectiveDNS()
+		shown := dnsFormFrom(eff.Settings)
+		view = &shown
+	}
+	srcOpts := []string{i18n.T("跟随订阅"), i18n.T("由澜流接管")}
+	modeOpts := []string{"Fake-IP", i18n.T("真实 IP")}
+	ui.Column(c.Key(p.dnsSession)).Gap(22).Children(func() {
+		foot := i18n.T("接管后，以下设置整体替换订阅中的 dns 段")
+		if ro {
+			foot = ""
+		}
+		p.phoneSection(c, "DNS", foot, func() {
+			src := srcOpts[0]
+			if take {
+				src = srcOpts[1]
+			}
+			p.phoneChoiceRow(c, i18n.T("DNS 设置来源"), "", src, srcOpts, false, func(v string) { f.takeOver = v == srcOpts[1] })
+			if take && env.ActionRow(c, i18n.T("使用推荐设置"), false, false).Clicked() {
+				*f = dnsFormFrom(recommendedDNS)
+				p.dnsSession++
+			}
+		})
+		if ro {
+			e.Kit.Banner(c, "info", dnsFollowMsg(eff, currentSubName(e)), nil)
+		}
+		e.Kit.Section(c, i18n.T("解析"), "", func() {
+			p.phoneChoiceRow(c, i18n.T("模式"), i18n.T("Fake-IP 响应更快；真实 IP 兼容性更好"), modeOpts[view.mode], modeOpts, ro, func(v string) {
+				f.mode = 0
+				if v == modeOpts[1] {
+					f.mode = 1
+				}
+			})
+			p.textRow(c, t, i18n.T("上游服务器"), i18n.T("每行一个，支持 DoH（https://）、DoT（tls://）和普通地址"), "dns-ns", &view.ns, 2, ro)
+			p.textRow(c, t, i18n.T("节点域名解析"), i18n.T("只用于解析节点服务器地址（proxy-server-nameserver）"), "dns-pns", &view.pns, 1, ro)
+			p.textRow(c, t, i18n.T("直连域名解析"), i18n.T("走直连的域名使用的服务器；system 表示系统 DNS（direct-nameserver）"), "dns-direct", &view.direct, 1, ro)
+			p.phoneSwitchRow(c, "dns-respect", i18n.T("遵循分流规则"), i18n.T("DNS 请求本身也按规则选择直连或代理（respect-rules）"), &view.respect, ro)
+		})
+		p.phoneSection(c, i18n.T("按域名指定服务器"), i18n.T("域名或规则集 → 服务器（nameserver-policy）"), func() {
+			p.phoneKVList(c, &view.policy, kvSpec{
+				title: i18n.T("按域名指定服务器"), keyLabel: i18n.T("域名或规则集"), valueLabel: i18n.T("服务器"),
+				keyHint: i18n.T("geosite:cn 或 +.example.com"), valueHint: "https://dns.alidns.com/dns-query",
+				add: i18n.T("添加服务器…"), del: i18n.T("删除此项"),
+			}, ro)
+		})
+		e.Kit.Section(c, i18n.T("Fake-IP 与 Hosts"), "", func() {
+			p.textRow(c, t, i18n.T("Fake-IP 排除"), i18n.T("这些域名始终返回真实 IP，每行一个，+. 表示包含所有子域名"), "dns-filter", &view.filter, 3, ro)
+			p.phoneSwitchRow(c, "dns-hosts", i18n.T("使用系统 hosts"), "", &view.sysHost, ro)
+			n := len(cleanKV(view.hosts))
+			value := i18n.T("未设置")
+			if n > 0 {
+				value = i18n.Tf("%d 条", n)
+			}
+			if p.navRow(c, i18n.T("自定义 hosts"), "", value) {
+				opts := []func(*phoneSub){multiline, placeholderOpt("router.lan 192.168.1.1")}
+				if ro {
+					opts = append(opts, readOnly)
+				}
+				p.pushEdit(i18n.T("自定义 hosts"), i18n.T("每行一条：域名，空格，IP 或另一个域名。例如 router.lan 192.168.1.1"), hostsText(view.hosts),
+					func(v string) error { f.hosts = parseHosts(v); return nil }, opts...)
+			}
+		})
+	})
+}
+
 // textRow is a multi-line list field.
 func (p *Page) textRow(c *ui.Context, t *ui.Theme, label, desc, key string, text *string, minLines int, ro bool) {
+	if p.e.Phone { // how many lines and ›, an editor of them behind it
+		if p.navRow(c, label, desc, linesValue(*text)) {
+			opts := []func(*phoneSub){multiline}
+			if ro {
+				opts = append(opts, readOnly)
+			}
+			p.pushEdit(label, desc, *text, func(v string) error { *text = v; return nil }, opts...)
+		}
+		return
+	}
 	col := ui.Column(c).Gap(6).Padding(8, 12)
 	if env.Reveal(col, label) { // a jump from the global search
 		col.Background(t.Accent.Alpha(0.12))

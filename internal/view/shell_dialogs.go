@@ -205,7 +205,8 @@ func (s *Shell) dialogs(c *ui.Context, st model.Status) {
 	// goes when it was answered elsewhere (ctl, a new service process
 	// that took over the core). It hides while an answer is applied.
 	if !s.recoveryBusy {
-		s.recovery = st.PendingRecovery
+		// A phone has no system proxy left to recover (docs/phone-ui.md).
+		s.recovery = st.PendingRecovery && !s.opts.Phone
 	}
 	if s.recovery {
 		resolve := func(off bool, ok string) {

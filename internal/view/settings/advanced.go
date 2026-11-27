@@ -223,62 +223,20 @@ func (p *Page) advancedTab(c *ui.Context, t *ui.Theme, s model.Settings, st mode
 			e.Kit.Section(c, i18n.T("端口与局域网"), "", func() {
 				p.advInput(c, i18n.T("HTTP 端口"), i18n.T("额外的纯 HTTP 代理端口（port）；留空则只用代理端口"), "adv-http", &f.httpPort, 84, "")
 				p.advInput(c, i18n.T("SOCKS 端口"), i18n.T("额外的纯 SOCKS5 代理端口（socks-port）"), "adv-socks", &f.socksPort, 84, "")
-				p.textRow(c, t, i18n.T("允许的局域网地址"), i18n.T("允许局域网连接时，只有这些网段可以使用代理，每行一个（lan-allowed-ips）"), "adv-lan-allow", &f.lanAllowed, 1, false)
-				p.textRow(c, t, i18n.T("禁止的局域网地址"), i18n.T("这些网段不能使用代理，每行一个（lan-disallowed-ips）"), "adv-lan-deny", &f.lanDisallowed, 1, false)
+				if !e.Phone { // a phone shares no proxy with the network
+					p.textRow(c, t, i18n.T("允许的局域网地址"), i18n.T("允许局域网连接时，只有这些网段可以使用代理，每行一个（lan-allowed-ips）"), "adv-lan-allow", &f.lanAllowed, 1, false)
+					p.textRow(c, t, i18n.T("禁止的局域网地址"), i18n.T("这些网段不能使用代理，每行一个（lan-disallowed-ips）"), "adv-lan-deny", &f.lanDisallowed, 1, false)
+				}
 				p.textRow(c, t, i18n.T("代理认证"), i18n.T("每行一个 用户名:密码；设置后 HTTP 和 SOCKS5 入口都要求登录（authentication）"), "adv-auth", &f.auth, 1, false)
 				p.textRow(c, t, i18n.T("免认证的地址"), i18n.T("来自这些网段的连接不需要认证，例如 127.0.0.1/32（skip-auth-prefixes）"), "adv-skip-auth", &f.skipAuth, 1, false)
-				if s.AllowLAN && len(lines(f.auth)) == 0 {
+				if !e.Phone && s.AllowLAN && len(lines(f.auth)) == 0 { // a phone shares no proxy with the network
 					e.Kit.Banner(c, "warn", i18n.T("已允许局域网连接但没有设置代理认证：同一网络里的任何设备都能使用这个代理。"), nil)
 				}
 			})
-			e.Kit.Section(c, i18n.T("系统代理"), "", func() {
-				e.Kit.Row(c, i18n.T("PAC 模式"), i18n.T("系统代理改为自动配置脚本：澜流在本机提供 PAC 文件，「不走代理的地址」由应用自行直连，其余经代理"), func() {
-					ui.Switch(c.Key("adv-pac"), &f.pacMode).Label(i18n.T("PAC 模式"))
-				})
-				e.Kit.Row(c, i18n.T("国内域名直连"), i18n.T("PAC 中把 .cn 和常见国内网站设为直连，不经过内核"), func() {
-					ui.Switch(c.Key("adv-pac-cn"), &f.pacDirectCN).Label(i18n.T("国内域名直连")).Disabled(!f.pacMode)
-				})
-				p.advInput(c, i18n.T("PAC 端口"), i18n.Tf("PAC 文件的本机端口，留空为 %d", model.PACDefaultPort), "adv-pac-port", &f.pacPort, 84, "")
-				if st.SystemProxy && (f.pacMode != s.Advanced.PACMode) {
-					e.Kit.Banner(c, "info", i18n.T("应用后系统代理会立即切换到新的方式。"), nil)
-				}
-			})
-			e.Kit.Section(c, "TUN", i18n.T("仅在 TUN 模式下生效"), func() {
-				e.Kit.Row(c, i18n.T("严格路由"), i18n.T("阻止绕过 TUN 的流量，防止泄漏；个别局域网设备可能无法访问（strict-route）"), func() {
-					ui.Switch(c.Key("adv-tun-strict"), &f.tunStrict).Label(i18n.T("严格路由"))
-				})
-				p.advInput(c, "MTU", i18n.T("TUN 网卡的最大传输单元，576–65535；留空用内核默认值"), "adv-tun-mtu", &f.tunMTU, 84, "")
-				e.Kit.Row(c, i18n.T("端点无关 NAT"), i18n.T("UDP 使用对端无关的映射，改善游戏和 P2P 的 NAT 类型（endpoint-independent-nat）"), func() {
-					ui.Switch(c.Key("adv-tun-ein"), &f.tunEIN).Label(i18n.T("端点无关 NAT"))
-				})
-				p.textRow(c, t, i18n.T("只接管这些网段"), i18n.T("设置后只有这些网段进入 TUN，每行一个（route-address）"), "adv-tun-route", &f.tunRoute, 1, false)
-				p.textRow(c, t, i18n.T("不接管的网段"), i18n.T("这些网段绕过 TUN，每行一个；与 aTrust 兼容加入的网段合并（route-exclude-address）"), "adv-tun-exclude", &f.tunExclude, 1, false)
-				p.textRow(c, t, i18n.T("DNS 劫持"), i18n.T("截获到这些地址的 DNS 查询，每行一个；留空为 any:53 和 tcp://any:53（dns-hijack）"), "adv-tun-hijack", &f.tunHijack, 1, false)
-				dmOpts := []string{i18n.T("自动"), i18n.T("不接管|DNS 模式"), "Native", "Hijack"}
-				dmVals := []string{"", "disabled", "native", "hijack"}
-				dmDesc := i18n.T("自动：Windows 同 hijack，macOS 同不接管；native 由内核把系统 DNS 指向 TUN；hijack 在此基础上，开启严格路由时还会拦截发往其他 DNS 的查询（仅 Windows）（dns-mode）")
-				p.selectRow(c, i18n.T("DNS 模式"), dmDesc, mapName(f.tunDNSMode, dmVals, dmOpts), dmOpts, func(v string) {
-					f.tunDNSMode = mapValue(v, dmOpts, dmVals)
-				})
-				switch {
-				case f.tunDNSMode == "hijack" && !e.Mac && !f.tunStrict:
-					e.Kit.Banner(c, "info", i18n.T("未开启严格路由时，hijack 与 native 效果相同。"), nil)
-				case f.tunDNSMode == "disabled" && !e.Mac:
-					e.Kit.Banner(c, "warn", i18n.T("不接管时 TUN 网卡没有 DNS，系统可能直接使用局域网里的 DNS，绕过澜流。"), nil)
-				case f.tunDNSMode == "hijack" && e.Mac:
-					e.Kit.Banner(c, "info", i18n.T("macOS 上 hijack 与 native 效果相同。"), nil)
-				}
-				if e.Mac && s.TUNSetDNS && (f.tunDNSMode == "native" || f.tunDNSMode == "hijack") {
-					e.Kit.Banner(c, "info", i18n.T("「自动设置系统 DNS」也已开启，两者都会把系统 DNS 引到澜流，保留一个即可。"), nil)
-				}
-				tunDevicePH := "utun1700"
-				if !e.Mac {
-					tunDevicePH = "Lanflow"
-				}
-				p.advInput(c, i18n.T("网卡名称"), i18n.T("TUN 网卡的名称；留空用澜流固定的名称（device）"), "adv-tun-device", &f.tunDevice, 160, tunDevicePH)
-				p.textRow(c, t, i18n.T("只在这些网卡上接管"), i18n.T("每行一个网卡名（include-interface）"), "adv-tun-include", &f.tunInclude, 1, false)
-				p.textRow(c, t, i18n.T("不在这些网卡上接管"), i18n.T("每行一个网卡名（exclude-interface）"), "adv-tun-exclif", &f.tunExclIf, 1, false)
-			})
+			if !e.Phone { // no system proxy, PAC or TUN of its own on a phone: the system VPN
+				p.advSystemProxy(c, t, s, st)
+				p.advTUN(c, t, s)
+			}
 		}, func() {
 			e.Kit.Section(c, i18n.T("内核行为"), "", func() {
 				e.Kit.Row(c, "IPv6", i18n.T("解析 AAAA 记录并允许经 IPv6 连接（ipv6）"), func() {
@@ -301,7 +259,10 @@ func (p *Page) advancedTab(c *ui.Context, t *ui.Theme, s model.Settings, st mode
 					ui.Switch(c.Key("adv-ka-off"), &f.disableKeepAlive).Label(i18n.T("禁用 TCP 保活"))
 				})
 				ifaceDesc := i18n.T("内核的出站流量绑定到这个网卡，例如 en0；留空自动选择（interface-name）")
-				if !e.Mac {
+				switch {
+				case e.Phone: // no interface name a phone's user would know
+					ifaceDesc = i18n.T("内核的出站流量绑定到这个网卡；留空自动选择（interface-name）")
+				case !e.Mac:
 					ifaceDesc = i18n.T("内核的出站流量绑定到这个网卡，例如 WLAN；留空自动选择（interface-name）")
 				}
 				p.advInput(c, i18n.T("出站网卡"), ifaceDesc, "adv-iface", &f.ifaceName, 160, "")
@@ -330,12 +291,19 @@ func (p *Page) advancedTab(c *ui.Context, t *ui.Theme, s model.Settings, st mode
 				})
 				p.textRow(c, t, i18n.T("引导服务器"), i18n.T("用来解析其他 DNS 服务器域名的纯 IP 服务器，每行一个（default-nameserver）"), "adv-dns-default", &f.dnsDefaultNS, 1, false)
 				p.textRow(c, t, i18n.T("备用服务器"), i18n.T("与上游并发查询，命中下面的过滤条件时采用备用结果，每行一个（fallback）"), "adv-dns-fallback", &f.dnsFallback, 1, false)
-				e.Kit.Row(c, i18n.T("备用服务器 · 按 GeoIP 过滤"), i18n.T("上游返回的 IP 不属于下方国家时改用备用结果（fallback-filter.geoip）"), func() {
-					ui.Row(c).Gap(10).Children(func() {
-						ui.TextInput(c.Key("adv-ff-code"), &f.ffCode).Width(60).Font("monospace").FontSize(12).Placeholder("CN").Label(i18n.T("GeoIP 国家代码")).Disabled(!f.ffGeoIP)
-						ui.Switch(c.Key("adv-ff-geoip"), &f.ffGeoIP).Label(i18n.T("备用服务器 · 按 GeoIP 过滤"))
+				if e.Phone { // the switch, and the country's row pushing its editor
+					p.phoneSwitchRow(c, "adv-ff-geoip", i18n.T("备用服务器 · 按 GeoIP 过滤"), i18n.T("上游返回的 IP 不属于下方国家时改用备用结果（fallback-filter.geoip）"), &f.ffGeoIP, false)
+					if f.ffGeoIP {
+						p.advInput(c, i18n.T("GeoIP 国家代码"), i18n.T("两个字母的国家代码，例如 CN"), "adv-ff-code", &f.ffCode, 160, "CN")
+					}
+				} else {
+					e.Kit.Row(c, i18n.T("备用服务器 · 按 GeoIP 过滤"), i18n.T("上游返回的 IP 不属于下方国家时改用备用结果（fallback-filter.geoip）"), func() {
+						ui.Row(c).Gap(10).Children(func() {
+							ui.TextInput(c.Key("adv-ff-code"), &f.ffCode).Width(60).Font("monospace").FontSize(12).Placeholder("CN").Label(i18n.T("GeoIP 国家代码")).Disabled(!f.ffGeoIP)
+							ui.Switch(c.Key("adv-ff-geoip"), &f.ffGeoIP).Label(i18n.T("备用服务器 · 按 GeoIP 过滤"))
+						})
 					})
-				})
+				}
 				p.textRow(c, t, i18n.T("备用服务器 · 直连网段"), i18n.T("上游结果落在这些网段时改用备用结果，每行一个（fallback-filter.ipcidr）"), "adv-ff-cidr", &f.ffCIDR, 1, false)
 				p.textRow(c, t, i18n.T("备用服务器 · 域名"), i18n.T("这些域名总是采用备用结果，每行一个（fallback-filter.domain）"), "adv-ff-domain", &f.ffDomain, 1, false)
 			})
@@ -350,6 +318,16 @@ func (p *Page) advancedTab(c *ui.Context, t *ui.Theme, s model.Settings, st mode
 
 // advInput is a settings row with a single-line text field bound to the form.
 func (p *Page) advInput(c *ui.Context, label, desc, key string, text *string, width float32, placeholder string) {
+	if p.e.Phone { // the value and ›, an editor behind it
+		if p.navRow(c, label, desc, valueOr(*text, valueOr(placeholder, i18n.T("默认")))) {
+			opts := []func(*phoneSub){mono, placeholderOpt(placeholder)}
+			if width <= 100 {
+				opts = append(opts, numeric)
+			}
+			p.pushEdit(label, desc, *text, func(v string) error { *text = strings.TrimSpace(v); return nil }, opts...)
+		}
+		return
+	}
 	p.e.Kit.Row(c, label, desc, func() {
 		in := ui.TextInput(c.Key(key), text).Width(width).Font("monospace").FontSize(12).Label(label)
 		if width <= 100 {
@@ -358,5 +336,63 @@ func (p *Page) advInput(c *ui.Context, label, desc, key string, text *string, wi
 		if placeholder != "" {
 			in.Placeholder(placeholder)
 		}
+	})
+}
+
+// advSystemProxy is the 系统代理 section of 高级: PAC.
+func (p *Page) advSystemProxy(c *ui.Context, t *ui.Theme, s model.Settings, st model.Status) {
+	e, f := p.e, &p.adv
+	e.Kit.Section(c, i18n.T("系统代理"), "", func() {
+		e.Kit.Row(c, i18n.T("PAC 模式"), i18n.T("系统代理改为自动配置脚本：澜流在本机提供 PAC 文件，「不走代理的地址」由应用自行直连，其余经代理"), func() {
+			ui.Switch(c.Key("adv-pac"), &f.pacMode).Label(i18n.T("PAC 模式"))
+		})
+		e.Kit.Row(c, i18n.T("国内域名直连"), i18n.T("PAC 中把 .cn 和常见国内网站设为直连，不经过内核"), func() {
+			ui.Switch(c.Key("adv-pac-cn"), &f.pacDirectCN).Label(i18n.T("国内域名直连")).Disabled(!f.pacMode)
+		})
+		p.advInput(c, i18n.T("PAC 端口"), i18n.Tf("PAC 文件的本机端口，留空为 %d", model.PACDefaultPort), "adv-pac-port", &f.pacPort, 84, "")
+		if st.SystemProxy && (f.pacMode != s.Advanced.PACMode) {
+			e.Kit.Banner(c, "info", i18n.T("应用后系统代理会立即切换到新的方式。"), nil)
+		}
+	})
+}
+
+// advTUN is the TUN section of 高级.
+func (p *Page) advTUN(c *ui.Context, t *ui.Theme, s model.Settings) {
+	e, f := p.e, &p.adv
+	e.Kit.Section(c, "TUN", i18n.T("仅在 TUN 模式下生效"), func() {
+		e.Kit.Row(c, i18n.T("严格路由"), i18n.T("阻止绕过 TUN 的流量，防止泄漏；个别局域网设备可能无法访问（strict-route）"), func() {
+			ui.Switch(c.Key("adv-tun-strict"), &f.tunStrict).Label(i18n.T("严格路由"))
+		})
+		p.advInput(c, "MTU", i18n.T("TUN 网卡的最大传输单元，576–65535；留空用内核默认值"), "adv-tun-mtu", &f.tunMTU, 84, "")
+		e.Kit.Row(c, i18n.T("端点无关 NAT"), i18n.T("UDP 使用对端无关的映射，改善游戏和 P2P 的 NAT 类型（endpoint-independent-nat）"), func() {
+			ui.Switch(c.Key("adv-tun-ein"), &f.tunEIN).Label(i18n.T("端点无关 NAT"))
+		})
+		p.textRow(c, t, i18n.T("只接管这些网段"), i18n.T("设置后只有这些网段进入 TUN，每行一个（route-address）"), "adv-tun-route", &f.tunRoute, 1, false)
+		p.textRow(c, t, i18n.T("不接管的网段"), i18n.T("这些网段绕过 TUN，每行一个；与 aTrust 兼容加入的网段合并（route-exclude-address）"), "adv-tun-exclude", &f.tunExclude, 1, false)
+		p.textRow(c, t, i18n.T("DNS 劫持"), i18n.T("截获到这些地址的 DNS 查询，每行一个；留空为 any:53 和 tcp://any:53（dns-hijack）"), "adv-tun-hijack", &f.tunHijack, 1, false)
+		dmOpts := []string{i18n.T("自动"), i18n.T("不接管|DNS 模式"), "Native", "Hijack"}
+		dmVals := []string{"", "disabled", "native", "hijack"}
+		dmDesc := i18n.T("自动：Windows 同 hijack，macOS 同不接管；native 由内核把系统 DNS 指向 TUN；hijack 在此基础上，开启严格路由时还会拦截发往其他 DNS 的查询（仅 Windows）（dns-mode）")
+		p.selectRow(c, i18n.T("DNS 模式"), dmDesc, mapName(f.tunDNSMode, dmVals, dmOpts), dmOpts, func(v string) {
+			f.tunDNSMode = mapValue(v, dmOpts, dmVals)
+		})
+		switch {
+		case f.tunDNSMode == "hijack" && !e.Mac && !f.tunStrict:
+			e.Kit.Banner(c, "info", i18n.T("未开启严格路由时，hijack 与 native 效果相同。"), nil)
+		case f.tunDNSMode == "disabled" && !e.Mac:
+			e.Kit.Banner(c, "warn", i18n.T("不接管时 TUN 网卡没有 DNS，系统可能直接使用局域网里的 DNS，绕过澜流。"), nil)
+		case f.tunDNSMode == "hijack" && e.Mac:
+			e.Kit.Banner(c, "info", i18n.T("macOS 上 hijack 与 native 效果相同。"), nil)
+		}
+		if e.Mac && s.TUNSetDNS && (f.tunDNSMode == "native" || f.tunDNSMode == "hijack") {
+			e.Kit.Banner(c, "info", i18n.T("「自动设置系统 DNS」也已开启，两者都会把系统 DNS 引到澜流，保留一个即可。"), nil)
+		}
+		tunDevicePH := "utun1700"
+		if !e.Mac {
+			tunDevicePH = "Lanflow"
+		}
+		p.advInput(c, i18n.T("网卡名称"), i18n.T("TUN 网卡的名称；留空用澜流固定的名称（device）"), "adv-tun-device", &f.tunDevice, 160, tunDevicePH)
+		p.textRow(c, t, i18n.T("只在这些网卡上接管"), i18n.T("每行一个网卡名（include-interface）"), "adv-tun-include", &f.tunInclude, 1, false)
+		p.textRow(c, t, i18n.T("不在这些网卡上接管"), i18n.T("每行一个网卡名（exclude-interface）"), "adv-tun-exclif", &f.tunExclIf, 1, false)
 	})
 }

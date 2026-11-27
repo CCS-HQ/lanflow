@@ -43,6 +43,8 @@ type Page struct {
 	stale *env.Stale
 	// customList is the virtual list of a long custom rule list.
 	customList ui.ListState
+	// phoneList is the one list of the page on a phone (phone.go).
+	phoneList ui.ListState
 
 	mu         sync.Mutex // guards the fields below, written by jobs
 	testing    bool
@@ -80,6 +82,12 @@ func (p *Page) View(c *ui.Context) {
 	}
 	st := e.API.Status()
 	running := st.Core == model.CoreRunning
+	if e.Phone {
+		p.phoneView(c, t, running)
+		p.form.View(c, e)
+		p.testDialog(c, t)
+		return
+	}
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("规则"), "", func() { p.tools(c, running) })
 		if c.Shortcut(ui.Cmd, ui.KeyF) {

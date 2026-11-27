@@ -176,7 +176,11 @@ func (p *Page) exitCard(c *ui.Context, st model.Status, rs []route, grow float32
 
 	// The map card takes the left two thirds of the page and all its
 	// height (docs/design.md §5.1), so the globe grows with the window.
-	ui.Column(c).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Grow(grow).Basis(0).MinWidth(mapMinWidth).MinHeight(cardHeight).Padding(8, 12, 8, 12).Gap(2).Children(func() {
+	box := ui.Column(c).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Grow(grow).Basis(0).MinWidth(mapMinWidth).MinHeight(cardHeight).Padding(8, 12, 8, 12).Gap(2)
+	if p.e.Phone { // no border on a phone, nor a bordered button (docs/phone-ui.md)
+		box.Border(0, ui.Transparent).Radius(env.PhoneRadius).MinWidth(0)
+	}
+	box.Children(func() {
 		cardTitle(c, i18n.T("出口地图"), func() {
 			if guessed {
 				p.youUnknown(c, t)
@@ -185,6 +189,12 @@ func (p *Page) exitCard(c *ui.Context, st model.Status, rs []route, grow float32
 			case !run:
 				ui.Text(c, i18n.T("内核未启动")).FontSize(11).TextColor(t.TextMuted).Padding(1, 6).Radius(999).Background(t.TextMuted.Alpha(0.12))
 			case direct:
+			case p.e.Phone:
+				if probing {
+					ui.Spinner(c).Size(16, 16).Label(i18n.T("实测中…"))
+				} else if env.IconButton(c, p.e.Kit, "refresh", i18n.T("实测出口")).Clicked() {
+					p.probe()
+				}
 			default:
 				b := ui.Button(c, "").Label(i18n.T("实测出口")).Tooltip(i18n.T("经各出口访问 Cloudflare trace，测出真实出口位置")).Disabled(probing)
 				b.Children(func() {
@@ -200,92 +210,107 @@ func (p *Page) exitCard(c *ui.Context, st model.Status, rs []route, grow float32
 				}
 			}
 		})
-		m := ui.Box(c).Grow(1).Label(i18n.T("出口地图")).Description(mapDescription(you, rs, dests) + i18n.T("。拖动可旋转地球，滚轮缩放，双击复位"))
-		if !run {
-			m.Opacity(0.45)
-		}
-		// The globe turns under a drag and keeps turning after a fling;
-		// the wheel or a pinch zooms about the pointer; a double click
-		// brings the framing of the exits back.
-		now := time.Now()
-		reduce := c.Preferences().ReduceMotion
-		m.HandleInput(func(ev ui.InputEvent) bool {
-			switch ev.Kind {
-			case ui.InputScroll:
-				if ev.Momentum {
-					return true
-				}
-				step := float64(ev.DY)
-				if !ev.Precise {
-					step *= 12 // a notch of the wheel
-				}
-				p.view.zoomAt(math.Exp(-step*wheelZoom), ev.X, ev.Y, time.Now())
-				return true
-			case ui.InputZoom:
-				p.view.zoomAt(float64(ev.Scale), ev.X, ev.Y, time.Now())
-				return true
-			}
-			return false
-		})
-		// Zoom buttons in the corner of the map, about its centre: in,
-		// out, back to the framing of the exits, and the whole sphere.
-		m.Children(func() {
-			ui.Row(c).Absolute().Right(6).Bottom(6).Gap(4).Children(func() {
-				p.zoomButton(c, "plus", "+", i18n.T("放大"), func() { p.view.zoomBy(buttonZoom, time.Now()) })
-				p.zoomButton(c, "", "−", i18n.T("缩小"), func() { p.view.zoomBy(1/buttonZoom, time.Now()) })
-				p.zoomButton(c, "locate", "⌖", i18n.T("复位视角"), func() { p.view.recenter(time.Now(), reduce) })
-				p.zoomButton(c, "proxies", "◯", i18n.T("地球全景"), func() { p.view.zoomTo(1, time.Now()) })
-			})
-		})
-		dx, dy, held := m.Dragged()
-		dragged := p.view.dragDist > dragSlop // this press turned the globe: no click
-		p.view.held = held
-		if held {
-			if dx != 0 || dy != 0 {
-				p.view.drag(dx, dy, now)
-			}
-		} else {
-			p.view.dragDist = 0
-		}
-		if vx, vy, ok := m.DragEnded(); ok {
-			p.view.fling(vx, vy, now, reduce)
-		}
-		if m.DoubleClicked() {
-			p.view.recenter(now, reduce)
-		}
-		cursor := ui.CursorGrab
-		if held {
-			cursor = ui.CursorGrabbing
-		}
-		// Clicking an arc or exit opens the connections page filtered
-		// to that route (docs/exit-map.md §4 layer D).
-		if run && !direct && !held && len(p.hits) > 0 {
-			if x, y, over := m.PointerPosition(); over {
-				if g := p.hitRoute(x, y); g != "" {
-					q := g
-					for _, r := range rs {
-						if r.Group == g {
-							q = r.connsQuery()
-						}
-					}
-					cursor = ui.CursorPointer
-					m.Tooltip(i18n.Tf("查看经 %s 的连接", q))
-					if !dragged && m.Clicked() {
-						p.e.Navigate(env.Conns, q)
-					}
-				}
-			}
-		}
-		m.Cursor(cursor)
-		p.drawMap(c, m, rs, dests, you, guessed, run && !direct)
+		p.mapBox(c, rs, dests, you, guessed, run, direct)
 	})
+}
+
+// mapBox is the globe itself: it turns under a drag, zooms with the wheel
+// or a pinch, and a click on a route opens its connections. The card
+// (exitCard) and the phone's 地图 (PhoneMap) draw it.
+func (p *Page) mapBox(c *ui.Context, rs []route, dests map[string][]dest, you *model.Place, guessed, run, direct bool) ui.Element {
+	m := ui.Box(c).Grow(1).Label(i18n.T("出口地图")).Description(mapDescription(you, rs, dests) + i18n.T("。拖动可旋转地球，滚轮缩放，双击复位"))
+	if !run {
+		m.Opacity(0.45)
+	}
+	// The globe turns under a drag and keeps turning after a fling;
+	// the wheel or a pinch zooms about the pointer; a double click
+	// brings the framing of the exits back.
+	now := time.Now()
+	reduce := c.Preferences().ReduceMotion
+	m.HandleInput(func(ev ui.InputEvent) bool {
+		switch ev.Kind {
+		case ui.InputScroll:
+			if ev.Momentum {
+				return true
+			}
+			step := float64(ev.DY)
+			if !ev.Precise {
+				step *= 12 // a notch of the wheel
+			}
+			p.view.zoomAt(math.Exp(-step*wheelZoom), ev.X, ev.Y, time.Now())
+			return true
+		case ui.InputZoom:
+			p.view.zoomAt(float64(ev.Scale), ev.X, ev.Y, time.Now())
+			return true
+		}
+		return false
+	})
+	// Zoom buttons in the corner of the map, about its centre: in,
+	// out, back to the framing of the exits, and the whole sphere.
+	m.Children(func() {
+		if p.e.Phone {
+			return // fingers pinch and turn the globe; double tap recenters
+		}
+		ui.Row(c).Absolute().Right(6).Bottom(6).Gap(4).Children(func() {
+			p.zoomButton(c, "plus", "+", i18n.T("放大"), func() { p.view.zoomBy(buttonZoom, time.Now()) })
+			p.zoomButton(c, "", "−", i18n.T("缩小"), func() { p.view.zoomBy(1/buttonZoom, time.Now()) })
+			p.zoomButton(c, "locate", "⌖", i18n.T("复位视角"), func() { p.view.recenter(time.Now(), reduce) })
+			p.zoomButton(c, "proxies", "◯", i18n.T("地球全景"), func() { p.view.zoomTo(1, time.Now()) })
+		})
+	})
+	dx, dy, held := m.Dragged()
+	dragged := p.view.dragDist > dragSlop // this press turned the globe: no click
+	p.view.held = held
+	if held {
+		if dx != 0 || dy != 0 {
+			p.view.drag(dx, dy, now)
+		}
+	} else {
+		p.view.dragDist = 0
+	}
+	if vx, vy, ok := m.DragEnded(); ok {
+		p.view.fling(vx, vy, now, reduce)
+	}
+	if m.DoubleClicked() {
+		p.view.recenter(now, reduce)
+	}
+	cursor := ui.CursorGrab
+	if held {
+		cursor = ui.CursorGrabbing
+	}
+	// Clicking an arc or exit opens the connections page filtered
+	// to that route (docs/exit-map.md §4 layer D).
+	if run && !direct && !held && len(p.hits) > 0 {
+		if x, y, over := m.PointerPosition(); over {
+			if g := p.hitRoute(x, y); g != "" {
+				q := g
+				for _, r := range rs {
+					if r.Group == g {
+						q = r.connsQuery()
+					}
+				}
+				cursor = ui.CursorPointer
+				m.Tooltip(i18n.Tf("查看经 %s 的连接", q))
+				if !dragged && m.Clicked() {
+					p.e.Navigate(env.Conns, q)
+				}
+			}
+		}
+	}
+	m.Cursor(cursor)
+	p.drawMap(c, m, rs, dests, you, guessed, run && !direct)
+	return m
 }
 
 // zoomButton is one of the small round buttons over the map: an icon of
 // the kit, or a glyph where it has none.
 func (p *Page) zoomButton(c *ui.Context, icon, glyph, label string, fn func()) {
 	t := c.Theme()
-	b := ui.Button(c.Key("zoom:"+label), "").Label(label).Tooltip(label).Size(26, 26).Padding(0).Radius(13).
+	size := float32(26)
+	if p.e.Phone {
+		size = 34 // a fingertip
+	}
+	b := ui.Button(c.Key("zoom:"+label), "").Label(label).Tooltip(label).Size(size, size).Padding(0).Radius(size/2).
 		Background(t.Surface.Alpha(0.85)).Border(1, t.Border)
 	b.Children(func() {
 		if icon != "" && p.e.Kit != nil {
@@ -339,7 +364,9 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 	// skips it when not focused): there the routes, their widths and
 	// their speeds show what moves, redrawn with each data frame.
 	focused := c.WindowActive()
-	ambient := focused && !reduce && live && p.anyLive(rs)
+	// On a phone the battery matters more than the decoration: no idle
+	// motion, and the requests travel at 30 fps (docs/phone-ui.md).
+	ambient := focused && !reduce && live && p.anyLive(rs) && !p.e.Phone
 	p.view.paused = !ambient
 	box.Draw(func(pt *ui.Painter, r ui.Rect) {
 		p.hits = p.hits[:0]
@@ -411,7 +438,7 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 			animating = animating || fr.animating
 		})
 		switch {
-		case animating && focused:
+		case animating && focused && !p.e.Phone:
 			// Requests travel and markers glide smoothly at 60 fps; the
 			// display's own rate (120 on ProMotion) adds nothing visible.
 			pt.AnimationFrameRate(60)

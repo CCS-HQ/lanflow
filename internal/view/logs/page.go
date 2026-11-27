@@ -206,7 +206,11 @@ func (p *Page) View(c *ui.Context) {
 	vis := p.visible(all, base)
 
 	ui.Column(c).Fill().Children(func() {
-		e.Kit.Header(c, i18n.T("日志"), "", func() { p.tools(c, all) })
+		if e.Phone {
+			p.phoneTools(c, all)
+		} else {
+			e.Kit.Header(c, i18n.T("日志"), "", func() { p.tools(c, all) })
+		}
 		if c.Shortcut(ui.Cmd, ui.KeyF) {
 			p.search.Focus(c)
 		}
@@ -229,8 +233,16 @@ func (p *Page) View(c *ui.Context) {
 			// lines being read instead of sliding under them.
 			p.list.Key = func(i int) any { return base + uint64(vis[i]) }
 			p.list.Label = func(i int) string { return all[vis[i]].Payload }
-			levelW := levelWidth(c)
-			if p.wrap {
+			levelW := float32(0)
+			if !e.Phone {
+				levelW = levelWidth(c)
+			}
+			if e.Phone {
+				// Two lines an entry, wrapped: no sideways scrolling.
+				ui.List(c.Key("list"), &p.list, len(vis), func(i int) {
+					p.phoneLine(c, t, all[vis[i]])
+				}).Fill().Font("monospace").FontSize(12).Selectable().Label(i18n.T("日志"))
+			} else if p.wrap {
 				ui.List(c.Key("list"), &p.list, len(vis), func(i int) {
 					p.line(c, t, all[vis[i]], levelW)
 				}).Fill().Font("monospace").FontSize(12).Selectable().KeepScrollbars(true).Label(i18n.T("日志"))
@@ -291,18 +303,7 @@ func (p *Page) tools(c *ui.Context, all []model.LogEntry) {
 		e.Kit.Icon(c, icon, 13)
 		ui.Text(c, pauseLabel)
 	}).OnClick(func() { p.paused = !p.paused })
-	ui.Button(c, i18n.T("清空")).Disabled(len(all) == 0).OnClick(func() {
-		p.frozen = nil
-		app := p.isApp()
-		e.Run(func() error {
-			if app {
-				e.API.ClearAppLogs()
-			} else {
-				e.API.ClearLogs()
-			}
-			return nil
-		}, "")
-	})
+	ui.Button(c, i18n.T("清空")).Disabled(len(all) == 0).OnClick(func() { p.clear() })
 	reveal := i18n.T("在资源管理器中显示日志文件")
 	if e.Mac {
 		reveal = i18n.T("在访达中显示日志文件")
@@ -330,6 +331,21 @@ func (p *Page) tools(c *ui.Context, all []model.LogEntry) {
 			go ExportDiagnostics(e)
 		}
 	}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd, Open: &p.menuOpen})
+}
+
+// clear empties the log shown.
+func (p *Page) clear() {
+	e := p.e
+	p.frozen = nil
+	app := p.isApp()
+	e.Run(func() error {
+		if app {
+			e.API.ClearAppLogs()
+		} else {
+			e.API.ClearLogs()
+		}
+		return nil
+	}, "")
 }
 
 // logFileName is the core's log file under LogDir (internal/app/service.go),

@@ -26,12 +26,15 @@ func (p *Page) leakTab(c *ui.Context, t *ui.Theme, st model.Status) {
 		note = i18n.Tf("上次检查 %s", lk.CheckedAt.Format("15:04:05"))
 	}
 	ui.Column(c).Grow(1).Gap(8).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
+		title := func() {
 			ui.Text(c, i18n.T("泄漏检查")).Bold().SingleLine().Shrink(0)
 			ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(1)
-			ui.Spacer(c)
-			ui.TextInput(c.Key("leakdomain"), &p.leakDomain).Placeholder(i18n.T("附加对比的域名（可选）")).Font("monospace").Width(240).Shrink(1).
+		}
+		domain := func() ui.Element {
+			return ui.TextInput(c.Key("leakdomain"), &p.leakDomain).Placeholder(i18n.T("附加对比的域名（可选）")).Font("monospace").Width(240).Shrink(1).
 				Label(i18n.T("附加对比的域名（可选）")).Tooltip(i18n.T("系统解析器、强制 IPv6 的直连请求和直接发出的 STUN（UDP）各测一次，与内核和代理出口比较；并列出出口 IP 的归属与三路 DNS 结果"))
+		}
+		action := func() {
 			if lk.Checking {
 				ui.Spinner(c).Size(12, 12).Label(i18n.T("检查中…"))
 				ui.Text(c, i18n.T("检查中…")).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
@@ -45,7 +48,23 @@ func (p *Page) leakTab(c *ui.Context, t *ui.Theme, st model.Status) {
 			ui.PrimaryButton(c, label).Disabled(!running).Tooltip(i18n.T("检查 DNS、IPv6 和 WebRTC 是否绕过代理，以及出口 IP 的类型")).OnClick(func() {
 				e.Run(func() error { return e.API.RunLeakCheckWith(domain) }, "")
 			})
-		})
+		}
+		if e.Phone {
+			// The title on one line, the domain taking the width the
+			// button leaves on the next.
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(title)
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
+				domain().Width(0).Grow(1)
+				action()
+			})
+		} else {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
+				title()
+				ui.Spacer(c)
+				domain()
+				action()
+			})
+		}
 		if lk.Error != "" {
 			e.Kit.Banner(c, "error", lk.Error, nil)
 		}
@@ -125,25 +144,55 @@ func (p *Page) leakRow(c *ui.Context, t *ui.Theme, it model.LeakItem, tun bool) 
 		var parts ui.CollapsibleParts
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 12, 0, 0).Children(func() {
 			parts = ui.CollapsibleBase(c.Key("coll"), open)
-			parts.Trigger.Grow(1).Gap(8).PaddingX(12).MinHeight(34).AlignItems(ui.Center).Label(name + " · " + word).Children(func() {
-				ui.Box(c).TextColor(t.TextMuted).Children(func() { e.Kit.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
-				e.Kit.Dot(c, dot)
-				ui.Text(c, name).Bold().FontSize(13).SingleLine().Shrink(0)
-				ui.Text(c, word).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
-				ui.Text(c, it.Summary).FontSize(12).Grow(1).Shrink(1).SingleLine().Tooltip(it.Summary)
-			})
-			if key := leakFix(it, tun); key != "" {
+			if e.Phone {
+				// The summary goes under the name, wrapping.
+				parts.Trigger.Grow(1).Basis(0).Gap(8).Padding(8, 12).MinHeight(env.TouchSize).AlignItems(ui.Center).Label(name + " · " + word).Children(func() {
+					ui.Box(c).TextColor(t.TextMuted).Children(func() { e.Kit.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
+					e.Kit.Dot(c, dot)
+					ui.Column(c).Gap(2).Grow(1).Basis(0).Children(func() {
+						ui.Row(c).Gap(8).AlignItems(ui.Baseline).Children(func() {
+							ui.Text(c, name).Bold().FontSize(13).SingleLine().Shrink(0)
+							ui.Text(c, word).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
+						})
+						if parts.Progress() < 1 { // the open panel repeats it in full
+							ui.Text(c, it.Summary).FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+						}
+					})
+				})
+			} else {
+				parts.Trigger.Grow(1).Gap(8).PaddingX(12).MinHeight(34).AlignItems(ui.Center).Label(name + " · " + word).Children(func() {
+					ui.Box(c).TextColor(t.TextMuted).Children(func() { e.Kit.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
+					e.Kit.Dot(c, dot)
+					ui.Text(c, name).Bold().FontSize(13).SingleLine().Shrink(0)
+					ui.Text(c, word).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
+					ui.Text(c, it.Summary).FontSize(12).Grow(1).Shrink(1).SingleLine().Tooltip(it.Summary)
+				})
+			}
+			// A phone has no TUN section in Settings: its VPN always
+			// carries all traffic.
+			if key := leakFix(it, tun); key != "" && !(e.Phone && key == "tun") {
 				place := env.SettingsPlace(key)
-				e.GoLink(c, i18n.Tf("前往%s", place), i18n.Tf("%s：前往%s", name, place), env.Settings, key)
+				l := e.GoLink(c, i18n.Tf("前往%s", place), i18n.Tf("%s：前往%s", name, place), env.Settings, key)
+				if e.Phone {
+					l.Padding(15, 0)
+				}
 			}
 		})
+		labelW := float32(120)
+		if e.Phone {
+			labelW = 88
+		}
 		parts.Panel(func() {
-			ui.Column(c).Gap(4).Padding(0, 12, 10, 40).Children(func() {
+			panel := ui.Column(c).Gap(4).Padding(0, 12, 10, 40)
+			if e.Phone {
+				panel.Padding(0, 14, 12, 34)
+			}
+			panel.Children(func() {
 				if len(it.Rows) > 0 {
 					ui.Column(c).Gap(2).Children(func() {
 						for _, r := range it.Rows {
 							ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
-								ui.Text(c, r.Label).FontSize(11).TextColor(t.TextMuted).Width(120).Shrink(0)
+								ui.Text(c, r.Label).FontSize(11).TextColor(t.TextMuted).Width(labelW).Shrink(0)
 								ui.Text(c, r.Value).FontSize(11).Font("monospace").Grow(1).Selectable()
 							})
 						}

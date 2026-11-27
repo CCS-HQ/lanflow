@@ -71,6 +71,30 @@ func (p *Page) exportDialog(c *ui.Context, t *ui.Theme) {
 	})
 }
 
+// phoneExport is 导出设置 on a phone, a page in place of the sheet: the
+// note, 包含订阅链接与手动节点 as a switch, 导出….
+func (p *Page) phoneExport(c *ui.Context) {
+	t := c.Theme()
+	phoneFoot(c, i18n.T("导出常规、代理、DNS、嗅探与内核设置，以及覆写、链式代理和自定义规则。内核文件路径不会导出。"))
+	phoneGroup(c, func() {
+		label := i18n.T("包含订阅链接与手动节点")
+		p.e.Kit.Row(c, label, "", func() {
+			ui.Switch(c.Key("export-subs"), &p.export.subs).Label(label)
+		})
+	})
+	if p.export.subs {
+		ui.Text(c, i18n.T("订阅链接与手动节点含有你的访问令牌或凭据，导出的文件请勿分享给他人。")).FontSize(12).TextColor(t.Warning).PaddingX(14)
+	}
+	phoneSpacer(c)
+	phoneGroup(c, func() {
+		if env.ActionRow(c, i18n.T("导出…"), false, false).Clicked() {
+			include := p.export.subs
+			p.sub = nil
+			go p.exportSettings(include)
+		}
+	})
+}
+
 // exportSettings asks where to save and writes the file. The system
 // dialog blocks, so this runs on its own goroutine.
 func (p *Page) exportSettings(includeSubs bool) {

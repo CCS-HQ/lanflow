@@ -143,6 +143,16 @@ type Env struct {
 	Windows bool
 	// Elevated is true when the current process runs elevated on Windows.
 	Elevated bool
+	// Phone is true on iOS and Android (docs/phone-ui.md): one narrow
+	// column under the shell's top bar, above its bar of tabs; the system
+	// VPN in place of the system proxy and TUN, and no tray, global
+	// shortcuts, login item, helper or core versions. Pages lay out for
+	// it and leave out what a phone has not.
+	Phone bool
+	// PhoneScroll returns the scroll state of page p's main scroll
+	// container on a phone, which the shell reads to swap the large title
+	// for the small one (Env.Scroll); nil off a phone.
+	PhoneScroll func(p Page) *ui.ScrollState
 
 	// SetGlobalShortcut makes acc (a MyGo accelerator, "" = none) the
 	// system-wide shortcut that toggles the system proxy, replacing the

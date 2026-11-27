@@ -57,6 +57,10 @@ func (p *Page) View(c *ui.Context) {
 		p.emptyState(c, st)
 		return
 	}
+	if p.e.Phone {
+		p.phoneView(c, st)
+		return
+	}
 	// The whole page fits the window without scrolling (docs/design.md
 	// §4): under the switches, the exit globe takes the left two thirds
 	// and all the height; the routes, the subscription, the speed and the
@@ -186,45 +190,7 @@ func (p *Page) coreRows(c *ui.Context, st model.Status, pc, pp *bool, busy bool)
 				}
 			})
 		})
-		if st.Core == model.CoreError {
-			ui.Box(c).Padding(0, 12, 10, 12).Children(func() {
-				msg := i18n.T("Mihomo 内核意外退出，自动重启也失败了。系统代理已自动关闭，避免断网。")
-				if st.CoreError != "" {
-					msg = i18n.Tf("Mihomo 内核意外退出：%s。系统代理已自动关闭，避免断网。", st.CoreError)
-				}
-				k.Banner(c, "error", msg, func() {
-					if ui.Button(c, i18n.T("查看日志")).Clicked() {
-						p.e.Navigate(env.Logs, "")
-					}
-					if ui.PrimaryButton(c, i18n.T("重新启动")).Clicked() {
-						p.run(func() error { return p.e.API.RestartCore() }, i18n.T("内核已重启"), nil)
-					}
-				})
-			})
-		}
-		if st.Core == model.CoreMissing {
-			ui.Box(c).Padding(0, 12, 10, 12).Children(func() { p.missingBanner(c, st) })
-		}
-		// 配置同步 (docs/config-sync.md): a refused change, conflict
-		// copies or sealed links waiting for the passphrase need the user;
-		// the details are in 设置 › 常规.
-		if cs := p.e.API.ConfigSyncStatus(); cs.Error != "" || len(cs.Conflicts) > 0 || cs.Locked {
-			ui.Box(c).Padding(0, 12, 10, 12).Children(func() {
-				msg := i18n.Tf("同步文件有冲突副本（%s），请选择保留哪一个。", strings.Join(cs.Conflicts, i18n.T("、")))
-				kind := "warn"
-				if len(cs.Conflicts) == 0 {
-					msg, kind = i18n.T("输入同步口令以解锁订阅链接。"), "info"
-				}
-				if cs.Error != "" {
-					msg, kind = i18n.Tf("同步文件的修改没有加载，配置保持不变：%s", cs.Error), "error"
-				}
-				k.Banner(c, kind, msg, func() {
-					if ui.Button(c, i18n.T("查看")).Clicked() {
-						p.e.Navigate(env.Settings, "general")
-					}
-				})
-			})
-		}
+		p.coreBanners(c, st)
 
 		// 系统代理
 		proxyOn := st.Core == model.CoreRunning && st.SystemProxy
@@ -292,23 +258,82 @@ func (p *Page) modeRows(c *ui.Context, st model.Status, pm *model.Mode, busy boo
 		if pm != nil {
 			mode = *pm
 		}
-		row(c, i18n.T("模式"), nil, func() {
-			idx := modeIndex(mode)
-			ui.Segmented(c, &idx, i18n.T("规则"), i18n.T("全局"), i18n.T("直连")).Label(i18n.T("模式")).OnChange(func() {
-				m := modes[idx]
-				p.mu.Lock()
-				p.pendingMode = &m
-				p.mu.Unlock()
-				p.e.Run(func() error {
-					err := p.e.API.SetMode(m)
-					p.mu.Lock()
-					p.pendingMode = nil
-					p.mu.Unlock()
-					return err
-				}, i18n.Tf("已切换到%s模式", env.ModeName(m)))
+		row(c, i18n.T("模式"), nil, func() { p.modeControl(c, mode) })
+	}
+}
+
+// coreBanners are the banners under the core's switch that need the
+// user: the core crashed, is missing, or the config sync waits.
+func (p *Page) coreBanners(c *ui.Context, st model.Status) {
+	k := p.e.Kit
+	if st.Core == model.CoreError {
+		ui.Box(c).Padding(0, 12, 10, 12).Children(func() {
+			msg := i18n.T("Mihomo 内核意外退出，自动重启也失败了。系统代理已自动关闭，避免断网。")
+			if st.CoreError != "" {
+				msg = i18n.Tf("Mihomo 内核意外退出：%s。系统代理已自动关闭，避免断网。", st.CoreError)
+			}
+			if p.e.Phone { // no system proxy: the VPN went down with the core
+				msg = i18n.T("Mihomo 内核意外退出，自动重启也失败了，VPN 已断开。")
+				if st.CoreError != "" {
+					msg = i18n.Tf("Mihomo 内核意外退出：%s。VPN 已断开。", st.CoreError)
+				}
+			}
+			k.Banner(c, "error", msg, func() {
+				if ui.Button(c, i18n.T("查看日志")).Clicked() {
+					p.e.Navigate(env.Logs, "")
+				}
+				if ui.PrimaryButton(c, i18n.T("重新启动")).Clicked() {
+					p.run(func() error { return p.e.API.RestartCore() }, i18n.T("内核已重启"), nil)
+				}
 			})
 		})
 	}
+	if st.Core == model.CoreMissing {
+		ui.Box(c).Padding(0, 12, 10, 12).Children(func() { p.missingBanner(c, st) })
+	}
+	// 配置同步 (docs/config-sync.md): a refused change, conflict
+	// copies or sealed links waiting for the passphrase need the user;
+	// the details are in 设置 › 常规.
+	if cs := p.e.API.ConfigSyncStatus(); cs.Error != "" || len(cs.Conflicts) > 0 || cs.Locked {
+		ui.Box(c).Padding(0, 12, 10, 12).Children(func() {
+			msg := i18n.Tf("同步文件有冲突副本（%s），请选择保留哪一个。", strings.Join(cs.Conflicts, i18n.T("、")))
+			kind := "warn"
+			if len(cs.Conflicts) == 0 {
+				msg, kind = i18n.T("输入同步口令以解锁订阅链接。"), "info"
+			}
+			if cs.Error != "" {
+				msg, kind = i18n.Tf("同步文件的修改没有加载，配置保持不变：%s", cs.Error), "error"
+			}
+			k.Banner(c, kind, msg, func() {
+				if ui.Button(c, i18n.T("查看")).Clicked() {
+					p.e.Navigate(env.Settings, "general")
+				}
+			})
+		})
+	}
+}
+
+// modeControl is the 规则 / 全局 / 直连 segmented control.
+func (p *Page) modeControl(c *ui.Context, mode model.Mode) ui.Element {
+	idx := modeIndex(mode)
+	return ui.Segmented(c, &idx, i18n.T("规则"), i18n.T("全局"), i18n.T("直连")).Label(i18n.T("模式")).OnChange(func() {
+		p.setMode(modes[idx])
+	})
+}
+
+// setMode switches the mode, showing it at once (pendingMode) while the
+// service applies it.
+func (p *Page) setMode(m model.Mode) {
+	p.mu.Lock()
+	p.pendingMode = &m
+	p.mu.Unlock()
+	p.e.Run(func() error {
+		err := p.e.API.SetMode(m)
+		p.mu.Lock()
+		p.pendingMode = nil
+		p.mu.Unlock()
+		return err
+	}, i18n.Tf("已切换到%s模式", env.ModeName(m)))
 }
 
 var modes = []model.Mode{model.ModeRule, model.ModeGlobal, model.ModeDirect}
