@@ -73,3 +73,26 @@ func TestPhoneDepsWithoutTunnel(t *testing.T) {
 		t.Fatalf("controller = %q; want core's default", got)
 	}
 }
+
+// On a phone the core runs in the system VPN even with TUN off in the
+// settings (tunRunner false): a reload still names the config the tunnel
+// staged, never runtime.yaml, which lacks the VPN's descriptor.
+func TestPhoneReloadAlwaysStages(t *testing.T) {
+	saved := onPhone
+	onPhone = func() bool { return true }
+	t.Cleanup(func() { onPhone = saved })
+
+	h := newHarness(t, nil)
+	var staged []core.Spec
+	h.s.d.core = stagingCore{fakeCore: h.core, runner: stagingRunner{namedRunner: namedRunner{"tunnel"}, specs: &staged, path: "/data/core/android-runtime.yaml"}}
+	h.s.mu.Lock()
+	h.s.state.tunRunner = false
+	h.s.mu.Unlock()
+	path, err := h.s.reloadPath(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/data/core/android-runtime.yaml" || len(staged) != 1 || staged[0].Config != h.s.runtime {
+		t.Fatalf("reloadPath = %q, staged %+v", path, staged)
+	}
+}

@@ -13,8 +13,8 @@ import (
 
 // onPhone reports whether this build runs on a phone (iOS or Android),
 // where the system VPN (package tunnel) replaces the system proxy and the
-// TUN helper.
-func onPhone() bool { return runtime.GOOS == "ios" || runtime.GOOS == "android" }
+// TUN helper. A variable so that tests on a desktop can play a phone.
+var onPhone = func() bool { return runtime.GOOS == "ios" || runtime.GOOS == "android" }
 
 // phoneDeps adapts the desktop dependencies to a phone: the core runs in
 // the system VPN t (nil when this build registered none: every start then

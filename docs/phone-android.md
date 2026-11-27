@@ -54,7 +54,7 @@ Android 10 起应用不能执行数据目录里的文件（W^X），能执行的
 
 ### 热重载
 
-`vpnRunner` 实现了 `core.ConfigStager`：重载前要把新的 `runtime.yaml` 改写成 `android-runtime.yaml`，否则新配置里没有 `file-descriptor`，内核会关掉 TUN。服务层的 `reloadPath` 只在 `state.tunRunner` 为真时调用 `StageConfig`；手机上设置里 TUN 关着时目前不会走这条路，需要服务层在手机上总是调用（见 PR 说明，未在本分支修改 `internal/app`）。
+`vpnRunner` 实现了 `core.ConfigStager`：重载前要把新的 `runtime.yaml` 改写成 `android-runtime.yaml`，否则新配置里没有 `file-descriptor`，内核会关掉 TUN。手机上内核总在系统 VPN 里，与设置里的 TUN 开关无关，所以服务层的 `reloadPath` 在手机上总是经隧道 Runner 的 `StageConfig`（`internal/app/lifecycle.go`，测试 `TestPhoneReloadAlwaysStages`）。手机上的「VPN 开关」即启停内核（StartCore/StopCore），Runner 不看 `settings.TUN`。
 
 ## 构建
 
@@ -75,11 +75,11 @@ JAVA_HOME=<JDK 17> go tool mygo build -platform android/arm64
 已验证：
 - 导入订阅后弹出系统 VPN 授权框，授权后 `tun0` 建立（`198.18.0.1/30`、`fdfe:dcba:9876::1/126`、DNS `198.18.0.2`、MTU 9000、本应用 UID 被排除），状态栏有钥匙图标
 - 内核经 `linker64` 从 APK 内启动，日志 `[TUN] Tun adapter listening at: tun0(fd=3) … ip stack: gVisor`；控制接口 unix socket 有响应，界面显示 "Running · Mihomo v1.19.34"
+- 设置里 TUN 关着时更新订阅触发热重载：`reload config: ok`，内核进程不变、TUN 未重建，之后流量仍经节点
 - VPN 内应用（`adb shell` 的 UID 2000）`nc example.com 80`：DNS 经 fake-ip 解析，TCP 经内核转到本机测试 HTTP 代理节点，节点记到 `CONNECT example.com:80`，客户端收到 HTTP 响应；直连 IP（`1.1.1.1:80`）同样经节点
 
 未验证：
 - 用户在系统设置里断开 VPN / 另一个 VPN 接管时的 `onRevoke` 路径
-- 设置里 TUN 关着时的热重载（已知会丢 TUN，见上）
 - 浏览器流量（模拟器 Chrome 首次启动要同意服务条款，未代为同意；改用 shell 的 `nc` 验证）
 - 真机、x86_64、Android 10–15
 

@@ -609,7 +609,10 @@ func (s *Service) reloadPath(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	tun := s.state.tunRunner
 	s.mu.Unlock()
-	if !tun {
+	// On a phone the core always runs in the system VPN, whatever the TUN
+	// setting says, and the tunnel rewrites its config (tun.file-descriptor
+	// and the rest): every reload goes through the tunnel's runner.
+	if !tun && !onPhone() {
 		return s.runtime, nil
 	}
 	st, ok := s.d.core.HelperRunner().(core.ConfigStager)
