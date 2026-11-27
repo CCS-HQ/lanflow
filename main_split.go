@@ -50,25 +50,30 @@ func runService(args split.Args) {
 	var srv *rpc.Server
 	var startMu sync.Mutex
 	var lastStart time.Time
-	showWindow := func(arg string) {
+	var lastStartArg string
+	startWindow := func(arg string) error {
 		split.AllowForeground(0)
 		if srv != nil && srv.SendUI(rpc.UIShow, arg) {
-			return
+			return nil
 		}
 		// A window process may be on its way (a double click on the
-		// icon): one start per second at most.
+		// icon or tray): one start per second at most for the same target.
 		startMu.Lock()
-		if time.Since(lastStart) < time.Second && arg == "" {
+		if time.Since(lastStart) < time.Second && (arg == "" || arg == lastStartArg) {
 			startMu.Unlock()
-			return
+			return nil
 		}
 		lastStart = time.Now()
+		lastStartArg = arg
 		startMu.Unlock()
 		split.AllowForeground(0)
-		if err := split.StartWindow(exe, arg); err != nil {
+		err := split.StartWindow(exe, arg)
+		if err != nil {
 			log.Printf("lanflow: start the window: %v", err)
 		}
+		return err
 	}
+	showWindow := func(arg string) { _ = startWindow(arg) }
 	var confirmed, signaled, confirmingQuit atomic.Bool
 	quitNow := func() {
 		confirmed.Store(true)
@@ -165,12 +170,20 @@ func runService(args split.Args) {
 		if confirmed.Load() || signaled.Load() {
 			return
 		}
-		// 退出澜流 from the tray (docs/design.md §6.4): the window asks when
-		// it is open, a native dialog otherwise.
+		// 退出澜流 from the tray (docs/design.md §6.4): open the window and
+		// confirm there while the system proxy is on (falling back to a native
+		// dialog only if starting the window fails).
 		e.PreventDefault()
 		split.AllowForeground(0)
 		if srv.SendUI(rpc.UIAskQuit, "") {
 			return // the window calls QuitService when the user agrees
+		}
+		if !api.Status().SystemProxy {
+			quitNow()
+			return
+		}
+		if err := startWindow(view.OpenQuit); err == nil {
+			return
 		}
 		if !confirmingQuit.CompareAndSwap(false, true) {
 			if !split.FocusDialog() {
@@ -269,7 +282,6 @@ func runWindow(args split.Args) {
 		closingWindow   atomic.Bool
 		quitting        atomic.Bool
 		signaled        atomic.Bool
-		confirmingLeave atomic.Bool
 	)
 	withShell := func(fn func(*view.Shell)) {
 		shellMu.Lock()
@@ -277,18 +289,6 @@ func runWindow(args split.Args) {
 		shellMu.Unlock()
 		if s != nil {
 			fn(s)
-		}
-	}
-	open := func(arg string) {
-		shellMu.Lock()
-		s := shell
-		if s == nil {
-			pendingOpen = append(pendingOpen, arg)
-		}
-		shellMu.Unlock()
-		if s != nil {
-			s.ShowWindow()
-			s.Open(arg)
 		}
 	}
 	var client interface {
@@ -312,6 +312,7 @@ func runWindow(args split.Args) {
 	handOff := func(arg string) {
 		go func() {
 			detach()
+			split.AllowForeground(0)
 			if err := split.StartWindow(exe, arg); err != nil {
 				log.Printf("lanflow: start the window: %v", err)
 			}
@@ -345,6 +346,22 @@ func runWindow(args split.Args) {
 		s.AskQuit(quitAll)
 		s.ShowWindow()
 	}
+	open := func(arg string) {
+		if arg == view.OpenQuit {
+			askQuitAll()
+			return
+		}
+		shellMu.Lock()
+		s := shell
+		if s == nil {
+			pendingOpen = append(pendingOpen, arg)
+		}
+		shellMu.Unlock()
+		if s != nil {
+			s.ShowWindow()
+			s.Open(arg)
+		}
+	}
 	onUI := func(c rpc.UICommand) {
 		switch c.Cmd {
 		case rpc.UIShow:
@@ -361,30 +378,14 @@ func runWindow(args split.Args) {
 			withShell(func(s *view.Shell) { s.ToggleWindow() })
 		case rpc.UIAskQuit:
 			if leaving() {
-				if serviceQuitting.Load() || signaled.Load() || !confirmingLeave.CompareAndSwap(false, true) {
+				if serviceQuitting.Load() || signaled.Load() {
 					return
 				}
-				go func() {
-					defer confirmingLeave.Store(false)
-					if client == nil || !client.Status().SystemProxy {
-						quitAll()
-						return
-					}
-					res, err := mygo.Dialog.Message(mygo.MessageOptions{
-						Type:          mygo.MessageQuestion,
-						Title:         i18n.T("澜流 Lanflow"),
-						Message:       i18n.T("退出后将关闭系统代理。"),
-						Detail:        i18n.T("由澜流开启的系统代理会恢复为关闭，内核也会停止。"),
-						Buttons:       []string{i18n.T("退出"), i18n.T("取消")},
-						DefaultButton: 1,
-						CancelButton:  1,
-					})
-					if err != nil {
-						log.Printf("lanflow: quit confirm while closing: %v", err)
-					} else if res.Button == 0 {
-						quitAll()
-					}
-				}()
+				if client == nil || !client.Status().SystemProxy {
+					quitAll()
+					return
+				}
+				handOff(view.OpenQuit)
 				return
 			}
 			askQuitAll()
@@ -597,6 +598,22 @@ func runWindow(args split.Args) {
 			mygo.App.Quit()
 			return
 		}
+		shellMu.Lock()
+		earlyAskQuit := pendingAskQuit || firstOf(args.Open, args.Link) == view.OpenQuit
+		for _, a := range pendingOpen {
+			if a == view.OpenQuit {
+				earlyAskQuit = true
+				break
+			}
+		}
+		shellMu.Unlock()
+		if earlyAskQuit {
+			if !sh.NeedsQuitConfirm() {
+				quitAll()
+				return
+			}
+			sh.AskQuit(quitAll)
+		}
 		win := newMainWindow(sh, false)
 		sh.SetCloseWindow(func() {
 			closingWindow.Store(true)
@@ -637,10 +654,16 @@ func runWindow(args split.Args) {
 		sh.RegisterShortcuts() // through the service (Options.SetShortcut)
 		sh.CheckUpdatesAtLaunch()
 		for _, a := range append([]string{firstOf(args.Open, args.Link)}, queued...) {
+			if a == view.OpenQuit {
+				askQuit = true
+				continue
+			}
 			sh.Open(a)
 		}
 		if askQuit {
 			askQuitAll()
+		} else if earlyAskQuit {
+			sh.ShowWindow()
 		}
 		if res.PID != 0 && cl.Conn() != nil {
 			if sv := cl.Conn().Welcome().Version; sv != "" && version != "" && sv != version {

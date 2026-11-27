@@ -166,3 +166,24 @@ func TestRunThenOffTheUIThread(t *testing.T) {
 	}
 	var _ app.API = api
 }
+
+// TestAskQuitBeforeFirstFrame: when the tray opens the window to ask
+// before quitting (OpenQuit), queueing AskQuit before the first frame
+// shows the quit confirmation immediately without missing frame 1.
+func TestAskQuitBeforeFirstFrame(t *testing.T) {
+	if OpenQuit != "quit" {
+		t.Fatalf("OpenQuit = %q, want %q", OpenQuit, "quit")
+	}
+	_, s, tt := newTest(t)
+	quit := false
+	s.AskQuit(func() { quit = true })
+	tt.Frame()
+	if !tt.HasText(i18n.T("退出后将关闭系统代理。")) {
+		t.Fatalf("quit confirmation missing on first frame: %q", tt.Texts())
+	}
+	click(t, tt, "退出")
+	tt.Frame()
+	if !quit {
+		t.Fatal("quit did not run")
+	}
+}
