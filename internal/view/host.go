@@ -40,6 +40,7 @@ const (
 	OpenTUN      = "tun"      // turn TUN on, installing the helper first (asks)
 	OpenLogs     = "logs"     // the 日志 page
 	OpenCapture  = "capture"  // the 抓包 page, where decryption is turned on
+	OpenQuit     = "quit"     // confirm quitting Lanflow in the window
 )
 
 // toggleSystemProxy flips the system proxy (tray, shortcut).
@@ -105,6 +106,8 @@ func (s *Shell) Open(arg string) {
 		s.post(func() { s.navigate(env.Logs, "") })
 	case OpenCapture:
 		s.post(func() { s.navigate(env.Capture, "") })
+	case OpenQuit:
+		s.quit()
 	default:
 		s.OpenImportLink(arg)
 	}

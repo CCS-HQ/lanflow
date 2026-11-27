@@ -201,11 +201,11 @@ func runSingle(locked bool) {
 		// from the tray while the window is hidden: bring it up and ask.
 		if win != nil && shell.NeedsQuitConfirm() {
 			e.PreventDefault()
-			showWindow()
 			shell.AskQuit(func() {
 				quitting = true
 				mygo.App.Quit()
 			})
+			showWindow()
 			return
 		}
 		quitting = true

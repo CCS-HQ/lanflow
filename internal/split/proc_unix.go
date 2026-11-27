@@ -16,6 +16,9 @@ func detachWindow(cmd *exec.Cmd)  { cmd.SysProcAttr = &syscall.SysProcAttr{Setsi
 // AllowForeground is a no-op off Windows.
 func AllowForeground(int) {}
 
+// FocusDialog is a no-op off Windows.
+func FocusDialog() bool { return false }
+
 // Alive reports whether process pid still runs.
 func Alive(pid int) bool {
 	if pid <= 0 {

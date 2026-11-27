@@ -18,19 +18,34 @@ import (
 	"lanflow/internal/view/trayart"
 )
 
+type retainedMenu struct {
+	menu *mygo.Menu
+	at   time.Time
+}
+
+const (
+	// trayMenuRetain and trayMenuRetainCap keep recently replaced tray menus
+	// alive so MyGo's weak.Pointer menu table never drops items of a native
+	// popup menu that is still open or awaiting dispatch.
+	trayMenuRetain    = 30 * time.Second
+	trayMenuRetainCap = 32
+)
+
 // tray is the menu bar / notification area icon and its menu. It acts
 // through its host: the window's shell in the single process, the
 // service process's Background otherwise (host.go).
 type tray struct {
-	h     host
-	t     *mygo.Tray
-	mu    sync.Mutex
-	menu  *mygo.Menu
-	sig   string
-	look  trayart.Look              // what the icon shows
-	drawn string                    // look.key() + ink of the icon set last
-	node  string                    // the main group's current node, for the title
-	title string                    // text beside the icon (macOS)
+	h           host
+	t           *mygo.Tray
+	mu          sync.Mutex
+	menu        *mygo.Menu
+	pinnedMenu  *mygo.Menu
+	retained    []retainedMenu
+	sig         string
+	look        trayart.Look                      // what the icon shows
+	drawn       string                            // look.key() + ink of the icon set last
+	node        string                            // the main group's current node, for the title
+	title       string                            // text beside the icon (macOS)
 	tip         string                            // notification area tooltip (Windows)
 	tipAt       time.Time                         // last live speed tooltip update
 	icons       map[string]*mygo.MenuIcon         // group icons by reference (traycmd.go)
@@ -42,6 +57,27 @@ type tray struct {
 	delayAt    time.Time   // when the menu was last built
 	delayTimer *time.Timer // the rebuild waiting for the gap to pass
 	closed     bool
+}
+
+// retainMenuLocked records old in tr.retained and prunes expired or excess
+// entries so evicted menus can be garbage collected. tr.mu must be held.
+func (tr *tray) retainMenuLocked(old *mygo.Menu, now time.Time) {
+	if old == nil {
+		return
+	}
+	kept := make([]retainedMenu, 0, min(len(tr.retained)+1, trayMenuRetainCap))
+	for _, e := range tr.retained {
+		if now.Sub(e.at) <= trayMenuRetain {
+			kept = append(kept, e)
+		}
+	}
+	kept = append(kept, retainedMenu{menu: old, at: now})
+	if len(kept) > trayMenuRetainCap {
+		trimmed := make([]retainedMenu, trayMenuRetainCap)
+		copy(trimmed, kept[len(kept)-trayMenuRetainCap:])
+		kept = trimmed
+	}
+	tr.retained = kept
 }
 
 // trayDelayGap is the least time between two rebuilds of the menu that
@@ -88,6 +124,13 @@ func startTray(h host) (*tray, error) {
 	if runtime.GOOS == "windows" {
 		// Left click opens the window; right click pops up the installed menu.
 		t.OnClick(func() { h.showWindow("") })
+		// Pin the menu about to pop up so its items stay strongly reachable
+		// while TrackPopupMenuEx runs.
+		t.OnRightClick(func() {
+			tr.mu.Lock()
+			tr.pinnedMenu = tr.menu
+			tr.mu.Unlock()
+		})
 	}
 	tr.refresh(true)
 	return tr, nil
@@ -96,6 +139,8 @@ func startTray(h host) (*tray, error) {
 func (tr *tray) destroy() {
 	tr.mu.Lock()
 	tr.closed = true
+	tr.pinnedMenu = nil
+	tr.retained = nil
 	if tr.delayTimer != nil {
 		tr.delayTimer.Stop()
 		tr.delayTimer = nil
@@ -208,6 +253,7 @@ func (tr *tray) refresh(force bool) {
 	if rebuild {
 		menu = tr.build(st, px, subs, g, ok, acc, extra)
 		tr.mu.Lock()
+		tr.retainMenuLocked(tr.menu, now)
 		tr.menu = menu
 		tr.mu.Unlock()
 		if tr.t != nil {

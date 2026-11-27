@@ -437,3 +437,9 @@ func TestNewerWindowReplacesOlderService(t *testing.T) {
 		t.Fatalf("an older window replaced the service: pid %d, want %d", got, w.PID)
 	}
 }
+
+func TestFocusDialogNoWindow(t *testing.T) {
+	if FocusDialog() {
+		t.Fatal("FocusDialog() = true when no #32770 dialog belongs to this process")
+	}
+}
