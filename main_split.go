@@ -173,6 +173,9 @@ func runService(args split.Args) {
 			return // the window calls QuitService when the user agrees
 		}
 		if !confirmingQuit.CompareAndSwap(false, true) {
+			if !split.FocusDialog() {
+				mygo.App.Focus()
+			}
 			return
 		}
 		go func() {
@@ -376,7 +379,9 @@ func runWindow(args split.Args) {
 						DefaultButton: 1,
 						CancelButton:  1,
 					})
-					if err == nil && res.Button == 0 {
+					if err != nil {
+						log.Printf("lanflow: quit confirm while closing: %v", err)
+					} else if res.Button == 0 {
 						quitAll()
 					}
 				}()
@@ -608,7 +613,15 @@ func runWindow(args split.Args) {
 				return
 			}
 			closingWindow.Store(true)
-			go detach() // a new window may attach while this one goes
+			detachDone := make(chan struct{})
+			go func() {
+				detach() // a new window may attach while this one goes
+				close(detachDone)
+			}()
+			select {
+			case <-detachDone:
+			case <-time.After(150 * time.Millisecond):
+			}
 			sh.HiddenToTray()
 		})
 		shellMu.Lock()
