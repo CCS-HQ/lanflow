@@ -27,6 +27,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"lanflow/internal/i18n"
 )
 
 // CoreVersion is the Mihomo built into the extension: tunnelcore's go.mod
@@ -65,7 +67,7 @@ func PathsIn(group string) Paths {
 // runs no packet tunnel.
 func checkSocket(p string) error {
 	if len(p) > maxSocketPath {
-		return fmt.Errorf("controller socket path is %d bytes, over the %d a unix socket takes: %s", len(p), maxSocketPath, p)
+		return errors.New(i18n.Tf("控制接口的套接字路径有 %d 字节，超过 unix 套接字的 %d 字节上限：%s", len(p), maxSocketPath, p))
 	}
 	return nil
 }
@@ -86,7 +88,7 @@ func geoFile(name string) bool {
 // changed.
 func handOver(p Paths, workDir, config string) error {
 	if err := os.MkdirAll(p.Home, 0o700); err != nil {
-		return fmt.Errorf("cannot create the tunnel's core directory: %w", err)
+		return fmt.Errorf(i18n.T("无法创建系统 VPN 的内核目录：%w"), err)
 	}
 	data, err := os.ReadFile(config)
 	if err != nil {
@@ -132,7 +134,7 @@ func syncGeo(from, to string) error {
 			continue
 		}
 		if err := copyFile(src, dst); err != nil {
-			return fmt.Errorf("cannot copy %s to the tunnel: %w", e.Name(), err)
+			return fmt.Errorf(i18n.T("无法把 %s 复制给系统 VPN：%w"), e.Name(), err)
 		}
 	}
 	return nil
@@ -189,10 +191,10 @@ func Validate(config string) error {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return fmt.Errorf("配置不是有效的 YAML：%w", err)
+		return fmt.Errorf(i18n.T("配置不是有效的 YAML：%w"), err)
 	}
 	if len(doc) == 0 {
-		return errors.New("配置为空")
+		return i18n.Error("配置为空")
 	}
 	return nil
 }

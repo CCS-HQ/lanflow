@@ -30,12 +30,13 @@ import (
 	"errors"
 	"sync"
 	"unsafe"
+
+	"lanflow/internal/i18n"
 )
 
 var (
 	groupOnce sync.Once
 	groupPath string
-	groupErr  error
 )
 
 // groupContainer returns the App Group container's path. It is read with
@@ -45,11 +46,14 @@ func groupContainer() (string, error) {
 	groupOnce.Do(func() {
 		p := C.lanflowGroupContainer()
 		if p == nil {
-			groupErr = errors.New("App Group container unavailable: the app must be signed with the App Group named by " + AppGroupKey)
 			return
 		}
 		groupPath = C.GoString(p)
 		C.free(unsafe.Pointer(p))
 	})
-	return groupPath, groupErr
+	if groupPath == "" {
+		// Translated when asked: the language may change after the first call.
+		return "", errors.New(i18n.Tf("App Group 容器不可用：App 须带有 Info.plist 中 %s 所指 App Group 的签名", AppGroupKey))
+	}
+	return groupPath, nil
 }

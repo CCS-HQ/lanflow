@@ -14,6 +14,7 @@ import (
 	"github.com/egoist/mygo"
 
 	"lanflow/internal/core"
+	"lanflow/internal/i18n"
 )
 
 // stopTimeout bounds how long Stop waits for the system to report the VPN
@@ -106,16 +107,19 @@ func (v *VPN) onStatus(data []byte) {
 
 // exitError explains a VPN that went down by itself; mu is held.
 func (v *VPN) exitError(reason string) error {
-	msg := "系统 VPN 已断开"
-	if reason != "" {
-		msg += "（" + reason + "）"
-	}
+	var log string
 	if p, err := v.Paths(); err == nil {
-		if t := tail(filepath.Join(p.Home, logName), 20); t != "" {
-			msg += "，最近日志：\n" + t
-		}
+		log = tail(filepath.Join(p.Home, logName), 20)
 	}
-	return errors.New(msg)
+	switch {
+	case reason != "" && log != "":
+		return errors.New(i18n.Tf("系统 VPN 已断开（%s），最近日志：\n%s", reason, log))
+	case reason != "":
+		return errors.New(i18n.Tf("系统 VPN 已断开（%s）", reason))
+	case log != "":
+		return errors.New(i18n.Tf("系统 VPN 已断开，最近日志：\n%s", log))
+	}
+	return i18n.Error("系统 VPN 已断开")
 }
 
 // queryStatus asks the system for the VPN's status.
@@ -146,7 +150,7 @@ func (v *VPN) waitDown(ctx context.Context) error {
 		select {
 		case <-ch:
 		case <-ctx.Done():
-			return fmt.Errorf("系统 VPN 未能停止：%w", ctx.Err())
+			return fmt.Errorf(i18n.T("系统 VPN 未能停止：%w"), ctx.Err())
 		}
 	}
 }
@@ -163,7 +167,7 @@ func (v *VPN) Start(ctx context.Context, spec core.Spec) error {
 		return err
 	}
 	if err := handOver(p, spec.WorkDir, spec.Config); err != nil {
-		return fmt.Errorf("无法把配置交给系统 VPN：%w", err)
+		return fmt.Errorf(i18n.T("无法把配置交给系统 VPN：%w"), err)
 	}
 	if st, err := v.queryStatus(ctx); err == nil && !down(st) {
 		if err := v.Stop(ctx); err != nil {
@@ -178,7 +182,7 @@ func (v *VPN) Start(ctx context.Context, spec core.Spec) error {
 		v.mu.Lock()
 		v.active = false
 		v.mu.Unlock()
-		return fmt.Errorf("无法启动系统 VPN：%w", err)
+		return fmt.Errorf(i18n.T("无法启动系统 VPN：%w"), err)
 	}
 	return nil
 }
@@ -195,7 +199,7 @@ func (v *VPN) Stop(ctx context.Context) error {
 		v.mu.Unlock()
 	}()
 	if err := v.plugin.Call(ctx, "stop", nil, nil); err != nil {
-		return fmt.Errorf("无法停止系统 VPN：%w", err)
+		return fmt.Errorf(i18n.T("无法停止系统 VPN：%w"), err)
 	}
 	if _, err := v.queryStatus(ctx); err != nil {
 		return nil // the system knows no VPN of ours: nothing runs
@@ -223,7 +227,7 @@ func (v *VPN) StageConfig(ctx context.Context, spec core.Spec) (string, error) {
 		return "", err
 	}
 	if err := handOver(p, spec.WorkDir, spec.Config); err != nil {
-		return "", fmt.Errorf("无法把配置交给系统 VPN：%w", err)
+		return "", fmt.Errorf(i18n.T("无法把配置交给系统 VPN：%w"), err)
 	}
 	// Before a start the tunnel is not up to stage it: the handed-over
 	// copy is the config, and the extension stages it as it starts (Start
@@ -235,14 +239,14 @@ func (v *VPN) StageConfig(ctx context.Context, spec core.Spec) (string, error) {
 		Data string `json:"data"`
 	}
 	if err := v.plugin.Call(ctx, "message", map[string]string{"data": `{"op":"stage"}`}, &reply); err != nil {
-		return "", fmt.Errorf("系统 VPN 未能接收配置：%w", err)
+		return "", fmt.Errorf(i18n.T("系统 VPN 未能接收配置：%w"), err)
 	}
 	var r struct {
 		Path  string `json:"path"`
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(reply.Data), &r); err != nil {
-		return "", fmt.Errorf("系统 VPN 的回复无法解析：%w", err)
+		return "", fmt.Errorf(i18n.T("系统 VPN 的回复无法解析：%w"), err)
 	}
 	if r.Error != "" {
 		return "", errors.New(r.Error)
