@@ -23,6 +23,7 @@
     }
   },
   "android": {
+    "minSdk": 29,
     "permissions": ["INTERNET", "ACCESS_NETWORK_STATE"]
   }
 }
