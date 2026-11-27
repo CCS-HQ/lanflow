@@ -1,0 +1,3 @@
+/build
+# Mihomo for Android, built by scripts/build-core-android.sh.
+/src/main/jniLibs/
