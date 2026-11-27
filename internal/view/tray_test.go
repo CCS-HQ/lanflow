@@ -3,9 +3,11 @@ package view
 import (
 	"bytes"
 	"image/png"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/egoist/mygo"
 
@@ -173,5 +175,71 @@ func TestTrayStatusMenuItemAndColoredDots(t *testing.T) {
 	}
 	if got := it.Label; got == statusLine(api.Status()) || got != statusMenuLabel(api.Status()) {
 		t.Fatalf("status menu label = %q, want %q without monochrome dot prefix", got, statusMenuLabel(api.Status()))
+	}
+}
+
+func TestTrayRetainsReplacedMenusForOpenPopup(t *testing.T) {
+	api := fake.NewInstant()
+	tr := &tray{h: testTrayHost{api: api}}
+	tr.refresh(true)
+
+	var quitItem *mygo.MenuItem
+	tr.mu.Lock()
+	for _, it := range tr.menu.Items() {
+		if it.Label == "退出澜流" {
+			quitItem = it
+			break
+		}
+	}
+	tr.pinnedMenu = tr.menu
+	tr.mu.Unlock()
+	if quitItem == nil {
+		t.Fatal("missing 退出澜流 item in tray menu")
+	}
+	quitWeak := weak.Make(quitItem)
+	quitItem = nil
+
+	// Replace the tray menu; the previous menu must stay strongly retained
+	// so MyGo's weak.Pointer menu table never drops open popup items on GC.
+	tr.refresh(true)
+	tr.mu.Lock()
+	tr.pinnedMenu = nil
+	tr.mu.Unlock()
+
+	runtime.GC()
+	runtime.GC()
+	if quitWeak.Value() == nil {
+		t.Fatal("replaced tray menu item was garbage collected while retained window had not expired")
+	}
+
+	// Verify retainMenuLocked prunes expired entries and enforces trayMenuRetainCap.
+	now := time.Now()
+	staleMenu := mygo.NewMenu([]*mygo.MenuItem{{Label: "stale"}})
+	staleWeak := weak.Make(staleMenu.Items()[0])
+	tr.mu.Lock()
+	tr.retained = []retainedMenu{{menu: staleMenu, at: now.Add(-trayMenuRetain - time.Second)}}
+	staleMenu = nil
+	for i := 0; i < trayMenuRetainCap+5; i++ {
+		tr.retainMenuLocked(mygo.NewMenu([]*mygo.MenuItem{{Label: "m"}}), now)
+	}
+	gotLen := len(tr.retained)
+	tr.mu.Unlock()
+
+	if gotLen != trayMenuRetainCap {
+		t.Fatalf("retained len = %d, want cap %d", gotLen, trayMenuRetainCap)
+	}
+	runtime.GC()
+	runtime.GC()
+	if staleWeak.Value() != nil {
+		t.Fatal("expired retained tray menu was not pruned for GC")
+	}
+
+	tr.destroy()
+	tr.mu.Lock()
+	pinnedAfterDestroy := tr.pinnedMenu
+	retainedAfterDestroy := tr.retained
+	tr.mu.Unlock()
+	if pinnedAfterDestroy != nil || retainedAfterDestroy != nil {
+		t.Fatalf("destroy() did not clear menu refs: pinned=%v retained=%d", pinnedAfterDestroy != nil, len(retainedAfterDestroy))
 	}
 }

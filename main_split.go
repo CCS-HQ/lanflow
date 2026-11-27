@@ -83,7 +83,10 @@ func runService(args split.Args) {
 				showWindow("")
 			}
 		},
-		Quit:     func() { mygo.App.Quit() },
+		Quit: func() {
+			split.AllowForeground(0)
+			mygo.App.Quit()
+		},
 		Settings: func(set model.Settings) { queueAutostart(exe, set.OpenAtLogin, set.RunAsAdmin) },
 	})
 	box.OnNew = bg.SystemNotice
@@ -336,8 +339,8 @@ func runWindow(args split.Args) {
 			quitAll()
 			return
 		}
-		s.ShowWindow()
 		s.AskQuit(quitAll)
+		s.ShowWindow()
 	}
 	onUI := func(c rpc.UICommand) {
 		switch c.Cmd {
