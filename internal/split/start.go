@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync/atomic"
 	"time"
 
 	"lanflow/internal/app/remote"
@@ -104,12 +105,18 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 	if o.Wait == 0 {
 		o.Wait = 20 * time.Second
 	}
+	// replacing holds the client's reconnect loop while Connect ends an
+	// older service: that service going away must not make the loop start
+	// a service of its own (Reconnect.Start), which would race the one
+	// Connect starts next for the socket, two services starting at once.
+	var replacing atomic.Bool
+	hold := o.Hold
 	ro := remote.Options{DataDir: o.DataDir, Client: rpc.KindUI, Version: o.Version, Cache: true, Incremental: true, OnUI: o.OnUI,
 		ReadTimeout: ReadTimeout,
 		Reconnect: &remote.Reconnect{
 			Start:   o.Start,
 			OnState: o.OnState,
-			Hold:    o.Hold,
+			Hold:    func() bool { return replacing.Load() || hold != nil && hold() },
 			// After a reconnect the window attaches again; a window that
 			// another process took over meanwhile is not expected (the
 			// service only forwards while this one is attached).
@@ -159,6 +166,7 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 		// system proxy and stops the core (on Windows, Terminate could not
 		// let it).
 		quit := func() error { return c.QuitService() }
+		replacing.Store(true)
 		err := o.replace(pid, quit)
 		c.Close()
 		if err != nil {
@@ -170,6 +178,7 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 	if o.NeedsReplace != nil && o.Start != nil && !o.replaced && c.Conn() != nil {
 		if pid := c.Conn().Welcome().PID; pid > 0 && pid != os.Getpid() && o.NeedsReplace(pid) {
 			quit := func() error { return c.QuitService() }
+			replacing.Store(true)
 			err := o.replace(pid, quit)
 			c.Close()
 			if err != nil {
