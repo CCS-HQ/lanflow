@@ -12,6 +12,7 @@ import (
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/profile"
+	"lanflow/internal/view/env"
 )
 
 // The aggregate subscription editor (docs/aggregate.md). It replaces the
@@ -672,7 +673,11 @@ func (p *Page) aggregateView(c *ui.Context) {
 		if !two {
 			ui.Segmented(c.Key("agg-narrow"), &d.narrow, i18n.T("配置"), i18n.T("预览")).Label(i18n.T("显示"))
 		}
-		if ui.Button(c, i18n.T("取消")).Disabled(d.saving).Clicked() {
+		cancel := ui.Button(c, i18n.T("取消")).Disabled(d.saving)
+		if p.e.Phone {
+			cancel.MinHeight(env.TouchSize)
+		}
+		if cancel.Clicked() {
 			d.open = false
 		}
 	})
@@ -682,7 +687,12 @@ func (p *Page) aggregateView(c *ui.Context) {
 		})
 		return
 	}
-	ui.Row(c.Key(d.session)).Grow(1).Shrink(1).Basis(0).Padding(0, 24, 16, 24).Gap(16).AlignItems(ui.Stretch).Children(func() {
+	body := ui.Row(c.Key(d.session)).Grow(1).Shrink(1).Basis(0).Padding(0, 24, 16, 24).Gap(16).AlignItems(ui.Stretch)
+	if p.e.Phone {
+		// One panel at a time on the narrow screen: give it the width.
+		body.Padding(0, 10, 10, 10)
+	}
+	body.Children(func() {
 		if two || d.narrow == 0 {
 			p.aggLeft(c, subs)
 		}

@@ -76,6 +76,10 @@ func (p *Page) applySniffer() {
 
 func (p *Page) snifferTab(c *ui.Context, t *ui.Theme, s model.Settings) {
 	e := p.e
+	if e.Phone {
+		p.snifferPhone(c, t, s)
+		return
+	}
 	f := &p.snf
 	enabled := s.Sniffer.Enable
 	take := f.takeOver
@@ -142,5 +146,67 @@ func (p *Page) snifferTab(c *ui.Context, t *ui.Theme, s model.Settings) {
 			p.textRow(c, t, i18n.T("跳过嗅探的域名"), i18n.T("每行一个（skip-domain）"), "snf-skip", &view.skip, 1, ro)
 			p.textRow(c, t, i18n.T("跳过嗅探的目标地址"), i18n.T("IP 或网段，每行一个（skip-dst-address）"), "snf-skipaddr", &view.skipAddr, 1, ro)
 		})
+	})
+}
+
+// snifferPhone is the 嗅探 tab on a phone: the source a choice, each
+// protocol a switch and its ports a row pushing their editor, the lists
+// pushing theirs; edits collect for the 应用 bar as on a desktop.
+func (p *Page) snifferPhone(c *ui.Context, t *ui.Theme, s model.Settings) {
+	e := p.e
+	f := &p.snf
+	enabled := s.Sniffer.Enable
+	take := f.takeOver
+	ro := !take || !enabled
+	view := f
+	var eff model.EffectiveSniffer
+	if !take {
+		eff = e.API.EffectiveSniffer()
+		shown := snfFormFrom(eff.Settings)
+		view = &shown
+	}
+	srcOpts := []string{i18n.T("跟随订阅"), i18n.T("由澜流接管")}
+	e.Kit.Section(c, i18n.T("嗅探"), "", func() {
+		p.switchRow(c, i18n.T("启用嗅探"), i18n.T("从 HTTP、TLS、QUIC 流量中读出真实域名，让按域名的规则对直接用 IP 连接的应用也生效。立即生效"), enabled, func(on bool) {
+			s.Sniffer.Enable = on
+			p.snfLoaded.Enable = on
+			p.save(s, "", nil)
+		})
+		src := srcOpts[0]
+		if take {
+			src = srcOpts[1]
+		}
+		p.phoneChoiceRow(c, i18n.T("嗅探设置来源"), "", src, srcOpts, !enabled, func(v string) { f.takeOver = v == srcOpts[1] })
+	})
+	if enabled && !take {
+		msg := i18n.Tf("正在使用订阅「%s」中的嗅探设置，以下内容只读。如需修改，请切换到「由澜流接管」。", currentSubName(e))
+		if eff.Source == model.EffectiveDefault {
+			msg = i18n.Tf("订阅「%s」中没有嗅探设置，内核使用 Mihomo 的默认值（不嗅探任何协议）。以下内容只读。如需修改，请切换到「由澜流接管」。", currentSubName(e))
+		}
+		e.Kit.Banner(c, "info", msg, nil)
+	}
+	p.phoneSection(c, i18n.T("协议与端口"), i18n.T("端口用逗号分隔，可写范围，例如 80, 8080-8880"), func() {
+		proto := func(name, key string, portsText *string, on *bool) {
+			p.phoneSwitchRow(c, key+"-on", name, "", on, ro)
+			label := i18n.Tf("%s 端口", name)
+			value := valueOr(*portsText, i18n.T("未设置"))
+			if p.navRow(c, label, "", value) {
+				opts := []func(*phoneSub){mono, placeholderOpt("443")}
+				if ro {
+					opts = append(opts, readOnly)
+				}
+				p.pushEdit(label, i18n.T("端口用逗号分隔，可写范围，例如 80, 8080-8880"), *portsText, func(v string) error { *portsText = v; return nil }, opts...)
+			}
+		}
+		proto("HTTP", "snf-http", &view.httpPorts, &view.http)
+		proto("TLS", "snf-tls", &view.tlsPorts, &view.tls)
+		proto("QUIC", "snf-quic", &view.quicPorts, &view.quic)
+	})
+	e.Kit.Section(c, i18n.T("行为"), "", func() {
+		p.phoneSwitchRow(c, "snf-override", i18n.T("用嗅探结果覆盖目标地址"), i18n.T("按嗅探到的域名重新解析并连接（override-destination）"), &view.override, ro)
+		p.phoneSwitchRow(c, "snf-pure", i18n.T("嗅探纯 IP 连接"), i18n.T("对没有域名的连接也尝试嗅探（parse-pure-ip）"), &view.pureIP, ro)
+		p.textRow(c, t, i18n.T("强制嗅探的域名"), i18n.T("每行一个，+. 表示包含所有子域名（force-domain）"), "snf-force", &view.force, 1, ro)
+		p.textRow(c, t, i18n.T("跳过嗅探的域名"), i18n.T("每行一个（skip-domain）"), "snf-skip", &view.skip, 1, ro)
+		p.textRow(c, t, i18n.T("跳过嗅探的目标地址"), i18n.T("IP 或网段，每行一个（skip-dst-address）"), "snf-skipaddr", &view.skipAddr, 1, ro)
 	})
 }

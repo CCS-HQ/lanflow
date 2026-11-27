@@ -129,7 +129,11 @@ func (p *Page) View(c *ui.Context) {
 		// the local network and the proxy status side by side below;
 		// 连通性: the site table taking the whole height; DNS: the
 		// effective DNS and the query tool.
-		ui.Column(c).Grow(1).Padding(0, 24, 20, 24).Gap(12).Clip().Children(func() {
+		body := ui.Column(c).Grow(1).Padding(0, 24, 20, 24).Gap(12).Clip()
+		if e.Phone {
+			body.Padding(0, 16, 16, 16)
+		}
+		body.Children(func() {
 			if ui.Segmented(c.Key("tabs"), &p.tab, i18n.T("概况"), i18n.T("连通性"), "DNS").Label(i18n.T("网络分栏")).Changed() {
 				p.persist()
 			}
@@ -150,6 +154,10 @@ func (p *Page) View(c *ui.Context) {
 // side by side. It scrolls when the window is too short for it.
 func (p *Page) overviewTab(c *ui.Context, t *ui.Theme, st model.Status) {
 	net := p.e.API.NetInfo()
+	if p.e.Phone {
+		p.phoneOverview(c, t, st, net)
+		return
+	}
 	ui.Scroll(c.Key("overview")).Grow(1).Gap(16).Children(func() {
 		ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
 			p.directCard(c, t, net)
@@ -162,15 +170,37 @@ func (p *Page) overviewTab(c *ui.Context, t *ui.Theme, st model.Status) {
 	})
 }
 
+// phoneOverview is 概况 on a phone: the exit cards and the two groups in
+// one column that scrolls.
+func (p *Page) phoneOverview(c *ui.Context, t *ui.Theme, st model.Status, net model.NetInfo) {
+	ui.Scroll(c.Key("overview")).Grow(1).Gap(16).Children(func() {
+		// In a row a card's basis is its width; its height follows its
+		// content.
+		ui.Row(c).AlignItems(ui.Stretch).Shrink(0).Children(func() { p.directCard(c, t, net) })
+		ui.Row(c).AlignItems(ui.Stretch).Shrink(0).Children(func() { p.exitCard(c, t, st) })
+		ui.Column(c).Shrink(0).Children(func() { p.localSection(c, t, net) })
+		ui.Column(c).Shrink(0).Children(func() { p.proxySection(c, t, st) })
+	})
+}
+
 // dnsTab is the DNS tab: the DNS in effect, linking to Settings › DNS,
 // and the query tool.
 func (p *Page) dnsTab(c *ui.Context, t *ui.Theme, running bool) {
 	p.effective()
 	ui.Column(c).Grow(1).Gap(16).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 4).Shrink(0).Children(func() {
+		cur := ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 4).Shrink(0)
+		if p.e.Phone {
+			cur.Wrap()
+		}
+		cur.Children(func() {
 			ui.Text(c, i18n.T("当前 DNS")).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
-			ui.Text(c, dnsStatusText(p.effDNS)).FontSize(12).SingleLine().Shrink(1)
-			p.e.GoLink(c, i18n.T("更改"), i18n.Tf("更改%s", "DNS"), env.Settings, "dns")
+			val := ui.Text(c, dnsStatusText(p.effDNS)).FontSize(12).Shrink(1)
+			if !p.e.Phone {
+				val.SingleLine()
+			}
+			if l := p.e.GoLink(c, i18n.T("更改"), i18n.Tf("更改%s", "DNS"), env.Settings, "dns"); p.e.Phone {
+				l.Padding(15, 6)
+			}
 		})
 		p.dnsSection(c, t, running)
 	})
@@ -203,7 +233,12 @@ func (p *Page) panel(c *ui.Context, t *ui.Theme, title string, body func()) {
 
 // kvGrid lays key-value pairs out two per line: the labels as wide as
 // their text, the values sharing the rest. body builds them with kvCell.
-func kvGrid(c *ui.Context, body func()) {
+func (p *Page) kvGrid(c *ui.Context, body func()) {
+	if p.e.Phone {
+		// One pair per line on a phone, the values wrapping.
+		ui.Grid(c).ColumnTracks(ui.FitContent(), ui.Fr(1)).GapX(12).GapY(6).AlignItems(ui.Center).Children(body)
+		return
+	}
 	ui.Grid(c).ColumnTracks(ui.FitContent(), ui.Fr(1), ui.FitContent(), ui.Fr(1)).GapX(8).GapY(6).AlignItems(ui.Center).Children(body)
 }
 
@@ -211,6 +246,15 @@ func kvGrid(c *ui.Context, body func()) {
 // extra, if given, follows the value in its cell.
 func (p *Page) kvCell(c *ui.Context, t *ui.Theme, k, v string, extra func()) {
 	ui.Text(c, k).FontSize(12).TextColor(t.TextMuted).SingleLine()
+	if p.e.Phone {
+		ui.Row(c).Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
+			ui.Text(c, v).FontSize(12).FontFeatures("tnum").Selectable().Shrink(1)
+			if extra != nil {
+				extra()
+			}
+		})
+		return
+	}
 	ui.Row(c).Gap(6).AlignItems(ui.Center).MarginEnd(8).Children(func() {
 		ui.Text(c, v).FontSize(12).FontFeatures("tnum").Selectable().SingleLine().Shrink(1).Tooltip(v)
 		if extra != nil {
@@ -282,7 +326,7 @@ func (p *Page) directCard(c *ui.Context, t *ui.Theme, n model.NetInfo) {
 			return
 		}
 		ui.Text(c, you.IP).FontSize(20).FontFeatures("tnum").Selectable()
-		kvGrid(c, func() {
+		p.kvGrid(c, func() {
 			p.kvCell(c, t, i18n.T("位置"), placeText(e.Mac, you.Place), nil)
 			p.kvCell(c, t, i18n.T("运营商"), ispText(*you), nil)
 		})
@@ -341,7 +385,7 @@ func (p *Page) exitCard(c *ui.Context, t *ui.Theme, st model.Status) {
 			ip = "—"
 		}
 		ui.Text(c, ip).FontSize(20).FontFeatures("tnum").Selectable()
-		kvGrid(c, func() {
+		p.kvGrid(c, func() {
 			p.kvCell(c, t, i18n.T("节点"), flagOf(e.Mac, x.Place)+main.Node, nil)
 			p.kvCell(c, t, i18n.T("位置"), placeName(x.Place), func() {
 				switch x.Source {
@@ -363,7 +407,11 @@ func (p *Page) exitCard(c *ui.Context, t *ui.Theme, st model.Status) {
 // pathRow is the exit card's 路径 line: the kind of path and, muted after
 // it, the entry and landing or the note (exit-map.md 4A).
 func (p *Page) pathRow(c *ui.Context, t *ui.Theme, x model.ExitInfo) {
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+	row := ui.Row(c).Gap(8).AlignItems(ui.Center)
+	if p.e.Phone {
+		row.Wrap()
+	}
+	row.Children(func() {
 		ui.Text(c, i18n.T("路径")).FontSize(12).TextColor(t.TextMuted).Shrink(0)
 		switch x.Path {
 		case model.PathDirect:
@@ -379,19 +427,28 @@ func (p *Page) pathRow(c *ui.Context, t *ui.Theme, x model.ExitInfo) {
 					entry += i18n.Tf("（%s）", x.Entry.IP)
 				}
 				text := i18n.Tf("入口 %s → 落地 %s", entry, placeName(x.Place))
-				ui.Text(c, text).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(text)
+				p.note(c, t, text)
 			}
 		case model.PathChain:
 			ui.Text(c, i18n.Tn(x.ChainHops, "链式代理 · %d 跳", x.ChainHops)).FontSize(12).SingleLine()
 		case model.PathSuspicious:
 			ui.Text(c, i18n.T("⚠ 位置存疑")).FontSize(12).TextColor(t.Warning).SingleLine().Shrink(0)
 			if x.PathNote != "" {
-				ui.Text(c, x.PathNote).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(x.PathNote)
+				p.note(c, t, x.PathNote)
 			}
 		default:
 			ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
 		}
 	})
+}
+
+// note is a muted note after a value: cut to one line on the desktop,
+// wrapping on a phone.
+func (p *Page) note(c *ui.Context, t *ui.Theme, text string) {
+	tx := ui.Text(c, text).FontSize(11).TextColor(t.TextMuted).Shrink(1)
+	if !p.e.Phone {
+		tx.SingleLine().Tooltip(text)
+	}
 }
 
 // ---- sites ----
@@ -403,16 +460,75 @@ var siteCols = []ui.TableColumn{
 	{Title: "直连", ID: "direct", Width: 76, Align: ui.End},
 }
 
+// openAdd opens the 添加网站 dialog.
+func (p *Page) openAdd() {
+	p.addName, p.addURL, p.addErr = "", "https://", ""
+	p.addSession++
+	p.addOpen = true
+}
+
+// phoneSites is 连通性 on a phone: one row a site, its name over its host
+// and the two delays after them, each row's menu deleting it.
+func (p *Page) phoneSites(c *ui.Context, t *ui.Theme, sites []model.SiteCheck, running bool) {
+	e := p.e
+	ui.Scroll(c.Key("sites")).Grow(1).Gap(6).Children(func() {
+		sectionTitle(c, t, i18n.T("网站连通性"), "", func() {
+			if env.LinkText(c, i18n.T("＋ 添加网站"), "").Clicked() {
+				p.openAdd()
+			}
+		})
+		ui.Text(c, i18n.T("分别经代理和直连访问一次")).FontSize(11).TextColor(t.TextMuted).Padding(0, 4)
+		if len(sites) == 0 {
+			return
+		}
+		delay := func(label string, body func()) {
+			ui.Column(c).Gap(2).AlignItems(ui.End).Width(64).Shrink(0).Children(func() {
+				ui.Text(c, label).FontSize(10).TextColor(t.TextMuted).SingleLine()
+				body()
+			})
+		}
+		ui.Column(c).Shrink(0).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Dividers(1, t.Border).Children(func() {
+			for _, s := range sites {
+				ui.Row(c.Key(s.URL)).Gap(8).MinHeight(env.TouchSize).Padding(6, 4, 6, 14).AlignItems(ui.Center).Children(func() {
+					ui.Column(c).Gap(2).Grow(1).Basis(0).Children(func() {
+						ui.Text(c, s.Name).FontSize(13).SingleLine()
+						ui.Text(c, hostOf(s.URL)).FontSize(11).TextColor(t.TextMuted).SingleLine()
+					})
+					delay(i18n.T("经代理"), func() {
+						if !running {
+							ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
+						} else {
+							e.Kit.Delay(c, max(s.ViaProxy, -1), s.ViaProxy == -2)
+						}
+					})
+					delay(i18n.T("直连"), func() { e.Kit.Delay(c, max(s.Direct, -1), s.Direct == -2) })
+					url, name := s.URL, s.Name
+					ui.Box(c).Size(env.TouchSize, env.TouchSize).Center().TextColor(t.TextMuted).Shrink(0).
+						Label(i18n.Tf("「%s」的操作", name)).
+						Children(func() { e.Kit.Icon(c, "more", 16) }).
+						PopoverMenuButton(func(m *ui.Menu) {
+							if m.Item(i18n.Tf("删除「%s」", name)).Danger().Chosen() {
+								p.removeSite(url)
+							}
+						})
+				})
+			}
+		})
+	})
+}
+
 func (p *Page) sitesSection(c *ui.Context, t *ui.Theme, sites []model.SiteCheck, running bool) {
 	e := p.e
+	if e.Phone {
+		p.phoneSites(c, t, sites, running)
+		return
+	}
 	// The table takes the height left in its column and scrolls inside.
 	ui.Column(c).Gap(6).Grow(1).Basis(0).MinHeight(120).Children(func() {
 		sectionTitle(c, t, i18n.T("网站连通性"), i18n.T("· 分别经代理和直连访问一次"), func() {
 			add := env.LinkText(c, i18n.T("＋ 添加网站"), "")
 			if add.Clicked() {
-				p.addName, p.addURL, p.addErr = "", "https://", ""
-				p.addSession++
-				p.addOpen = true
+				p.openAdd()
 			}
 		})
 		p.sites.Key = func(i int) any { return sites[i].URL }
@@ -526,7 +642,7 @@ func (p *Page) localSection(c *ui.Context, t *ui.Theme, n model.NetInfo) {
 		if ipv6 == "" {
 			ipv6 = i18n.T("未分配公网地址")
 		}
-		kvGrid(c, func() {
+		p.kvGrid(c, func() {
 			p.kvCell(c, t, i18n.T("网络接口"), env.Dash(n.Interface), nil)
 			p.kvCell(c, t, i18n.T("Wi-Fi 名称"), env.Dash(n.SSID), nil)
 			p.kvCell(c, t, i18n.T("局域网 IP"), env.Dash(n.LANIP), nil)
@@ -554,6 +670,10 @@ func (p *Page) effective() {
 func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 	e := p.e
 	p.effective()
+	if e.Phone {
+		p.phoneProxySection(c, t, st)
+		return
+	}
 	p.panel(c, t, i18n.T("代理状态"), func() {
 		// Label, value and a link to where it is configured, one line each.
 		ui.Grid(c).ColumnTracks(ui.FitContent(), ui.Fr(1), ui.FitContent()).GapX(8).GapY(6).AlignItems(ui.Center).Children(func() {
@@ -606,6 +726,42 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 	})
 }
 
+// phoneProxySection is 代理状态 on a phone: the system VPN in place of the
+// system proxy and TUN, which a phone has not, and no control socket or
+// aTrust; the values wrap.
+func (p *Page) phoneProxySection(c *ui.Context, t *ui.Theme, st model.Status) {
+	e := p.e
+	p.panel(c, t, i18n.T("代理状态"), func() {
+		ui.Grid(c).ColumnTracks(ui.FitContent(), ui.Fr(1), ui.FitContent()).GapX(8).GapY(6).AlignItems(ui.Center).Children(func() {
+			p.statusLine(c, t, "VPN", func() {
+				if st.Core == model.CoreRunning {
+					e.Kit.Dot(c, "green")
+					statusText(c, i18n.T("已连接，本机流量经澜流"))
+				} else {
+					e.Kit.Dot(c, "gray")
+					ui.Text(c, i18n.T("未连接")).FontSize(12).TextColor(t.TextMuted)
+				}
+			}, "", "")
+			port := i18n.Tf("%d（HTTP + SOCKS5）", st.MixedPort)
+			if st.AllowLAN {
+				port += " · " + i18n.T("允许局域网连接")
+			}
+			p.statusLine(c, t, i18n.T("监听端口"), func() { p.wrapText(c, port) }, env.Settings, "proxy")
+			snf := i18n.T("未开启")
+			if p.snifferOn {
+				snf = i18n.T("已开启") + " · " + sourceName(p.effSniffer.Source)
+			}
+			p.statusLine(c, t, i18n.T("嗅探"), func() { p.wrapText(c, snf) }, env.Settings, "sniffer")
+			p.statusLine(c, t, "DNS", func() { p.wrapText(c, dnsStatusText(p.effDNS)) }, env.Settings, "dns")
+		})
+	})
+}
+
+// wrapText is a 代理状态 value on a phone, wrapping.
+func (p *Page) wrapText(c *ui.Context, s string) {
+	ui.Text(c, s).FontSize(12).FontFeatures("tnum").Shrink(1)
+}
+
 // statusLine is one 代理状态 line as three grid cells: the label, the
 // value value draws and the link to page (with arg) where it is
 // configured; no link when page is "".
@@ -616,7 +772,11 @@ func (p *Page) statusLine(c *ui.Context, t *ui.Theme, k string, value func(), pa
 		ui.Box(c)
 		return
 	}
-	p.e.GoLink(c, i18n.T("更改"), i18n.Tf("更改%s", k), page, arg)
+	l := p.e.GoLink(c, i18n.T("更改"), i18n.Tf("更改%s", k), page, arg)
+	if p.e.Phone {
+		// A finger's height.
+		l.Padding(15, 6)
+	}
 }
 
 // statusText is a 代理状态 value.
@@ -683,9 +843,12 @@ func (p *Page) dnsSection(c *ui.Context, t *ui.Theme, running bool) {
 	// A long answer (many records, long TXT strings) scrolls inside the
 	// box instead of running past the bottom of the window.
 	ui.Column(c).Gap(6).Shrink(1).MinHeight(0).Children(func() {
-		sectionTitle(c, t, i18n.T("DNS 查询"), i18n.T("经内核的解析器"), func() {
+		flushes := func() {
 			flush := func(label string, job func() error, ok string) {
 				b := env.LinkText(c, label, "")
+				if e.Phone {
+					b.Padding(15, 4)
+				}
 				if !running {
 					b.TextColor(t.TextMuted).Cursor(ui.CursorDefault).Disabled(true)
 				} else if b.Clicked() {
@@ -695,7 +858,14 @@ func (p *Page) dnsSection(c *ui.Context, t *ui.Theme, running bool) {
 			flush(i18n.T("清除 DNS 缓存"), e.API.FlushDNSCache, i18n.T("已清除 DNS 缓存"))
 			ui.Text(c, "·").FontSize(12).TextColor(t.TextMuted)
 			flush(i18n.T("清除 Fake-IP 缓存"), e.API.FlushFakeIPCache, i18n.T("已清除 Fake-IP 缓存"))
-		})
+		}
+		if e.Phone {
+			// The links go on their own line under the title.
+			sectionTitle(c, t, i18n.T("DNS 查询"), i18n.T("经内核的解析器"), nil)
+			ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Padding(0, 4).Shrink(0).Children(flushes)
+		} else {
+			sectionTitle(c, t, i18n.T("DNS 查询"), i18n.T("经内核的解析器"), flushes)
+		}
 		box := ui.Column(c).Shrink(1).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Dividers(1, t.Border)
 		box.Children(func() { p.dnsBox(c, t, running, res, errText) })
 	})
@@ -704,12 +874,18 @@ func (p *Page) dnsSection(c *ui.Context, t *ui.Theme, running bool) {
 // dnsBox is the DNS 查询 group: the query row and the last result.
 func (p *Page) dnsBox(c *ui.Context, t *ui.Theme, running bool, res *model.DNSResult, errText string) {
 	{
-		ui.Row(c).Gap(8).PaddingX(12).MinHeight(40).AlignItems(ui.Center).Shrink(0).Children(func() {
+		qrow := ui.Row(c).Gap(8).PaddingX(12).MinHeight(40).AlignItems(ui.Center).Shrink(0)
+		if p.e.Phone {
+			qrow.MinHeight(env.TouchSize + 8).PaddingY(4)
+		}
+		qrow.Children(func() {
 			in := ui.TextInput(c.Key("dns"), &p.dnsName).Placeholder(i18n.T("域名")).Font("monospace").Grow(1).Label(i18n.T("域名"))
 			if in.Submitted() {
 				p.query()
 			}
-			ui.Select(c.Key("dnstype"), &p.dnsType, dnsTypes).Label(i18n.T("记录类型"))
+			if sel := ui.Select(c.Key("dnstype"), &p.dnsType, dnsTypes).Label(i18n.T("记录类型")); p.e.Phone {
+				sel.MinWidth(96).MaxWidth(96).Shrink(0) // room for HTTPS
+			}
 			label := i18n.T("查询")
 			querying := p.querying.Load()
 			if querying {
@@ -745,7 +921,11 @@ func (p *Page) dnsResult(c *ui.Context, t *ui.Theme, r model.DNSResult) {
 		case len(r.AppAnswers) > 0 && r.FakeIP:
 			// Fake-IP mode: what the app sees next to what it really is
 			// (docs/design.md §5.7 DNS 查询).
-			ui.Row(c).Gap(24).AlignItems(ui.Start).Children(func() {
+			fk := ui.Row(c).Gap(24).AlignItems(ui.Start)
+			if p.e.Phone {
+				fk.Wrap().GapY(8)
+			}
+			fk.Children(func() {
 				ui.Column(c).Gap(2).Children(func() {
 					ui.Text(c, i18n.T("应用拿到的 Fake-IP")).FontSize(11).TextColor(t.TextMuted)
 					list(r.AppAnswers)

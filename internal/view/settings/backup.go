@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -62,6 +63,209 @@ func (p *Page) backupSection(c *ui.Context, t *ui.Theme, s model.Settings) {
 		p.backupConfigDialog(c, t, s, info, busy)
 		p.backupListDialog(c, t, busy)
 	})
+}
+
+// phoneBackup is 备份与同步 on a phone: the 配置… sheet's fields as rows
+// in the list, each with its editor behind, then the last backup and the
+// actions; the remote backups are a page.
+func (p *Page) phoneBackup(c *ui.Context, s model.Settings) {
+	e := p.e
+	f := &p.f2
+	info := e.API.WebDAVInfo()
+	busy := f.davBusy != "" || info.Busy
+	w := s.WebDAV
+	phoneBlock(c, i18n.T("备份与同步"), i18n.T("把设置、覆写、自定义规则和订阅链接备份到 WebDAV 网盘"), func() {
+		if p.navRow(c, i18n.T("服务器地址"), "", valueOr(w.URL, i18n.T("未配置"))) {
+			p.pushEdit(i18n.T("服务器地址"), i18n.T("WebDAV 地址，例如 https://dav.jianguoyun.com/dav/"), w.URL, func(v string) error {
+				v = strings.TrimSpace(v)
+				if v != "" && !httpURL(v) {
+					return errors.New(i18n.T("WebDAV 地址须是以 http:// 或 https:// 开头的完整地址"))
+				}
+				if s := p.current(); v != s.WebDAV.URL {
+					s.WebDAV.URL = v
+					p.save(s, "", nil)
+				}
+				return nil
+			}, mono, placeholderOpt("https://"))
+		}
+		if p.navRow(c, i18n.T("用户名"), "", valueOr(w.User, i18n.T("未设置"))) {
+			p.pushEdit(i18n.T("用户名"), "", w.User, func(v string) error {
+				if s := p.current(); strings.TrimSpace(v) != s.WebDAV.User {
+					s.WebDAV.User = strings.TrimSpace(v)
+					p.save(s, "", nil)
+				}
+				return nil
+			})
+		}
+		pw := i18n.T("未设置")
+		if info.HasPassword {
+			pw = i18n.T("已设置")
+		}
+		if p.navRow(c, i18n.T("密码"), "", pw) {
+			f.davPass = ""
+			p.pushPage(i18n.T("密码"), p.phoneDavPassword)
+		}
+		if p.navRow(c, i18n.T("远程目录"), "", valueOr(w.Dir, model.WebDAVDefaultDir)) {
+			p.pushEdit(i18n.T("远程目录"), i18n.Tf("留空为 %s", model.WebDAVDefaultDir), w.Dir, func(v string) error {
+				if s := p.current(); strings.Trim(strings.TrimSpace(v), "/") != s.WebDAV.Dir {
+					s.WebDAV.Dir = strings.Trim(strings.TrimSpace(v), "/")
+					p.save(s, "", nil)
+				}
+				return nil
+			}, mono, placeholderOpt(model.WebDAVDefaultDir))
+		}
+		keepOpts := []string{i18n.T("全部保留"), "3", "5", "10", "20"}
+		keepVals := []int{0, 3, 5, 10, 20}
+		keepCur := keepOpts[0]
+		for i, v := range keepVals {
+			if v == w.Keep {
+				keepCur = keepOpts[i]
+			}
+		}
+		p.selectRow(c, i18n.T("保留份数"), i18n.T("备份成功后删除更早的备份"), keepCur, keepOpts, func(v string) {
+			s := p.current()
+			for i, o := range keepOpts {
+				if o == v {
+					s.WebDAV.Keep = keepVals[i]
+				}
+			}
+			p.save(s, "", nil)
+		})
+		autoOpts := []string{i18n.T("关闭|开关"), i18n.T("每天"), i18n.T("每周")}
+		autoVals := []string{"", model.WebDAVDaily, model.WebDAVWeekly}
+		p.selectRow(c, i18n.T("自动备份"), i18n.T("澜流运行时按间隔自动备份"), mapName(w.AutoBackup, autoVals, autoOpts), autoOpts, func(v string) {
+			s := p.current()
+			s.WebDAV.AutoBackup = mapValue(v, autoOpts, autoVals)
+			p.save(s, "", nil)
+		})
+	})
+	last := i18n.T("还没有备份过")
+	if !info.LastBackupAt.IsZero() {
+		last = i18n.Tf("上次备份：%s", env.FmtDateTime(info.LastBackupAt.Local()))
+	}
+	if info.LastError != "" {
+		last = i18n.Tf("上次自动备份失败：%s", info.LastError)
+	}
+	if busy {
+		last = i18n.T("正在处理")
+	}
+	phoneBlock(c, "", last, func() {
+		if env.ActionRow(c, i18n.T("立即备份"), false, busy).Clicked() {
+			p.davListJob("backup", e.API.BackupNow, i18n.T("已备份到 WebDAV"))
+		}
+		if env.ActionRow(c, i18n.T("测试连接"), false, busy).Clicked() {
+			p.davJob("test", func() error { return e.API.TestWebDAV() }, i18n.T("连接成功，远程目录可用"))
+		}
+		if p.navRow(c, i18n.T("服务器上的备份"), "", "") {
+			p.pushPage(i18n.T("服务器上的备份"), p.phoneBackupList)
+			if !f.davListed && !busy {
+				p.davListJob("list", nil, "")
+			}
+		}
+	})
+}
+
+// phoneDavPassword is the WebDAV password's page on a phone: a new one
+// to type and 保存, 清除 when one is set.
+func (p *Page) phoneDavPassword(c *ui.Context) {
+	e := p.e
+	f := &p.f2
+	info := e.API.WebDAVInfo()
+	desc := i18n.T("保存在本机的安全存储中")
+	if info.PasswordStore == model.PasswordStoreFile {
+		desc = i18n.T("本机没有可用的安全存储：密码经混淆后保存在应用的数据目录，并非加密")
+	}
+	ph := i18n.T("输入新密码")
+	if info.HasPassword {
+		ph = "••••••••"
+	}
+	phoneGroup(c, func() {
+		in := phoneField(c, "dav-pass-"+strconv.Itoa(f.davPassSession), i18n.T("密码"), ph, &f.davPass, true, false)
+		if in.Submitted() && f.davPass != "" {
+			p.phoneSaveDavPassword(f.davPass)
+		}
+	})
+	phoneFoot(c, desc)
+	phoneSpacer(c)
+	phoneGroup(c, func() {
+		if env.ActionRow(c, i18n.T("保存"), false, f.davPass == "").Clicked() {
+			p.phoneSaveDavPassword(f.davPass)
+		}
+	})
+	if info.HasPassword {
+		phoneSpacer(c)
+		phoneGroup(c, func() {
+			if env.ActionRow(c, i18n.T("清除密码"), true, false).Clicked() {
+				p.sub = nil
+				e.Run(func() error { return e.API.SetWebDAVPassword("") }, i18n.T("密码已清除"))
+			}
+		})
+	}
+}
+
+// phoneSaveDavPassword stores pw and closes its page.
+func (p *Page) phoneSaveDavPassword(pw string) {
+	e := p.e
+	p.f2.davPass = ""
+	p.f2.davPassSession++
+	p.sub = nil
+	e.Run(func() error { return e.API.SetWebDAVPassword(pw) }, i18n.T("密码已保存"))
+}
+
+// phoneBackupList is 管理备份… on a phone: 刷新, then each remote backup
+// as a group with 恢复 and 删除.
+func (p *Page) phoneBackupList(c *ui.Context) {
+	e := p.e
+	f := &p.f2
+	busy := f.davBusy != "" || e.API.WebDAVInfo().Busy
+	phoneGroup(c, func() {
+		label := i18n.T("刷新")
+		if busy {
+			label = i18n.T("正在处理")
+		}
+		if env.ActionRow(c, label, false, busy).Clicked() {
+			p.davListJob("list", nil, "")
+		}
+	})
+	if f.davErr != "" {
+		phoneDangerNote(c, f.davErr)
+	}
+	switch {
+	case !f.davListed:
+		phoneFoot(c, i18n.T("正在读取服务器上的备份…"))
+		return
+	case len(f.davBackups) == 0:
+		phoneFoot(c, i18n.T("服务器上还没有备份"))
+		return
+	}
+	phoneFoot(c, i18n.Tf("%d 份备份", len(f.davBackups)))
+	for _, b := range f.davBackups {
+		b := b
+		when := env.FmtDateTime(b.Modified.Local())
+		desc := when
+		if b.Size > 0 {
+			desc += " · " + env.FmtBytes(b.Size)
+		}
+		ui.Column(c.Key("backup:" + b.Name)).FillWidth().Children(func() {
+			phoneGroup(c, func() {
+				infoRow(c, b.Name, desc, "")
+				if env.ActionRow(c, i18n.T("恢复"), false, busy).Clicked() {
+					e.Confirm(i18n.Tf("恢复 %s 的备份？", when), i18n.T("备份中的设置、覆写、自定义规则和订阅会应用到本机；内核文件路径和 TUN 开关保持不变。"), i18n.T("恢复"), false, func() {
+						summary := ""
+						p.davJobThen("restore", func() (err error) {
+							summary, err = e.API.RestoreBackup(b.Name)
+							return err
+						}, func() { e.Toast(summary, false) })
+					})
+				}
+				if env.ActionRow(c, i18n.T("删除"), true, busy).Clicked() {
+					e.Confirm(i18n.Tf("删除 %s 的备份？", when), i18n.T("备份会从服务器上删除，此操作无法撤销。"), i18n.T("删除"), true, func() {
+						p.davListJob("delete", func() error { return e.API.DeleteBackup(b.Name) }, i18n.T("备份已删除"))
+					})
+				}
+			})
+		})
+	}
 }
 
 // backupConfigDialog is the 配置… sheet; fields save as they commit.

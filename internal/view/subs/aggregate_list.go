@@ -59,6 +59,11 @@ func (p *Page) aggregatesView(c *ui.Context) {
 		}
 	}
 	p.loadSummaries(subs)
+	if p.e.Phone {
+		p.phoneAggregates(c, subs)
+		p.dialogs(c)
+		return
+	}
 
 	k.Header(c, i18n.T("聚合订阅"), i18n.T("多个来源合成一个订阅，在本机编辑维护"), func() {
 		if len(subs) > 1 {
@@ -167,23 +172,28 @@ func (p *Page) aggCard(c *ui.Context, s model.Subscription, switching string) {
 				p.openAggregate(&sub)
 			}
 			ui.Button(c, "").Label(i18n.Tf("更多 %s", s.Name)).Tooltip(i18n.T("更多")).Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
-				if m.Item(i18n.T("编辑覆写…")).Chosen() {
-					p.e.Navigate(env.Settings, "override:"+sub.ID)
-				}
-				if m.Item(i18n.T("查看配置")).Chosen() {
-					p.openRaw(sub)
-				}
-				m.Separator()
-				del := m.Item(i18n.T("删除…")).Danger().Disabled(sub.Current)
-				if sub.Current {
-					del.Tooltip(i18n.T("请先切换到其他订阅"))
-				}
-				if del.Chosen() {
-					p.askDelete(sub)
-				}
+				p.aggMenu(m, sub)
 			})
 		})
 	})
+}
+
+// aggMenu is the ⋯ menu of an aggregate subscription's card.
+func (p *Page) aggMenu(m *ui.Menu, sub model.Subscription) {
+	if m.Item(i18n.T("编辑覆写…")).Chosen() {
+		p.e.Navigate(env.Settings, "override:"+sub.ID)
+	}
+	if m.Item(i18n.T("查看配置")).Chosen() {
+		p.openRaw(sub)
+	}
+	m.Separator()
+	del := m.Item(i18n.T("删除…")).Danger().Disabled(sub.Current)
+	if sub.Current {
+		del.Tooltip(i18n.T("请先切换到其他订阅"))
+	}
+	if del.Chosen() {
+		p.askDelete(sub)
+	}
 }
 
 // updatingAny reports whether one of subs is updating.

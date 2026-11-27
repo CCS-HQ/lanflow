@@ -9,6 +9,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/env"
 )
 
 // 下载镜像 (Settings.DownloadMirror), in 设置 › 内核: a select of the
@@ -109,6 +110,95 @@ func (p *Page) mirrorSection(c *ui.Context, t *ui.Theme, s model.Settings) {
 			})
 		})
 	})
+}
+
+// phoneMirror is 下载镜像 on a phone: the mirror as a value with its
+// choices behind (自定义… pushes the address's editor), 测速 as a row and
+// each result as a row whose tap uses it.
+func (p *Page) phoneMirror(c *ui.Context, s model.Settings) {
+	opts := []string{i18n.T(mirrorDirect)}
+	for _, m := range app.MirrorPresets {
+		opts = append(opts, mirrorLabel(m))
+	}
+	opts = append(opts, i18n.T(mirrorCustom))
+	cur, custom := opts[0], s.DownloadMirror != ""
+	for i, m := range app.MirrorPresets {
+		if m == s.DownloadMirror {
+			cur, custom = opts[i+1], false
+		}
+	}
+	if custom {
+		cur = opts[len(opts)-1]
+	}
+	editCustom := func() {
+		p.pushEdit(i18n.T("镜像地址"), i18n.T("用于下载内核和地理数据库；改动后，地理数据库的镜像在下次重新加载配置时生效"), p.current().DownloadMirror, func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return nil // nothing typed: the mirror stays
+			}
+			p.setMirror(p.current(), v)
+			return phoneErr(p.f2.mirrorErr)
+		}, mono, placeholderOpt("https://ghfast.top/"))
+	}
+	phoneBlock(c, i18n.T("下载镜像"), i18n.T("镜像站由第三方运营，澜流不对其内容负责；无法直连 GitHub 时再使用"), func() {
+		p.selectRow(c, i18n.T("GitHub 镜像"), i18n.T("用于下载内核和地理数据库"), cur, opts, func(v string) {
+			p.f2.mirrorErr = ""
+			switch v {
+			case opts[0]:
+				p.setMirror(p.current(), "")
+			case opts[len(opts)-1]:
+				editCustom()
+			default:
+				for i, o := range opts {
+					if o == v && i >= 1 && i-1 < len(app.MirrorPresets) {
+						p.setMirror(p.current(), app.MirrorPresets[i-1])
+					}
+				}
+			}
+		})
+		if custom && p.navRow(c, i18n.T("镜像地址"), "", mirrorLabel(s.DownloadMirror)) {
+			editCustom()
+		}
+	})
+	phoneBlock(c, "", i18n.T("直连访问每个镜像站，看哪一个最快"), func() {
+		label := i18n.T("镜像测速")
+		if p.f2.mirrorTesting {
+			label = i18n.T("测速中…")
+		}
+		if env.ActionRow(c, label, false, p.f2.mirrorTesting).Clicked() {
+			p.testMirrors()
+		}
+		for _, r := range p.f2.mirrorResults {
+			r := r
+			if phoneMirrorResult(c, p.e.Kit, r, r.URL == s.DownloadMirror) && r.Ms > 0 && r.URL != s.DownloadMirror && !p.saving {
+				p.setMirror(p.current(), r.URL)
+			}
+		}
+	})
+}
+
+// phoneMirrorResult is a mirror's test result: its name (the error under
+// it), the delay and a check on the one in use. It reports a tap.
+func phoneMirrorResult(c *ui.Context, k env.Kit, r model.MirrorTest, inUse bool) bool {
+	t := c.Theme()
+	name := mirrorLabel(r.URL)
+	row := ui.ButtonBase(c.Key("mirror-result:"+r.URL)).Row().MinHeight(env.TouchSize).Padding(8, 14).Gap(10).AlignItems(ui.Center).FillWidth().
+		Label(name).Role(ui.RoleRadio).Checked(inUse).Disabled(r.Ms <= 0).Cursor(ui.CursorPointer)
+	if row.Pressed() {
+		row.Background(t.SurfaceHover)
+	}
+	row.Children(func() {
+		ui.Column(c).Gap(2).Grow(1).Shrink(1).Basis(0).MinWidth(0).Children(func() {
+			ui.Text(c, name).FontSize(15)
+			if r.Error != "" && r.Ms < 0 {
+				ui.Text(c, r.Error).FontSize(12).TextColor(t.Danger).SingleLine()
+			}
+		})
+		k.Delay(c, r.Ms, false)
+		if inUse {
+			ui.Box(c).TextColor(t.Accent).Children(func() { k.Icon(c, "check", 16) })
+		}
+	})
+	return row.Clicked()
 }
 
 // setMirror validates and saves a mirror prefix ("" = direct).

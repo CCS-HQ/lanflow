@@ -76,8 +76,9 @@ type Options struct {
 	Remote      bool
 	SetShortcut func(action, acc string) error
 	// Phone: the app runs on a phone (iOS or Android), one screen in the
-	// system VPN's place of the system proxy and TUN (main_phone.go). The
-	// phone layout reads it; nothing else changes yet.
+	// system VPN's place of the system proxy and TUN (main_phone.go): the
+	// shell draws a top bar and a bar of tabs (shell_phone.go) and the
+	// pages lay out in one column (env.Env.Phone, docs/phone-ui.md).
 	Phone bool
 }
 
@@ -173,6 +174,13 @@ type Shell struct {
 	sbCapDirty atomic.Bool
 	sbCapOn    bool // 抓包 is turned on in 设置 › 常规
 	sbCap      model.CaptureStatus
+
+	// On a phone (shell_phone.go): phoneHub shows 设置's list in place of
+	// the page, actSeg is 活动's segment, scrolls the pages' scroll states
+	// for the large titles.
+	phoneHub bool
+	actSeg   int
+	scrolls  map[env.Page]*ui.ScrollState
 }
 
 // New builds the shell and all pages over api.
@@ -206,10 +214,14 @@ func New(api app.API, opts Options) *Shell {
 		Mac:        opts.Mac,
 		Windows:    opts.Windows,
 		Elevated:   opts.Elevated,
-		Kit:        NewKit(),
+		Phone:      opts.Phone,
+		Kit:        newKit(opts.Phone),
 
 		SetGlobalShortcut: s.SetGlobalShortcut,
 		OpenFeedback:      func() { s.OpenFeedback("") },
+	}
+	if opts.Phone {
+		s.env.PhoneScroll = s.phoneScroll
 	}
 	if !opts.Sync {
 		// Tests (Sync) save at once; the app saves half a second after
@@ -545,6 +557,9 @@ func (s *Shell) navigate(p env.Page, arg string) {
 	}
 	s.page = p
 	s.shown.Store(p)
+	if s.opts.Phone {
+		s.phoneNavigate(p)
+	}
 	if arg != "" {
 		s.args[p] = arg
 	}
@@ -674,6 +689,10 @@ func ApplyOpenAtLogin(open bool) {
 
 // View draws the whole window.
 func (s *Shell) View(c *ui.Context) {
+	if s.opts.Phone {
+		s.phoneView(c)
+		return
+	}
 	t := c.Theme()
 	s.drain(c)
 	st := s.api.Status()
@@ -736,7 +755,8 @@ func (s *Shell) drain(c *ui.Context) {
 	}
 	if !s.recoveryHit {
 		s.recoveryHit = true
-		if s.api.Status().PendingRecovery {
+		// A phone has no system proxy left to recover (docs/phone-ui.md).
+		if !s.opts.Phone && s.api.Status().PendingRecovery {
 			s.recovery = true
 		}
 	}
@@ -763,7 +783,7 @@ func (s *Shell) handleNotice(c *ui.Context, n app.Notice) {
 		nn := n
 		s.invalid, s.invalidOpen = &nn, true
 	case "recovery":
-		s.recovery = true
+		s.recovery = !s.opts.Phone
 	case "crash-report":
 		s.crashNotice()
 	case "error":

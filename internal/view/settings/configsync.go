@@ -100,6 +100,100 @@ func (p *Page) configSyncSection(c *ui.Context, t *ui.Theme) {
 	p.passphraseDialog(c, t)
 }
 
+// phoneConfigSync is 配置同步 on a phone: where the file lives as a
+// value with its choices behind, the file and its state, the passphrase
+// and what needs the user as rows; the 合并 choice is a page.
+func (p *Page) phoneConfigSync(c *ui.Context) {
+	e := p.e
+	st := e.API.ConfigSyncStatus()
+	p.mu.Lock()
+	busy := p.sync.busy
+	p.mu.Unlock()
+	off, icloud, folder := i18n.T("关闭"), i18n.T("iCloud 云盘"), i18n.T("自定义文件夹…")
+	opts := []string{off}
+	if st.ICloudAvailable || st.Mode == model.SyncICloud {
+		opts = append(opts, icloud)
+	}
+	opts = append(opts, folder)
+	cur := off
+	switch st.Mode {
+	case model.SyncICloud:
+		cur = icloud
+	case model.SyncFolder:
+		cur = folder
+	}
+	phoneBlock(c, i18n.T("配置同步"), i18n.T("把设置、覆写、自定义规则和订阅保存为 lanflow.yaml，放进会同步的文件夹，在多台设备间保持一致；订阅链接留在本机的安全存储中"), func() {
+		value := cur
+		if busy {
+			value = i18n.T("正在处理")
+		}
+		if p.navRow(c, i18n.T("同步位置"), i18n.T("关闭时设置只保存在本机"), value) && !busy {
+			p.pushChoice(i18n.T("同步位置"), cur, opts, func(v string) {
+				switch v {
+				case off:
+					p.setSync(model.SyncOff, "", "")
+				case icloud:
+					p.setSync(model.SyncICloud, "", "")
+				case folder:
+					go p.pickSyncFolder()
+				}
+			})
+		}
+		if st.Path == "" {
+			return
+		}
+		infoRow(c, i18n.T("同步文件"), syncStateText(st, false), "")
+		if st.Mode == model.SyncFolder && env.ActionRow(c, i18n.T("更改文件夹…"), false, busy).Clicked() {
+			go p.pickSyncFolder()
+		}
+		p.syncPassphraseRows(c, st, busy)
+		p.syncBanners(c, st, busy)
+	})
+	p.phoneSyncChoice()
+}
+
+// phoneSyncChoice pushes the 合并 choice as a page when a job asks for it.
+func (p *Page) phoneSyncChoice() {
+	p.mu.Lock()
+	ch := p.sync.choice
+	if ch != nil && !ch.open {
+		p.sync.choice, ch = nil, nil
+	}
+	p.mu.Unlock()
+	if ch == nil || p.sub != nil {
+		return
+	}
+	p.pushPage(i18n.T("同步文件夹中已有配置"), func(c *ui.Context) {
+		phoneFoot(c, i18n.T("文件夹里的 lanflow.yaml 与本机配置不同，可能来自另一台设备。请选择保留哪一份："))
+		phoneFoot(c, i18n.T("· 使用文件中的配置：校验通过后加载到本机，替换本机的设置、覆写、自定义规则和订阅（TUN、内核路径等本机项不变）。"))
+		phoneFoot(c, i18n.T("· 用本机配置覆盖文件：原文件先备份到数据目录的 sync-backups 文件夹，再写入本机配置。"))
+		phoneSpacer(c)
+		phoneGroup(c, func() {
+			if env.ActionRow(c, i18n.T("使用文件中的配置"), false, false).Clicked() {
+				ch.open, p.sub = false, nil
+				p.setSync(ch.mode, ch.dir, model.SyncUseFile)
+			}
+			if env.ActionRow(c, i18n.T("用本机配置覆盖文件"), false, false).Clicked() {
+				ch.open, p.sub = false, nil
+				p.setSync(ch.mode, ch.dir, model.SyncUseLocal)
+			}
+		})
+	})
+	p.sub.back = func() { ch.open = false }
+}
+
+// phoneBanner is one of syncBanners on a phone: the message, its actions
+// as rows under it (actions nil: none).
+func (p *Page) phoneBanner(c *ui.Context, key, kind, msg string, actions func()) {
+	t := c.Theme()
+	ui.Column(c.Key("banner:"+key)).FillWidth().Dividers(0.5, t.Border).Children(func() {
+		ui.Box(c).Padding(8, 10).Children(func() { p.e.Kit.Banner(c, kind, msg, nil) })
+		if actions != nil {
+			actions()
+		}
+	})
+}
+
 // syncStateText is the 同步文件 row's description.
 func syncStateText(st model.ConfigSyncStatus, mac bool) string {
 	parts := []string{st.Path}
@@ -122,46 +216,86 @@ func syncStateText(st model.ConfigSyncStatus, mac bool) string {
 // copies, missing links.
 func (p *Page) syncBanners(c *ui.Context, st model.ConfigSyncStatus, busy bool) {
 	e := p.e
+	// banner is a banner and its actions: buttons in it on the desktop,
+	// rows under it on a phone (phone nil: none there).
+	banner := func(key, kind, msg string, desk, phone func()) {
+		if e.Phone {
+			p.phoneBanner(c, key, kind, msg, phone)
+			return
+		}
+		e.Kit.Banner(c, kind, msg, desk)
+	}
+	// secrets picks the wording of where secrets live: the keychain on
+	// macOS, the credential manager elsewhere, the device's secure
+	// storage on a phone.
+	secrets := func(mac, other, phone string) string {
+		switch {
+		case e.Phone:
+			return phone
+		case e.Mac:
+			return mac
+		}
+		return other
+	}
 	if st.Error != "" {
 		msg := i18n.Tf("同步文件的修改没有加载，配置保持不变：%s", st.Error)
 		if st.ErrorLine > 0 && !strings.Contains(st.Error, i18n.Tf("第 %d 行", st.ErrorLine)) {
 			msg = i18n.Tf("同步文件第 %d 行的修改没有加载，配置保持不变：%s", st.ErrorLine, st.Error)
 		}
-		e.Kit.Banner(c, "error", msg, func() {
+		banner("error", "error", msg, func() {
 			ui.Button(c, revealLabel(e)).OnClick(func() { env.RevealInFolder(st.Path) })
-		})
+		}, nil) // a phone has no file manager to show it in
 	}
 	for _, name := range st.Conflicts {
 		name := name
-		e.Kit.Banner(c, "warn", i18n.Tf("发现冲突副本「%s」：两台设备同时修改了配置。请选择保留哪一个，另一个会移到备份文件夹。", name), func() {
-			ui.Button(c, i18n.T("保留当前文件")).Disabled(busy).OnClick(func() {
-				e.Confirm(i18n.T("保留当前的 lanflow.yaml？"), i18n.Tf("冲突副本「%s」会移到数据目录的 sync-backups 文件夹，不会被删除。", name), i18n.T("保留当前文件"), false, func() {
-					p.syncJob(func() error { return e.API.ResolveConfigConflict(name, false) }, i18n.T("已保留当前文件"))
-				})
+		keep := func() {
+			e.Confirm(i18n.T("保留当前的 lanflow.yaml？"), i18n.Tf("冲突副本「%s」会移到数据目录的 sync-backups 文件夹，不会被删除。", name), i18n.T("保留当前文件"), false, func() {
+				p.syncJob(func() error { return e.API.ResolveConfigConflict(name, false) }, i18n.T("已保留当前文件"))
 			})
-			ui.Button(c, i18n.T("保留此副本")).Disabled(busy).OnClick(func() {
-				e.Confirm(i18n.Tf("改用冲突副本「%s」？", name), i18n.T("副本中的配置校验通过后会加载到本机并成为 lanflow.yaml；当前文件会移到数据目录的 sync-backups 文件夹。"), i18n.T("使用副本"), false, func() {
-					p.syncJob(func() error { return e.API.ResolveConfigConflict(name, true) }, i18n.T("已改用冲突副本"))
-				})
+		}
+		use := func() {
+			e.Confirm(i18n.Tf("改用冲突副本「%s」？", name), i18n.T("副本中的配置校验通过后会加载到本机并成为 lanflow.yaml；当前文件会移到数据目录的 sync-backups 文件夹。"), i18n.T("使用副本"), false, func() {
+				p.syncJob(func() error { return e.API.ResolveConfigConflict(name, true) }, i18n.T("已改用冲突副本"))
 			})
+		}
+		banner("conflict:"+name, "warn", i18n.Tf("发现冲突副本「%s」：两台设备同时修改了配置。请选择保留哪一个，另一个会移到备份文件夹。", name), func() {
+			ui.Button(c, i18n.T("保留当前文件")).Disabled(busy).OnClick(keep)
+			ui.Button(c, i18n.T("保留此副本")).Disabled(busy).OnClick(use)
+		}, func() {
+			if env.ActionRow(c, i18n.T("保留当前文件"), false, busy).Clicked() {
+				keep()
+			}
+			if env.ActionRow(c, i18n.T("保留此副本"), false, busy).Clicked() {
+				use()
+			}
 		})
 	}
 	if n := len(st.MissingSecrets); n > 0 {
-		msg := i18n.Tf("%d 个订阅的链接不在本机钥匙串中（%s），请在「订阅」页编辑并重新输入链接。", n, strings.Join(st.MissingSecrets, i18n.T("、")))
-		if !e.Mac {
-			msg = i18n.Tf("%d 个订阅的链接不在本机凭据管理器中（%s），请在「订阅」页编辑并重新输入链接。", n, strings.Join(st.MissingSecrets, i18n.T("、")))
-		}
-		e.Kit.Banner(c, "info", msg, func() {
-			ui.Button(c, i18n.T("前往订阅")).OnClick(func() { e.Navigate(env.Subs, "") })
+		names := strings.Join(st.MissingSecrets, i18n.T("、"))
+		msg := secrets(i18n.Tf("%d 个订阅的链接不在本机钥匙串中（%s），请在「订阅」页编辑并重新输入链接。", n, names),
+			i18n.Tf("%d 个订阅的链接不在本机凭据管理器中（%s），请在「订阅」页编辑并重新输入链接。", n, names),
+			i18n.Tf("%d 个订阅的链接不在本机的安全存储中（%s），请在「订阅」页编辑并重新输入链接。", n, names))
+		goSubs := func() { e.Navigate(env.Subs, "") }
+		banner("subs", "info", msg, func() {
+			ui.Button(c, i18n.T("前往订阅")).OnClick(goSubs)
+		}, func() {
+			if env.ActionRow(c, i18n.T("前往订阅"), false, false).Clicked() {
+				goSubs()
+			}
 		})
 	}
 	if n := len(st.MissingNodeSecrets); n > 0 && !st.Locked {
-		msg := i18n.Tf("%d 个手动节点的凭据不在本机钥匙串中（%s），请在「代理」页编辑并重新填写凭据。", n, strings.Join(st.MissingNodeSecrets, i18n.T("、")))
-		if !e.Mac {
-			msg = i18n.Tf("%d 个手动节点的凭据不在本机凭据管理器中（%s），请在「代理」页编辑并重新填写凭据。", n, strings.Join(st.MissingNodeSecrets, i18n.T("、")))
-		}
-		e.Kit.Banner(c, "info", msg, func() {
-			ui.Button(c, i18n.T("前往代理")).OnClick(func() { e.Navigate(env.Proxies, "") })
+		names := strings.Join(st.MissingNodeSecrets, i18n.T("、"))
+		msg := secrets(i18n.Tf("%d 个手动节点的凭据不在本机钥匙串中（%s），请在「代理」页编辑并重新填写凭据。", n, names),
+			i18n.Tf("%d 个手动节点的凭据不在本机凭据管理器中（%s），请在「代理」页编辑并重新填写凭据。", n, names),
+			i18n.Tf("%d 个手动节点的凭据不在本机的安全存储中（%s），请在「代理」页编辑并重新填写凭据。", n, names))
+		goProxies := func() { e.Navigate(env.Proxies, "") }
+		banner("nodes", "info", msg, func() {
+			ui.Button(c, i18n.T("前往代理")).OnClick(goProxies)
+		}, func() {
+			if env.ActionRow(c, i18n.T("前往代理"), false, false).Clicked() {
+				goProxies()
+			}
 		})
 	}
 	if st.Locked {
@@ -169,16 +303,19 @@ func (p *Page) syncBanners(c *ui.Context, st model.ConfigSyncStatus, busy bool) 
 		if st.PassphraseChanged {
 			msg = i18n.T("同步口令已在另一台设备上修改。输入新口令以解锁订阅链接；在此之前，本机已有的链接照常使用。")
 		}
-		e.Kit.Banner(c, "info", msg, func() {
+		banner("locked", "info", msg, func() {
 			ui.Button(c, i18n.T("输入口令…")).Disabled(busy).OnClick(func() { p.openPassDialog(passUnlock) })
+		}, func() {
+			if env.ActionRow(c, i18n.T("输入口令…"), false, busy).Clicked() {
+				p.openPassDialog(passUnlock)
+			}
 		})
 	}
 	if st.WebDAVPasswordMissing && !st.Locked {
-		msg := i18n.T("同步文件中设置了 WebDAV 密码，但本机钥匙串里没有；需要备份到 WebDAV 时请重新输入密码。")
-		if !e.Mac {
-			msg = i18n.T("同步文件中设置了 WebDAV 密码，但本机凭据管理器里没有；需要备份到 WebDAV 时请重新输入密码。")
-		}
-		e.Kit.Banner(c, "info", msg, nil)
+		msg := secrets(i18n.T("同步文件中设置了 WebDAV 密码，但本机钥匙串里没有；需要备份到 WebDAV 时请重新输入密码。"),
+			i18n.T("同步文件中设置了 WebDAV 密码，但本机凭据管理器里没有；需要备份到 WebDAV 时请重新输入密码。"),
+			i18n.T("同步文件中设置了 WebDAV 密码，但本机的安全存储里没有；需要备份到 WebDAV 时请重新输入密码。"))
+		banner("webdav", "info", msg, nil, nil)
 	}
 }
 

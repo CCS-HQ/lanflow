@@ -73,20 +73,49 @@ func (p *Page) cacheRow(c *ui.Context) {
 	e.Kit.Row(c, i18n.T("缓存"), desc, func() {
 		b := ui.Button(c, i18n.T("清理缓存")).Disabled(cs.busy || cs.items == nil)
 		if b.Clicked() {
-			cs.busy = true
-			var freed int64
-			e.Then(func() (err error) {
-				freed, err = api.CleanCaches()
-				return err
-			}, func(err error) {
-				cs.busy, cs.loaded = false, false // read again: the sizes changed
-				if err != nil {
-					e.Toast(err.Error(), true)
-					return
-				}
-				e.Toast(i18n.Tf("已清理 %s", env.FmtBytes(freed)), false)
-			})
+			p.cleanCaches(api)
 		}
+	})
+}
+
+// phoneCacheRows are the row on a phone: the sizes, 清理缓存 under them.
+func (p *Page) phoneCacheRows(c *ui.Context) {
+	api, ok := p.e.API.(cacheAPI)
+	if !ok {
+		return
+	}
+	cs := &p.caches
+	if !cs.loaded && !cs.busy {
+		p.loadCaches(api)
+	}
+	desc := cacheSummary(cs.items)
+	if cs.items == nil {
+		desc = i18n.T("正在读取…")
+	}
+	phoneBlock(c, "", "", func() {
+		infoRow(c, i18n.T("缓存"), desc, "")
+		if env.ActionRow(c, i18n.T("清理缓存"), false, cs.busy || cs.items == nil).Clicked() {
+			p.cleanCaches(api)
+		}
+	})
+}
+
+// cleanCaches runs 清理缓存 off the UI thread and toasts what it freed.
+func (p *Page) cleanCaches(api cacheAPI) {
+	e := p.e
+	cs := &p.caches
+	cs.busy = true
+	var freed int64
+	e.Then(func() (err error) {
+		freed, err = api.CleanCaches()
+		return err
+	}, func(err error) {
+		cs.busy, cs.loaded = false, false // read again: the sizes changed
+		if err != nil {
+			e.Toast(err.Error(), true)
+			return
+		}
+		e.Toast(i18n.Tf("已清理 %s", env.FmtBytes(freed)), false)
 	})
 }
 

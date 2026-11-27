@@ -13,6 +13,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/mobile"
 
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
@@ -57,6 +58,11 @@ type Page struct {
 	aggSum     map[string]aggSummary
 	aggSumSig  string
 	aggSumBusy bool
+
+	// refresh is the phone's pull to refresh of the cards (全部更新).
+	refresh ui.RefreshState
+	// swipes are the phone's cards' swipe states, by subscription ID.
+	swipes map[string]*mobile.SwipeState
 }
 
 // New returns the page.
@@ -126,6 +132,15 @@ func (p *Page) View(c *ui.Context) {
 		return
 	}
 
+	if len(subs) > 0 && c.Shortcut(ui.Cmd, ui.KeyR) {
+		p.updateAll()
+	}
+	if p.e.Phone {
+		p.phoneView(c, sortSubs(subs, p.sort), switching)
+		p.dialogs(c)
+		return
+	}
+
 	k.Header(c, i18n.T("订阅"), "", func() {
 		tip := i18n.T("更新所有链接订阅（⌘R）")
 		if !p.e.Mac {
@@ -144,21 +159,9 @@ func (p *Page) View(c *ui.Context) {
 			p.updateAll()
 		}
 		ui.MenuButton(c, i18n.T("导入"), func(m *ui.Menu) {
-			if m.Item(i18n.T("从链接导入…")).Chosen() {
-				p.openImport(c)
-			}
-			if m.Item(i18n.T("从文件导入…")).Chosen() {
-				p.importFile()
-			}
-			m.Separator()
-			if m.Item(i18n.T("新建聚合订阅…")).Chosen() {
-				p.e.Navigate(env.Aggregate, "new")
-			}
+			p.importMenu(c, m)
 		}).Label(i18n.T("导入"))
 	})
-	if len(subs) > 0 && c.Shortcut(ui.Cmd, ui.KeyR) {
-		p.updateAll()
-	}
 
 	if len(subs) == 0 {
 		k.Empty(c, "subs", i18n.T("还没有订阅"), i18n.T("也可以把 .yaml / .yml 文件拖到这个窗口。"), func() {
@@ -365,6 +368,32 @@ func (p *Page) cell(c *ui.Context, s model.Subscription, col string, switching s
 	}
 }
 
+// importMenu is the 导入 menu: from a link, from a file, a new aggregate
+// subscription.
+func (p *Page) importMenu(c *ui.Context, m *ui.Menu) {
+	if m.Item(i18n.T("从链接导入…")).Chosen() {
+		p.openImport(c)
+	}
+	if m.Item(i18n.T("从文件导入…")).Chosen() {
+		p.importFile()
+	}
+	m.Separator()
+	if m.Item(i18n.T("新建聚合订阅…")).Chosen() {
+		p.e.Navigate(env.Aggregate, "new")
+	}
+}
+
+// openEdit opens the editor of a subscription: the aggregate editor for
+// an aggregate one, else the 编辑 dialog.
+func (p *Page) openEdit(sub model.Subscription) {
+	if sub.Source == model.SourceAggregate {
+		p.e.Navigate(env.Aggregate, sub.ID)
+		return
+	}
+	p.edit = editDialog{open: true, id: sub.ID, name: sub.Name, url: sub.URL, isURL: sub.Source == "url",
+		auto: autoIndex(sub.AutoUpdateHours), ua: sub.UserAgent, viaProxy: sub.ViaProxy, timeout: timeoutText(sub.TimeoutSec)}
+}
+
 // rowMenu is the ⋯ menu of a row.
 func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, s model.Subscription) {
 	sub := s
@@ -383,11 +412,10 @@ func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, s model.Subscription) {
 	}
 	if sub.Source == model.SourceAggregate {
 		if m.Item(i18n.T("编辑聚合…")).Chosen() {
-			p.e.Navigate(env.Aggregate, sub.ID)
+			p.openEdit(sub)
 		}
 	} else if m.Item(i18n.T("编辑…")).Chosen() {
-		p.edit = editDialog{open: true, id: sub.ID, name: sub.Name, url: sub.URL, isURL: sub.Source == "url",
-			auto: autoIndex(sub.AutoUpdateHours), ua: sub.UserAgent, viaProxy: sub.ViaProxy, timeout: timeoutText(sub.TimeoutSec)}
+		p.openEdit(sub)
 	}
 	if m.Item(i18n.T("编辑覆写…")).Chosen() {
 		p.e.Navigate(env.Settings, "override:"+sub.ID)

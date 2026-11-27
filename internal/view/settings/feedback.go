@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -68,6 +69,99 @@ func (p *Page) feedbackRows(c *ui.Context, t *ui.Theme, s model.Settings) {
 		}
 	})
 	p.feedbackConfigDialog(c, t, s, info)
+}
+
+// phoneFeedback is 反馈问题 and 反馈上报 on a phone: 反馈问题 as a row,
+// the endpoint and the token each with an editor behind, the switch.
+func (p *Page) phoneFeedback(c *ui.Context, t *ui.Theme, s model.Settings) {
+	e := p.e
+	info := e.API.FeedbackInfo()
+	phoneBlock(c, "", "", func() {
+		if e.OpenFeedback != nil && p.navRow(c, i18n.T("反馈问题"), i18n.T("描述遇到的问题，附上脱敏后的诊断信息；发送前可以查看全部内容"), "") {
+			e.OpenFeedback()
+		}
+	})
+	foot := i18n.T("未设置上报地址：反馈只能保存到文件")
+	if info.Endpoint != "" {
+		foot = i18n.Tf("发送到 %s", info.Endpoint)
+	}
+	phoneBlock(c, i18n.T("反馈上报"), foot, func() {
+		host := strings.TrimPrefix(strings.TrimPrefix(s.Feedback.Endpoint, "https://"), "http://")
+		if p.navRow(c, i18n.T("上报地址"), "", valueOr(host, i18n.T("未设置"))) {
+			p.pushEdit(i18n.T("上报地址"), i18n.T("反馈会以 POST {上报地址}/v1/reports 发送到你自己部署的服务；留空时反馈只能保存到文件。"), s.Feedback.Endpoint, func(v string) error {
+				v = strings.TrimRight(strings.TrimSpace(v), "/")
+				s := p.current()
+				switch {
+				case v != "" && !validEndpoint(v):
+					return errors.New(i18n.T("上报地址须是以 https:// 开头的完整地址"))
+				case v != s.Feedback.Endpoint:
+					s.Feedback.Endpoint = v
+					if v == "" {
+						s.Feedback.AutoReport = false
+					}
+					p.save(s, "", nil)
+				}
+				return nil
+			}, mono, placeholderOpt("https://lanflow-feedback.example.workers.dev"))
+		}
+		tok := i18n.T("未设置")
+		if info.TokenSet {
+			tok = i18n.T("已设置")
+		}
+		if p.navRow(c, i18n.T("访问令牌"), "", tok) {
+			p.fbk.token = ""
+			p.pushPage(i18n.T("访问令牌"), p.phoneFeedbackToken)
+		}
+		if s.Feedback.Endpoint != "" {
+			p.switchRow(c, i18n.T("出错时自动上报"), i18n.T("只发送错误摘要（时间、类别、脱敏后的消息与版本），不含诊断信息和日志；默认关闭"), s.Feedback.AutoReport, func(on bool) {
+				s.Feedback.AutoReport = on
+				p.save(s, "", nil)
+			})
+		}
+	})
+}
+
+// phoneFeedbackToken is the token's page on a phone: a new one to type
+// and 保存, 清除 when one is set.
+func (p *Page) phoneFeedbackToken(c *ui.Context) {
+	e := p.e
+	f := &p.fbk
+	info := e.API.FeedbackInfo()
+	ph := i18n.T("输入令牌")
+	if info.TokenSet {
+		ph = "••••••••"
+	}
+	save := func() {
+		tok := f.token
+		if strings.TrimSpace(tok) == "" {
+			return
+		}
+		f.token = ""
+		f.tokenSession++
+		p.sub = nil
+		e.Run(func() error { return e.API.SetFeedbackToken(tok) }, i18n.T("令牌已保存"))
+	}
+	phoneGroup(c, func() {
+		if phoneField(c, "fb-token-"+strconv.Itoa(f.tokenSession), i18n.T("访问令牌"), ph, &f.token, true, false).Submitted() {
+			save()
+		}
+	})
+	phoneFoot(c, i18n.T("可选；以 Authorization: Bearer 发送，保存在本机的安全存储中"))
+	phoneSpacer(c)
+	phoneGroup(c, func() {
+		if env.ActionRow(c, i18n.T("保存"), false, strings.TrimSpace(f.token) == "").Clicked() {
+			save()
+		}
+	})
+	if info.TokenSet {
+		phoneSpacer(c)
+		phoneGroup(c, func() {
+			if env.ActionRow(c, i18n.T("清除令牌"), true, false).Clicked() {
+				p.sub = nil
+				e.Run(func() error { return e.API.SetFeedbackToken("") }, i18n.T("令牌已清除"))
+			}
+		})
+	}
 }
 
 func (p *Page) feedbackConfigDialog(c *ui.Context, t *ui.Theme, s model.Settings, info model.FeedbackInfo) {

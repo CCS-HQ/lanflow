@@ -48,6 +48,8 @@ var (
 type Page struct {
 	e   *env.Env
 	tab int
+	// sub is the page pushed inside the section on a phone (phone.go).
+	sub *phoneSub
 
 	// immediate settings (常规 / 代理 / 内核)
 	port      field
@@ -172,13 +174,25 @@ func (p *Page) View(c *ui.Context) {
 	}
 
 	ui.Column(c).Fill().Children(func() {
-		e.Kit.Header(c, i18n.T("设置"), "", func() {
-			tab := p.tab
-			if ui.Segmented(c.Key("tabs"), &tab, i18n.Options(tabNames...)...).Label(i18n.T("设置分栏")).Changed() {
-				p.requestTab(tab)
-			}
-		})
-		ui.Scroll(c.Key(tabKeys[p.tab])).Grow(1).Padding(4, 24, 24).Gap(20).Children(func() {
+		// On a phone 更多 lists the sections and pushes one, whose name
+		// the shell's top bar shows: no tabs here.
+		if !e.Phone {
+			e.Kit.Header(c, i18n.T("设置"), "", func() {
+				tab := p.tab
+				if ui.Segmented(c.Key("tabs"), &tab, i18n.Options(tabNames...)...).Label(i18n.T("设置分栏")).Changed() {
+					p.requestTab(tab)
+				}
+			})
+		}
+		if e.Phone && p.sub != nil {
+			p.phoneSubView(c)
+			return
+		}
+		body := ui.Scroll(c.Key(tabKeys[p.tab])).Grow(1).Padding(4, 24, 24).Gap(20)
+		if e.Phone {
+			body.Padding(16, 16, 24).Gap(22)
+		}
+		body.Children(func() {
 			switch p.tab {
 			case tabGeneral:
 				p.general(c, t, s)
@@ -226,6 +240,7 @@ func (p *Page) View(c *ui.Context) {
 }
 
 func (p *Page) handleArg(a string) {
+	p.sub = nil         // a section asked for opens on its list
 	if p.openEntry(a) { // "tab#label", from the global search (search.go)
 		return
 	}
@@ -270,6 +285,21 @@ func (p *Page) requestTab(tab int) {
 
 // Tab returns the current tab's key (for tests).
 func (p *Page) Tab() string { return tabKeys[p.tab] }
+
+// TabTitle is the name of the section shown, translated: the phone's top
+// bar shows it (docs/phone-ui.md).
+func (p *Page) TabTitle() string { return TabTitleOf(tabKeys[p.tab]) }
+
+// TabTitleOf names the section of a tab key ("general", "proxy"…),
+// translated; "" for an unknown key.
+func TabTitleOf(key string) string {
+	for i, k := range tabKeys {
+		if k == key {
+			return i18n.T(tabNames[i])
+		}
+	}
+	return ""
+}
 
 func (p *Page) flushToast() {
 	p.mu.Lock()
@@ -395,6 +425,10 @@ func (p *Page) loadForms(s model.Settings) {
 
 func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 	e := p.e
+	if e.Phone {
+		p.phoneGeneral(c, t, s) // list rows (phone_general.go)
+		return
+	}
 	tray := i18n.T("隐藏到托盘")
 	if e.Mac {
 		tray = i18n.T("隐藏到菜单栏")
@@ -403,6 +437,12 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 	// on the left, data, backup and about on the right.
 	env.Columns(c, 20, func() {
 		e.Kit.Section(c, i18n.T("常规"), "", func() {
+			if e.Phone {
+				// A phone has no login item, window, tray or system
+				// proxy: only the look and the language.
+				p.lookRows(c, s)
+				return
+			}
 			loginDesc := ""
 			if e.Windows {
 				if s.RunAsAdmin {
@@ -447,18 +487,7 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 				closeVal = closeOpts[0]
 			}
 			p.selectRow(c, i18n.T("关闭窗口时"), "", closeVal, closeOpts, func(v string) { s.CloseToTray = v == closeOpts[0]; p.save(s, "", nil) })
-			appOpts := []string{i18n.T("跟随系统"), i18n.T("浅色"), i18n.T("深色")}
-			appVals := []string{"system", "light", "dark"}
-			p.selectRow(c, i18n.T("外观"), "", mapName(s.Appearance, appVals, appOpts), appOpts, func(v string) {
-				s.Appearance = mapValue(v, appOpts, appVals)
-				p.save(s, "", nil)
-			})
-			langOpts := []string{i18n.Autonym(i18n.ZH), i18n.Autonym(i18n.EN)}
-			langVals := []string{"zh", "en"}
-			p.selectRow(c, i18n.T("语言"), "", mapName(s.Language, langVals, langOpts), langOpts, func(v string) {
-				s.Language = mapValue(v, langOpts, langVals)
-				p.save(s, "", nil)
-			})
+			p.lookRows(c, s)
 		})
 		e.Kit.Section(c, i18n.T("功能"), "", func() {
 			p.switchRow(c, i18n.T("抓包（HTTPS 解密）"), i18n.T("显示「抓包」页，可按域名或程序解密 HTTPS 请求；关闭时同时停止解密"), s.CaptureEnabled, func(on bool) {
@@ -469,12 +498,16 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 		if e.Mac {
 			p.menuBarSection(c, t, s)
 		}
-		e.Kit.Section(c, i18n.T("全局快捷键"), i18n.T("在任何应用中按下即可触发；留空即关闭"), func() { p.shortcutRows(c, t, s) })
+		if !e.Phone { // no global shortcuts on a phone
+			e.Kit.Section(c, i18n.T("全局快捷键"), i18n.T("在任何应用中按下即可触发；留空即关闭"), func() { p.shortcutRows(c, t, s) })
+		}
 	}, func() {
 		e.Kit.Section(c, i18n.T("数据"), "", func() {
-			e.Kit.Row(c, i18n.T("配置文件夹"), e.API.ConfigDir(), func() {
-				ui.Button(c, revealLabel(e)).OnClick(func() { env.RevealInFolder(e.API.ConfigDir()) })
-			})
+			if !e.Phone { // a phone's app keeps its folder to itself
+				e.Kit.Row(c, i18n.T("配置文件夹"), e.API.ConfigDir(), func() {
+					ui.Button(c, revealLabel(e)).OnClick(func() { env.RevealInFolder(e.API.ConfigDir()) })
+				})
+			}
 			e.Kit.Row(c, i18n.T("导出 / 导入设置"), i18n.T("设置、覆写与自定义规则保存为 lanflow.yaml；导入会按文件内容应用"), func() {
 				ui.Row(c).Gap(8).Children(func() {
 					if ui.Button(c, i18n.T("导出…")).Clicked() {
@@ -510,10 +543,51 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 					})
 				})
 			})
-			p.updateRows(c, t, s)
+			if !e.Phone { // a phone's store updates the app
+				p.updateRows(c, t, s)
+			}
 			p.starRow(c)
 			p.feedbackRows(c, t, s)
 		})
+	})
+}
+
+// portRow is 代理端口 on the desktop: an input that commits on Return or
+// when it loses the focus.
+func (p *Page) portRow(c *ui.Context, t *ui.Theme, s model.Settings) {
+	p.e.Kit.Row(c, i18n.T("代理端口"), i18n.T("HTTP 和 SOCKS5 共用此端口"), func() {
+		ui.Column(c).Gap(4).AlignItems(ui.End).Children(func() {
+			if p.portErr == "" {
+				p.port.show(strconv.Itoa(s.MixedPort))
+			}
+			in := ui.TextInput(c.Key("port"), &p.port.text).Width(84).TextAlign(ui.End).FontFeatures("tnum").
+				Label(i18n.T("代理端口")).Invalid(p.portErr != "")
+			if in.Changed() {
+				p.portErr = ""
+			}
+			if p.port.commit(in) {
+				p.commitPort(s)
+			}
+			if p.portErr != "" {
+				ui.Text(c, p.portErr).FontSize(11).TextColor(t.Danger).MaxWidth(320).TextAlign(ui.End)
+			}
+		})
+	})
+}
+
+// lookRows are the 外观 and 语言 rows of 常规.
+func (p *Page) lookRows(c *ui.Context, s model.Settings) {
+	appOpts := []string{i18n.T("跟随系统"), i18n.T("浅色"), i18n.T("深色")}
+	appVals := []string{"system", "light", "dark"}
+	p.selectRow(c, i18n.T("外观"), "", mapName(s.Appearance, appVals, appOpts), appOpts, func(v string) {
+		s.Appearance = mapValue(v, appOpts, appVals)
+		p.save(s, "", nil)
+	})
+	langOpts := []string{i18n.Autonym(i18n.ZH), i18n.Autonym(i18n.EN)}
+	langVals := []string{"zh", "en"}
+	p.selectRow(c, i18n.T("语言"), "", mapName(s.Language, langVals, langOpts), langOpts, func(v string) {
+		s.Language = mapValue(v, langOpts, langVals)
+		p.save(s, "", nil)
 	})
 }
 
@@ -524,24 +598,11 @@ func (p *Page) proxy(c *ui.Context, t *ui.Theme, s model.Settings, st model.Stat
 	// Two columns at ≥1100 pt: 代理 on the left, the rest on the right.
 	env.Columns(c, 20, func() {
 		e.Kit.Section(c, i18n.T("代理"), "", func() {
-			e.Kit.Row(c, i18n.T("代理端口"), i18n.T("HTTP 和 SOCKS5 共用此端口"), func() {
-				ui.Column(c).Gap(4).AlignItems(ui.End).Children(func() {
-					if p.portErr == "" {
-						p.port.show(strconv.Itoa(s.MixedPort))
-					}
-					in := ui.TextInput(c.Key("port"), &p.port.text).Width(84).TextAlign(ui.End).FontFeatures("tnum").
-						Label(i18n.T("代理端口")).Invalid(p.portErr != "")
-					if in.Changed() {
-						p.portErr = ""
-					}
-					if p.port.commit(in) {
-						p.commitPort(s)
-					}
-					if p.portErr != "" {
-						ui.Text(c, p.portErr).FontSize(11).TextColor(t.Danger).MaxWidth(320).TextAlign(ui.End)
-					}
-				})
-			})
+			if e.Phone {
+				p.phonePortRow(c, s)
+			} else {
+				p.portRow(c, t, s)
+			}
 			lanDesc := i18n.T("仅本机可以使用代理")
 			if s.AllowLAN {
 				addr := st.LANAddress
@@ -550,19 +611,23 @@ func (p *Page) proxy(c *ui.Context, t *ui.Theme, s model.Settings, st model.Stat
 				}
 				lanDesc = i18n.Tf("其他设备可通过 %s:%d 使用代理", addr, s.MixedPort)
 			}
-			p.switchRow(c, i18n.T("允许局域网连接"), lanDesc, s.AllowLAN, func(on bool) { s.AllowLAN = on; p.save(s, "", nil) })
-			if s.AllowLAN && len(s.Advanced.Authentication) == 0 {
-				e.Kit.Banner(c, "warn", i18n.T("没有设置代理认证：同一网络里的任何设备都能使用这个代理。"), func() {
-					ui.Button(c, i18n.T("设置认证…")).OnClick(func() { p.requestTab(tabAdvanced) })
+			// A phone shares no proxy with the network and has no
+			// system proxy whose exceptions to edit.
+			if !e.Phone {
+				p.switchRow(c, i18n.T("允许局域网连接"), lanDesc, s.AllowLAN, func(on bool) { s.AllowLAN = on; p.save(s, "", nil) })
+				if s.AllowLAN && len(s.Advanced.Authentication) == 0 {
+					e.Kit.Banner(c, "warn", i18n.T("没有设置代理认证：同一网络里的任何设备都能使用这个代理。"), func() {
+						ui.Button(c, i18n.T("设置认证…")).OnClick(func() { p.requestTab(tabAdvanced) })
+					})
+				}
+				e.Kit.Row(c, i18n.T("不走代理的地址"), i18n.Tf("%d 条", len(s.Bypass)), func() {
+					ui.Button(c, i18n.T("编辑…")).OnClick(func() {
+						p.bypass.text = strings.Join(s.Bypass, "\n")
+						p.bypass.session++
+						p.bypass.open = true
+					})
 				})
 			}
-			e.Kit.Row(c, i18n.T("不走代理的地址"), i18n.Tf("%d 条", len(s.Bypass)), func() {
-				ui.Button(c, i18n.T("编辑…")).OnClick(func() {
-					p.bypass.text = strings.Join(s.Bypass, "\n")
-					p.bypass.session++
-					p.bypass.open = true
-				})
-			})
 			p.switchRow(c, i18n.T("实测节点出口位置"), i18n.T("经节点访问 www.cloudflare.com/cdn-cgi/trace，确定真实出口位置"), s.ProbeExits, func(on bool) {
 				s.ProbeExits = on
 				p.save(s, "", nil)
@@ -570,7 +635,11 @@ func (p *Page) proxy(c *ui.Context, t *ui.Theme, s model.Settings, st model.Stat
 		})
 	}, func() {
 		p.delaySection(c, t, s)
-		p.wifiSection(c, t, s) // 按 Wi-Fi 切换订阅 (wifi.go)
+		if e.Phone {
+			p.phoneWiFi(c, s)
+		} else {
+			p.wifiSection(c, t, s) // 按 Wi-Fi 切换订阅 (wifi.go)
+		}
 	})
 }
 
@@ -667,10 +736,16 @@ var defaultBypass = sysproxy.DefaultBypass
 func (p *Page) kernel(c *ui.Context, t *ui.Theme, s model.Settings, st model.Status) {
 	e := p.e
 	running := st.Core == model.CoreRunning
+	if e.Phone { // a phone's core comes with the app, in its VPN (phone_general.go)
+		p.phoneKernel(c, t, s, st)
+		return
+	}
 	// Two columns at ≥1100 pt: 内核 on the left, the resources on the right.
 	env.Columns(c, 20, func() {
-		p.coreVersionSection(c, t, s, st) // 内核版本 + installed list (cores.go)
-		p.coreUpdateSection(c, s)         // 自动检查 / 更新通道 / 自动安装 (cores.go)
+		if !e.Phone { // a phone's core comes with the app, in its VPN
+			p.coreVersionSection(c, t, s, st) // 内核版本 + installed list (cores.go)
+			p.coreUpdateSection(c, s)         // 自动检查 / 更新通道 / 自动安装 (cores.go)
+		}
 		e.Kit.Section(c, i18n.T("内核"), "", func() {
 			file, fileDesc := i18n.T("内置"), ""
 			if s.CorePath != "" {
@@ -683,22 +758,29 @@ func (p *Page) kernel(c *ui.Context, t *ui.Theme, s model.Settings, st model.Sta
 				fileDesc = i18n.T("未找到内核文件")
 			}
 			dl := e.API.CoreDownload()
-			e.Kit.Row(c, i18n.T("内核文件"), fileDesc, func() {
-				ui.Row(c).Gap(10).Children(func() {
-					color := t.TextMuted
-					if st.Core == model.CoreMissing {
-						color = t.Danger
-					}
-					ui.Text(c, file).TextColor(color).SingleLine().MaxWidth(260).Tooltip(file)
-					if st.Core == model.CoreMissing && !dl.Active {
-						ui.PrimaryButton(c, i18n.T("下载内核")).OnClick(func() { p.updateCore("") })
-					}
-					if s.CorePath != "" && s.CoreVersion == "" {
-						ui.Button(c, i18n.T("恢复内置")).Disabled(dl.Active).OnClick(func() { p.useCore("") })
-					}
-					ui.Button(c, i18n.T("更改…")).Disabled(dl.Active).OnClick(func() { go p.chooseCore() })
+			if e.Phone {
+				e.Kit.Row(c, i18n.T("内核版本"), "", func() {
+					ui.Text(c, env.Dash(st.CoreVersion)).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
 				})
-			})
+			}
+			if !e.Phone {
+				e.Kit.Row(c, i18n.T("内核文件"), fileDesc, func() {
+					ui.Row(c).Gap(10).Children(func() {
+						color := t.TextMuted
+						if st.Core == model.CoreMissing {
+							color = t.Danger
+						}
+						ui.Text(c, file).TextColor(color).SingleLine().MaxWidth(260).Tooltip(file)
+						if st.Core == model.CoreMissing && !dl.Active {
+							ui.PrimaryButton(c, i18n.T("下载内核")).OnClick(func() { p.updateCore("") })
+						}
+						if s.CorePath != "" && s.CoreVersion == "" {
+							ui.Button(c, i18n.T("恢复内置")).Disabled(dl.Active).OnClick(func() { p.useCore("") })
+						}
+						ui.Button(c, i18n.T("更改…")).Disabled(dl.Active).OnClick(func() { go p.chooseCore() })
+					})
+				})
+			}
 			lvlOpts := []string{i18n.T("调试"), i18n.T("信息"), i18n.T("警告"), i18n.T("错误"), i18n.T("静默")}
 			lvlVals := []string{"debug", "info", "warning", "error", "silent"}
 			p.selectRow(c, i18n.T("日志级别"), "", mapName(s.LogLevel, lvlVals, lvlOpts), lvlOpts, func(v string) {
@@ -895,6 +977,12 @@ func (p *Page) switchRow(c *ui.Context, label, desc string, on bool, set func(bo
 }
 
 func (p *Page) selectRow(c *ui.Context, label, desc, value string, options []string, set func(string)) {
+	if p.e.Phone { // the value and ›, a list of choices behind it
+		if p.navRow(c, label, desc, value) {
+			p.pushChoice(label, value, options, set)
+		}
+		return
+	}
 	p.e.Kit.Row(c, label, desc, func() {
 		v := value
 		if ui.Select(c.Key(label), &v, options).Label(label).Changed() {
@@ -904,6 +992,24 @@ func (p *Page) selectRow(c *ui.Context, label, desc, value string, options []str
 }
 
 func (p *Page) applyBar(c *ui.Context, t *ui.Theme, discard, apply func()) {
+	if p.e.Phone { // a phone's bar: the note, then 应用 and 放弃 as rows
+		ui.Column(c).Gap(6).Padding(10, env.PhoneGap).Background(t.Background).BorderWidth(0.5, 0, 0, 0).BorderColor(t.Border).Shrink(0).Children(func() {
+			ui.Text(c, i18n.T("有未应用的更改。应用时会重新生成配置、校验，并让内核重新加载。")).FontSize(12).TextColor(t.TextMuted)
+			phoneGroup(c, func() {
+				label := i18n.T("应用")
+				if p.applying {
+					label = i18n.T("应用中…")
+				}
+				if env.ActionRow(c, label, false, p.applying).Clicked() {
+					apply()
+				}
+				if env.ActionRow(c, i18n.T("放弃"), true, p.applying).Clicked() {
+					discard()
+				}
+			})
+		})
+		return
+	}
 	ui.Row(c).Gap(10).Padding(10, 24).Background(t.Surface).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
 		ui.Text(c, i18n.T("有未应用的更改。应用时会重新生成配置、校验，并让内核重新加载。")).FontSize(12).Grow(1)
 		ui.Button(c, i18n.T("放弃")).Disabled(p.applying).OnClick(discard)

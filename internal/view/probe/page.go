@@ -188,6 +188,10 @@ func (p *Page) View(c *ui.Context) {
 			}
 			p.targetLabel = targetLabel(target)
 			sel := ui.Select(c.Key("target"), &p.targetLabel, labels).Label(i18n.T("出口"))
+			if e.Phone {
+				// A long node name gives way on a narrow screen.
+				sel.Shrink(1).MaxWidth(260)
+			}
 			if sel.Changed() {
 				for i, l := range labels {
 					if l == p.targetLabel {
@@ -196,7 +200,11 @@ func (p *Page) View(c *ui.Context) {
 				}
 			}
 		})
-		ui.Column(c).Grow(1).Padding(0, 24, 16, 24).Gap(12).Children(func() {
+		body := ui.Column(c).Grow(1).Padding(0, 24, 16, 24).Gap(12)
+		if e.Phone {
+			body.Padding(0, 16, 16, 16)
+		}
+		body.Children(func() {
 			if ui.Segmented(c.Key("tabs"), &p.tab, i18n.T("泄漏检查"), i18n.T("IP 纯净度"), i18n.T("解锁检测"), i18n.T("地区探查")).Label(i18n.T("检测项目")).Changed() {
 				p.persist()
 			}
@@ -231,8 +239,8 @@ func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 	ui.Column(c).Grow(1).Gap(12).Children(func() {
 		// The two cards scroll together when a long report (an error, many
 		// online sources) is taller than the window.
-		ui.Scroll(c.Key("ipcards")).Shrink(1).Children(func() {
-			ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
+		ui.Scroll(c.Key("ipcards")).Shrink(1).Gap(12).Children(func() {
+			info := func() {
 				env.InfoCard(c, i18n.T("出口信息")+" · "+targetLabel(target), func() {
 					if rep.Running {
 						ui.Spinner(c).Size(12, 12).Label(i18n.T("检测中…"))
@@ -283,6 +291,8 @@ func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 						})
 					}
 				})
+			}
+			risk := func() {
 				env.InfoCard(c, i18n.T("风险评估"), func() {
 					// The finer score in the browser: handed to it, never
 					// requested by the app.
@@ -314,6 +324,17 @@ func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 						})
 					}
 				})
+			}
+			if e.Phone {
+				// One under the other; in a row a card's basis is its
+				// width, its height follows its content.
+				ui.Row(c).AlignItems(ui.Stretch).Shrink(0).Children(info)
+				ui.Row(c).AlignItems(ui.Stretch).Shrink(0).Children(risk)
+				return
+			}
+			ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
+				info()
+				risk()
 			})
 		})
 		if !has && !rep.Running {
@@ -396,7 +417,11 @@ func (p *Page) unlockTab(c *ui.Context, t *ui.Theme, target string) {
 	e := p.e
 	rep, has := e.API.Probe().Unlock[target]
 	ui.Column(c).Grow(1).Gap(8).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		head := ui.Row(c).Gap(8).AlignItems(ui.Center)
+		if e.Phone {
+			head.Wrap().Shrink(0)
+		}
+		head.Children(func() {
 			ui.Text(c, i18n.T("解锁检测")+" · "+targetLabel(target)).Bold()
 			ui.Text(c, i18n.T("· 经所选出口各访问一次，不登录账号")).FontSize(11).TextColor(t.TextMuted)
 			ui.Spacer(c)
@@ -425,6 +450,10 @@ func (p *Page) unlockTab(c *ui.Context, t *ui.Theme, target string) {
 			return
 		}
 		rows := rep.Results
+		if e.Phone {
+			p.phoneUnlock(c, t, rows)
+			return
+		}
 		p.unlockList.Key = func(i int) any { return rows[i].Service }
 		ui.Table(c.Key("unlock"), &p.unlockList, colwidth.Fit(c, env.I18nColumns(unlockCols)), len(rows), func(row, col int) {
 			r := rows[row]
@@ -519,7 +548,11 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 		p.region, p.regionName = regions[0].Country, labels[0]
 	}
 	ui.Column(c).Grow(1).Gap(8).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		tools := ui.Row(c).Gap(8).AlignItems(ui.Center)
+		if e.Phone {
+			tools.Wrap().Shrink(0)
+		}
+		tools.Children(func() {
 			ui.Text(c, i18n.T("地区")).FontSize(12).TextColor(t.TextMuted)
 			if len(regions) == 0 {
 				ui.Text(c, i18n.T("没有能从名称判断地区的节点")).FontSize(12).TextColor(t.TextMuted)
@@ -575,6 +608,10 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 		sortRows(rows, p.regionSort)
 		mainGroup := snap.MainGroup
 		cur := mainNode(snap, st)
+		if e.Phone {
+			p.phoneRegion(c, t, rows, rep.WithUnlock, cur, mainGroup)
+			return
+		}
 		p.regionList.Key = func(i int) any { return rows[i].Node }
 		// The rows move as delays arrive: the table stays where it is scrolled.
 		p.regionList.KeepOffset = true

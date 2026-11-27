@@ -113,6 +113,10 @@ func (p *Page) overrideTab(c *ui.Context, t *ui.Theme) {
 	} else {
 		p.mu.Unlock()
 	}
+	if e.Phone {
+		p.overridePhone(c, t, list, subIDs)
+		return
+	}
 	// Two columns at ≥1100 pt: the explanation and the list on the left,
 	// the subscriptions' choices and the result on the right.
 	env.Columns(c, 20, func() {
@@ -465,16 +469,7 @@ func (p *Page) importOverrideLink() {
 		d.err = i18n.T("请输入以 http:// 或 https:// 开头的链接。")
 		return
 	}
-	name := strings.TrimSpace(d.name)
-	if name == "" {
-		name = strings.TrimSuffix(filepath.Base(u), filepath.Ext(u))
-		if i := strings.IndexAny(name, "?#"); i >= 0 {
-			name = name[:i]
-		}
-		if name == "" || name == "." || name == "/" {
-			name = u
-		}
-	}
+	name := overrideLinkName(u, d.name)
 	d.busy, d.err = true, ""
 	// The dialog cannot be closed while busy, so it is still this one.
 	e.Then(func() error {
@@ -489,6 +484,22 @@ func (p *Page) importOverrideLink() {
 		d.open = false
 		e.Toast(i18n.Tf("已导入「%s」", name), false)
 	})
+}
+
+// overrideLinkName is the name of an override imported from u: name, or
+// the link's file name when it is empty.
+func overrideLinkName(u, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = strings.TrimSuffix(filepath.Base(u), filepath.Ext(u))
+		if i := strings.IndexAny(name, "?#"); i >= 0 {
+			name = name[:i]
+		}
+		if name == "" || name == "." || name == "/" {
+			name = u
+		}
+	}
+	return name
 }
 
 // openOverride opens the editor for key: an override ID, "global" (the
@@ -770,5 +781,281 @@ func (p *Page) runtimeDialog(c *ui.Context, t *ui.Theme) {
 				}
 			})
 		})
+	})
+}
+
+// ---- 覆写 on a phone ----
+
+// overridePhone is the 覆写 tab on a phone: the explanation as a note,
+// an entry a row pushing its page, the ways to add one as action rows,
+// each subscription a row pushing its choices, 运行时配置 a row. The YAML
+// editor and the runtime config stay dialogs.
+func (p *Page) overridePhone(c *ui.Context, t *ui.Theme, list []model.Override, subIDs map[string]bool) {
+	e := p.e
+	ui.Column(c).Gap(6).PaddingX(14).Children(func() {
+		ui.Text(c, i18n.T("覆写用 YAML 修改订阅配置，订阅更新后依然有效。")+i18n.T("列表中的覆写按顺序应用：全局的作用于所有订阅，其余由各订阅自行选择。")).FontSize(13).TextColor(t.TextMuted)
+		ui.RichText(c,
+			ui.Span{Text: i18n.T("写法："), Color: t.TextMuted, Size: 12},
+			ui.Span{Text: "key", Font: "monospace", Size: 12},
+			ui.Span{Text: i18n.T(" 整体替换 · "), Color: t.TextMuted, Size: 12},
+			ui.Span{Text: "+key", Font: "monospace", Size: 12},
+			ui.Span{Text: i18n.T(" 插到前面 · "), Color: t.TextMuted, Size: 12},
+			ui.Span{Text: "key+", Font: "monospace", Size: 12},
+			ui.Span{Text: i18n.T(" 追加到后面。保存前会完整校验，失败不会影响当前配置。"), Color: t.TextMuted, Size: 12},
+		)
+	})
+	p.phoneSection(c, i18n.T("覆写列表"), i18n.T("按从上到下的顺序应用"), func() {
+		for _, o := range list {
+			id := o.ID
+			ui.Column(c.Key("ov-" + id)).FillWidth().Children(func() {
+				desc := overrideMeta(o)
+				if subIDs[id] {
+					desc = i18n.T("订阅覆写") + " · " + desc
+				}
+				if o.Global {
+					desc = i18n.T("全局") + " · " + desc
+				}
+				value := i18n.T("已启用")
+				if !o.Enabled {
+					value = i18n.T("已停用")
+				}
+				if p.navRow(c, o.Name, desc, value) {
+					p.pushOverride(o)
+				}
+			})
+		}
+		if env.ActionRow(c, i18n.T("新建…"), false, false).Clicked() {
+			p.pushEdit(i18n.T("新建覆写"), i18n.T("创建后打开它的 YAML 编辑器。"), "", func(v string) error {
+				if name := strings.TrimSpace(v); name != "" {
+					p.saveEntry(model.Override{Name: name, Enabled: true, Source: model.OverrideLocal}, "")
+				}
+				return nil
+			}, placeholderOpt(i18n.T("覆写名称")))
+		}
+		if env.ActionRow(c, i18n.T("从文件导入…"), false, false).Clicked() {
+			go p.importOverrideFile()
+		}
+		if env.ActionRow(c, i18n.T("从链接导入…"), false, false).Clicked() {
+			d := &p.ovl.link
+			d.name, d.url, d.err = "", "", ""
+			p.pushPage(i18n.T("从链接导入覆写"), p.phoneOverrideLink)
+		}
+	})
+	p.phoneSection(c, i18n.T("订阅使用的覆写"), i18n.T("每个订阅可以额外选择要应用的覆写；全局覆写始终应用"), func() {
+		subs := e.API.Subscriptions()
+		if len(subs) == 0 {
+			ui.Text(c, i18n.T("还没有订阅")).FontSize(15).TextColor(t.TextMuted).Padding(12, 14)
+		}
+		byID := map[string]model.Override{}
+		for _, o := range list {
+			byID[o.ID] = o
+		}
+		for _, s := range subs {
+			ui.Column(c.Key("sub-" + s.ID)).FillWidth().Children(func() {
+				desc := selectionDesc(s, byID)
+				if s.Current {
+					desc = i18n.T("当前") + " · " + desc
+				}
+				if p.navRow(c, s.Name, desc, "") {
+					p.pushSelection(s, list)
+				}
+			})
+		}
+	})
+	e.Kit.Section(c, i18n.T("合成结果"), "", func() {
+		if p.navRow(c, i18n.T("运行时配置"), i18n.T("订阅 → 订阅覆写 → 全局覆写 → 澜流设置，最终交给内核的配置，每段标注来源"), "") {
+			p.openRuntime()
+		}
+	})
+}
+
+// pushOverride pushes the page of entry o; its name saves as the page pops.
+func (p *Page) pushOverride(o model.Override) {
+	d := &p.ovl.name
+	d.open, d.id, d.text = false, o.ID, o.Name
+	d.session++
+	id := o.ID
+	p.pushPage(o.Name, func(c *ui.Context) { p.phoneOverride(c, id) })
+	p.sub.back = func() {
+		name := strings.TrimSpace(d.text)
+		if d.id != id || name == "" {
+			return
+		}
+		for _, o := range p.e.API.OverrideList() {
+			if o.ID == id && o.Name != name {
+				o.Name = name
+				p.saveEntry(o, i18n.T("已重命名"))
+			}
+		}
+	}
+}
+
+// phoneOverride is an entry's page: its name, its switches, what can be
+// done with it, and 删除 in red.
+func (p *Page) phoneOverride(c *ui.Context, id string) {
+	e, t := p.e, c.Theme()
+	list := e.API.OverrideList()
+	index := -1
+	for i, o := range list {
+		if o.ID == id {
+			index = i
+		}
+	}
+	if index < 0 {
+		p.sub = nil // deleted
+		return
+	}
+	o := list[index]
+	p.mu.Lock()
+	busy := p.ovl.busy[id]
+	p.mu.Unlock()
+	phoneInput(c, "ov-name", i18n.T("覆写名称"), &p.ovl.name.text, i18n.T("覆写名称"), false, false)
+	ui.Text(c, overrideMeta(o)).FontSize(13).TextColor(t.TextMuted).PaddingX(14)
+	phoneActions(c, func() {
+		on := o.Enabled
+		if p.phoneSwitchRow(c, "ov-on", i18n.T("启用"), "", &on, busy) {
+			n := o
+			n.Enabled = on
+			p.saveEntry(n, "")
+		}
+		global := o.Global
+		if p.phoneSwitchRow(c, "ov-global", i18n.T("作用于所有订阅"), "", &global, busy || id == "global") {
+			n := o
+			n.Global = global
+			p.saveEntry(n, "")
+		}
+	})
+	phoneActions(c, func() {
+		if env.ActionRow(c, i18n.T("编辑 YAML…"), false, false).Clicked() {
+			p.openOverride(id)
+		}
+		if env.ActionRow(c, i18n.T("上移"), false, index == 0).Clicked() {
+			e.Run(func() error { return e.API.MoveOverrideEntry(id, -1) }, "")
+		}
+		if env.ActionRow(c, i18n.T("下移"), false, index >= len(list)-1).Clicked() {
+			e.Run(func() error { return e.API.MoveOverrideEntry(id, 1) }, "")
+		}
+		if o.Source == model.OverrideURL {
+			label := i18n.T("更新")
+			if busy {
+				label = i18n.T("更新中")
+			}
+			if env.ActionRow(c, label, false, busy).Clicked() {
+				p.setBusy(id, true)
+				e.Run(func() error {
+					defer p.setBusy(id, false)
+					return e.API.UpdateOverrideEntry(id)
+				}, i18n.Tf("已更新「%s」", o.Name))
+			}
+			if env.ActionRow(c, i18n.T("复制链接"), false, false).Clicked() {
+				c.WriteClipboard(o.URL)
+				e.Toast(i18n.T("已复制"), false)
+			}
+		}
+	})
+	phoneActions(c, func() {
+		if env.ActionRow(c, i18n.T("删除覆写"), true, busy).Clicked() {
+			name := o.Name
+			e.Confirm(i18n.Tf("删除覆写「%s」？", name), i18n.T("使用它的订阅会重新生成配置。此操作无法撤销。"), i18n.T("删除"), true, func() {
+				p.sub = nil
+				e.Run(func() error { return e.API.DeleteOverrideEntry(id) }, i18n.Tf("已删除「%s」", name))
+			})
+		}
+	})
+}
+
+// phoneOverrideLink imports an override from a link: the link, its name,
+// 导入; the page closes once it is in.
+func (p *Page) phoneOverrideLink(c *ui.Context) {
+	e, t := p.e, c.Theme()
+	d := &p.ovl.link
+	if phoneInput(c, "ov-url", i18n.T("覆写链接"), &d.url, "https://", true, d.busy).Changed() {
+		d.err = ""
+	}
+	phoneInput(c, "ov-link-name", i18n.T("覆写名称"), &d.name, i18n.T("名称（留空则用文件名）"), false, d.busy)
+	if d.err != "" {
+		ui.Text(c, d.err).FontSize(13).TextColor(t.Danger).PaddingX(14).Role(ui.RoleAlert)
+	}
+	ui.Text(c, i18n.T("下载链接指向的 YAML 作为一条覆写；之后可在它的页面中「更新」。")).FontSize(13).TextColor(t.TextMuted).PaddingX(14)
+	phoneActions(c, func() {
+		label := i18n.T("导入")
+		if d.busy {
+			label = i18n.T("正在下载…")
+		}
+		if !env.ActionRow(c, label, false, d.busy).Clicked() {
+			return
+		}
+		u := strings.TrimSpace(d.url)
+		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+			d.err = i18n.T("请输入以 http:// 或 https:// 开头的链接。")
+			return
+		}
+		name := overrideLinkName(u, d.name)
+		d.busy, d.err = true, ""
+		page := p.sub
+		e.Then(func() error {
+			_, err := e.API.SaveOverrideEntry(model.Override{Name: name, Enabled: true, Source: model.OverrideURL, URL: u})
+			return err
+		}, func(err error) {
+			d.busy = false
+			if err != nil {
+				d.err = err.Error()
+				return
+			}
+			if p.sub == page {
+				p.sub = nil
+			}
+			e.Toast(i18n.Tf("已导入「%s」", name), false)
+		})
+	})
+}
+
+// pushSelection pushes a subscription's choice of overrides; the choice
+// saves as the page pops.
+func (p *Page) pushSelection(s model.Subscription, list []model.Override) {
+	p.openSelection(s, list)
+	d := &p.ovl.sel
+	d.open = false // a page here, not the dialog
+	subID := s.ID
+	p.pushPage(s.Name, p.phoneSelection)
+	p.sub.back = func() {
+		e := p.e
+		var ids []string
+		for _, o := range e.API.OverrideList() {
+			if !o.Global && d.chosen[o.ID] {
+				ids = append(ids, o.ID)
+			}
+		}
+		for _, s := range e.API.Subscriptions() {
+			if s.ID == subID && strings.Join(s.Overrides, "\n") != strings.Join(ids, "\n") {
+				s.Overrides = ids
+				e.Run(func() error { return e.API.EditSubscription(s) }, i18n.T("已保存"))
+			}
+		}
+	}
+}
+
+// phoneSelection lists the overrides with the subscription's checked; the
+// global ones always are.
+func (p *Page) phoneSelection(c *ui.Context) {
+	e, t := p.e, c.Theme()
+	d := &p.ovl.sel
+	list := e.API.OverrideList()
+	ui.Text(c, i18n.T("勾选的覆写按列表顺序应用于这个订阅；全局覆写始终应用。")).FontSize(13).TextColor(t.TextMuted).PaddingX(14)
+	phoneGroup(c, func() {
+		if len(list) == 0 {
+			ui.Text(c, i18n.T("还没有覆写")).FontSize(15).TextColor(t.TextMuted).Padding(12, 14)
+		}
+		for _, o := range list {
+			ui.Column(c.Key("sel-" + o.ID)).FillWidth().Children(func() {
+				if o.Global {
+					p.phoneValueRow(c, o.Name, "", i18n.T("全局"))
+					return
+				}
+				if phoneCheckRow(c, e.Kit, o.Name, d.chosen[o.ID]) {
+					d.chosen[o.ID] = !d.chosen[o.ID]
+				}
+			})
+		}
 	})
 }

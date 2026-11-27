@@ -94,6 +94,10 @@ func (p *Page) View(c *ui.Context) {
 	if p.rng == len(rangeKeys)-1 && !st.Since.IsZero() {
 		subtitle = i18n.Tf("自 %s 起", env.FmtDate(st.Since))
 	}
+	if e.Phone {
+		p.phoneView(c, t, st, subtitle)
+		return
+	}
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("统计"), subtitle, func() { p.tools(c) })
 		if c.Shortcut(ui.Cmd, ui.KeyF) {
@@ -130,13 +134,28 @@ func (p *Page) tools(c *ui.Context) {
 
 // cards are the five totals.
 func (p *Page) cards(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
+	phone := p.e.Phone
 	card := func(label, value string) {
-		ui.Column(c).Grow(1).Gap(3).Padding(10, 12).Radius(10).Background(t.Surface).Border(1, t.Border).Children(func() {
+		col := ui.Column(c).Grow(1).Gap(3).Padding(10, 12).Radius(10).Background(t.Surface).Border(1, t.Border)
+		if phone {
+			col.Padding(8, 10)
+		}
+		col.Children(func() {
 			ui.Text(c, label).FontSize(11).TextColor(t.TextMuted).SingleLine()
-			ui.Text(c, value).FontSize(20).FontWeight(600).FontFeatures("tnum").SingleLine()
+			v := ui.Text(c, value).FontSize(20).FontWeight(600).FontFeatures("tnum").SingleLine()
+			if phone {
+				v.FontSize(16)
+			}
 		})
 	}
-	ui.Row(c).Gap(10).Shrink(0).Children(func() {
+	var row ui.Element
+	if phone {
+		// Three a line on a phone's narrow screen.
+		row = ui.Grid(c).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1)).GapX(8).GapY(8).Shrink(0)
+	} else {
+		row = ui.Row(c).Gap(10).Shrink(0)
+	}
+	row.Children(func() {
 		card(i18n.T("上传"), env.FmtBytes(st.Totals.Upload))
 		card(i18n.T("下载"), env.FmtBytes(st.Totals.Download))
 		card(i18n.T("总计"), env.FmtBytes(st.Totals.Upload+st.Totals.Download))

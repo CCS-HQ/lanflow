@@ -79,6 +79,7 @@ type Page struct {
 	icons        map[string]ui.ImageSource   // decoded group icons by reference (locate.go)
 	iconFail     map[string]bool             // references that do not decode
 	lists        map[string]*ui.ListState    // the virtual lists of large groups, by group
+	phone        phoneState                  // the layout on a phone (phone.go)
 
 	// idle is set by View when no node of the snapshot it draws is being
 	// tested: no group then walks its members to look for one (group).
@@ -158,6 +159,10 @@ func (p *Page) View(c *ui.Context) {
 	px := p.e.API.Proxies()
 	run := st.Core == model.CoreRunning
 	p.restore()
+	if p.e.Phone { // phone.go: group pills over a grid of node cards
+		p.phoneView(c, st, px)
+		return
+	}
 	if arg := p.e.Arg(env.Proxies); arg != "" {
 		if q, ok := env.TakeQuery(arg); ok { // the global search
 			p.query = q
@@ -177,19 +182,7 @@ func (p *Page) View(c *ui.Context) {
 			if ui.Segmented(c.Key("view"), &p.view, i18n.T("列表"), i18n.T("网格")).Label(i18n.T("视图")).Changed() {
 				p.persist()
 			}
-			ui.MenuButton(c, i18n.T("排序"), func(m *ui.Menu) {
-				for i, name := range []string{i18n.T("默认顺序"), i18n.T("按延迟"), i18n.T("按名称")} {
-					if m.Item(name).Radio(p.sort == i).Chosen() && p.sort != i {
-						p.sort = i
-						p.persist()
-					}
-				}
-				m.Separator()
-				if m.Item(i18n.T("隐藏超时节点")).Checked(p.hideTimeout).Chosen() {
-					p.hideTimeout = !p.hideTimeout
-					p.persist()
-				}
-			}).Label(i18n.T("排序"))
+			ui.MenuButton(c, i18n.T("排序"), p.sortMenu).Label(i18n.T("排序"))
 			tip := i18n.T("依次测试所有组的延迟（⌘R）")
 			if !p.e.Mac {
 				tip = i18n.T("依次测试所有组的延迟（Ctrl+R）")
@@ -224,40 +217,15 @@ func (p *Page) View(c *ui.Context) {
 		p.testAll()
 	}
 
-	p.chainList = p.e.API.ProxyChains()
-	p.chainByName = map[string]model.ProxyChain{}
-	for _, ch := range p.chainList {
-		p.chainByName[ch.Name] = ch
-	}
-
-	manualNodes := p.e.API.ManualNodes()
-	p.manualByName = make(map[string]model.ManualNode, len(manualNodes))
-	for _, mn := range manualNodes {
-		p.manualByName[mn.Name] = mn
-	}
+	manualNodes := p.loadLists()
 
 	switch {
 	case !st.HasSubscriptions:
-		k.Empty(c, "proxies", i18n.T("还没有订阅"), i18n.T("导入订阅或手动添加代理节点后，这里会列出代理组和节点。"), func() {
-			if ui.PrimaryButton(c, i18n.T("导入订阅")).Clicked() {
-				p.e.Navigate(env.Subs, "import-url")
-			}
-			ui.MenuButton(c, i18n.T("手动添加节点"), func(m *ui.Menu) {
-				p.addNodeMenu(c, m)
-			}).Label(i18n.T("手动添加节点"))
-		})
+		p.noSubscriptions(c)
 		p.manualDialogView(c)
 		return
 	case !run:
-		k.Empty(c, "power", i18n.T("内核未启动"), i18n.T("启动内核后才能查看和切换节点。"), func() {
-			if st.Core == model.CoreStarting {
-				ui.Spinner(c).Label(i18n.T("启动中"))
-				return
-			}
-			if ui.PrimaryButton(c, i18n.T("启动内核")).Clicked() {
-				p.e.Run(p.e.API.StartCore, i18n.T("内核已启动"))
-			}
-		})
+		p.coreStopped(c, st)
 		if len(manualNodes) > 0 {
 			p.stoppedManualSection(c, manualNodes)
 		}
@@ -314,6 +282,62 @@ func (p *Page) View(c *ui.Context) {
 	})
 	p.manualDialogView(c)
 	p.chainsDialogView(c, px)
+}
+
+// loadLists reads the chains and the manual nodes of this build, and
+// returns the manual nodes.
+func (p *Page) loadLists() []model.ManualNode {
+	p.chainList = p.e.API.ProxyChains()
+	p.chainByName = map[string]model.ProxyChain{}
+	for _, ch := range p.chainList {
+		p.chainByName[ch.Name] = ch
+	}
+	manualNodes := p.e.API.ManualNodes()
+	p.manualByName = make(map[string]model.ManualNode, len(manualNodes))
+	for _, mn := range manualNodes {
+		p.manualByName[mn.Name] = mn
+	}
+	return manualNodes
+}
+
+// noSubscriptions is the page without a subscription.
+func (p *Page) noSubscriptions(c *ui.Context) {
+	p.e.Kit.Empty(c, "proxies", i18n.T("还没有订阅"), i18n.T("导入订阅或手动添加代理节点后，这里会列出代理组和节点。"), func() {
+		if ui.PrimaryButton(c, i18n.T("导入订阅")).Clicked() {
+			p.e.Navigate(env.Subs, "import-url")
+		}
+		ui.MenuButton(c, i18n.T("手动添加节点"), func(m *ui.Menu) {
+			p.addNodeMenu(c, m)
+		}).Label(i18n.T("手动添加节点"))
+	})
+}
+
+// coreStopped is the page while the core does not run.
+func (p *Page) coreStopped(c *ui.Context, st model.Status) {
+	p.e.Kit.Empty(c, "power", i18n.T("内核未启动"), i18n.T("启动内核后才能查看和切换节点。"), func() {
+		if st.Core == model.CoreStarting {
+			ui.Spinner(c).Label(i18n.T("启动中"))
+			return
+		}
+		if ui.PrimaryButton(c, i18n.T("启动内核")).Clicked() {
+			p.e.Run(p.e.API.StartCore, i18n.T("内核已启动"))
+		}
+	})
+}
+
+// sortMenu is the 排序 menu's items: the order and hiding timeouts.
+func (p *Page) sortMenu(m *ui.Menu) {
+	for i, name := range []string{i18n.T("默认顺序"), i18n.T("按延迟"), i18n.T("按名称")} {
+		if m.Item(name).Radio(p.sort == i).Chosen() && p.sort != i {
+			p.sort = i
+			p.persist()
+		}
+	}
+	m.Separator()
+	if m.Item(i18n.T("隐藏超时节点")).Checked(p.hideTimeout).Chosen() {
+		p.hideTimeout = !p.hideTimeout
+		p.persist()
+	}
 }
 
 // visibleGroups returns the groups in config order, GLOBAL first in
@@ -775,13 +799,20 @@ func (p *Page) providers(c *ui.Context, provs []model.ProxyProvider, px model.Pr
 	t := c.Theme()
 	k := p.e.Kit
 	box := ui.Column(c.Key("providers")).Radius(10).Background(t.Surface).Border(1, t.Border).Clip()
+	if p.e.Phone { // as the node cards: the surface, no border
+		box.Border(0, ui.Transparent).Radius(env.PhoneRadius)
+	}
 	box.Children(func() {
 		wasOpen := p.provOpen
 		parts := ui.CollapsibleBase(c.Key("coll"), &p.provOpen)
 		if p.provOpen != wasOpen {
 			p.persist()
 		}
-		parts.Trigger.MinHeight(40).Padding(6, 12).Gap(8).AlignItems(ui.Center).Label(i18n.T("代理集合")).Children(func() {
+		parts.Trigger.MinHeight(40).Padding(6, 12).Gap(8).AlignItems(ui.Center).Label(i18n.T("代理集合"))
+		if p.e.Phone {
+			parts.Trigger.MinHeight(env.TouchSize+8).Padding(8, 14)
+		}
+		parts.Trigger.Children(func() {
 			ui.Box(c).TextColor(t.TextMuted).Children(func() { k.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
 			ui.Text(c, i18n.T("代理集合")).FontSize(13).FontWeight(600).SingleLine()
 			ui.Text(c, i18n.Tf("%d 个代理集合", len(provs))).FontSize(12).TextColor(t.TextMuted).SingleLine().
@@ -847,7 +878,14 @@ func (p *Page) provider(c *ui.Context, pv model.ProxyProvider, px model.ProxySna
 			ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted).SingleLine().Tooltip(meta)
 		})
 		canUpdate := pv.VehicleType == "HTTP" || pv.VehicleType == "File"
-		up := ui.Button(c, "").Label(i18n.Tf("更新 %s", pv.Name)).Tooltip(i18n.T("重新下载该代理集合")).Disabled(!canUpdate || pv.Updating).Children(func() {
+		btn := func(key string) ui.Element { return ui.Button(c.Key(key), "") }
+		if p.e.Phone { // borderless, a finger's size
+			btn = func(key string) ui.Element {
+				t := c.Theme()
+				return ui.ButtonBase(c.Key(key)).Size(env.TouchSize, env.TouchSize).Radius(env.TouchSize / 2).Center().TextColor(t.Accent).Cursor(ui.CursorPointer)
+			}
+		}
+		up := btn("up").Label(i18n.Tf("更新 %s", pv.Name)).Tooltip(i18n.T("重新下载该代理集合")).Disabled(!canUpdate || pv.Updating).Children(func() {
 			if pv.Updating {
 				ui.Spinner(c).Size(12, 12)
 			} else {
@@ -858,7 +896,7 @@ func (p *Page) provider(c *ui.Context, pv model.ProxyProvider, px model.ProxySna
 			name := pv.Name
 			p.e.Run(func() error { return p.e.API.UpdateProxyProvider(name) }, i18n.Tf("已更新「%s」", name))
 		}
-		hc := ui.Button(c, "").Label(i18n.Tf("健康检查 %s", pv.Name)).Tooltip(i18n.T("测试该集合中所有节点的延迟")).Disabled(checking || pv.TestURL == "").Children(func() {
+		hc := btn("hc").Label(i18n.Tf("健康检查 %s", pv.Name)).Tooltip(i18n.T("测试该集合中所有节点的延迟")).Disabled(checking || pv.TestURL == "").Children(func() {
 			if checking {
 				ui.Spinner(c).Size(12, 12)
 			} else {
@@ -976,7 +1014,11 @@ func (p *Page) askDeleteManualNode(mn model.ManualNode) {
 func (p *Page) stoppedManualSection(c *ui.Context, nodes []model.ManualNode) {
 	t := c.Theme()
 	k := p.e.Kit
-	ui.Column(c).Padding(0, 24, 20, 24).Gap(8).Children(func() {
+	col := ui.Column(c).Padding(0, 24, 20, 24).Gap(8)
+	if p.e.Phone { // inside the phone page's margins
+		col.Padding(0, 0, 20, 0)
+	}
+	col.Children(func() {
 		k.Section(c, i18n.T("手动节点"), "", func() {
 			for _, mn := range nodes {
 				node := mn

@@ -31,3 +31,7 @@ func Columns(c *ui.Context, gap float32, left, right func()) {
 		ui.Column(c).Grow(1).Basis(0).Gap(gap).Children(right)
 	})
 }
+
+// TouchSize is the least height (and width) of what a finger taps on a
+// phone, in points: Apple's 44 pt (docs/phone-ui.md).
+const TouchSize = 44
