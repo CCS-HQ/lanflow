@@ -173,11 +173,13 @@ func TestNewerWindowQuitsOlderServiceGracefully(t *testing.T) {
 
 	t.Setenv("LANFLOW_SPLIT_TEST_VERSION", "1.1.0")
 	var cleanups atomic.Int32
+	noStart := h.noStartWhileReplacing(h.starts.Load())
 	c, _, err := Connect(context.Background(), ConnectOptions{DataDir: h.dir, Version: "1.1.0", Start: h.start, Wait: 15 * time.Second,
 		Cleanup: func() {
 			if Alive(old) {
 				t.Errorf("cleanup ran while the old service %d ran", old)
 			}
+			noStart()
 			cleanups.Add(1)
 		}})
 	if err != nil {
@@ -215,7 +217,8 @@ func TestNewerWindowKillsStuckOlderService(t *testing.T) {
 	t.Setenv(stubbornEnv, "")
 	start := time.Now()
 	c, _, err := Connect(context.Background(), ConnectOptions{DataDir: h.dir, Version: "1.1.0", Start: h.start, Wait: 15 * time.Second,
-		Stop: StopOptions{Graceful: 300 * time.Millisecond, Term: 300 * time.Millisecond, Kill: 5 * time.Second}})
+		Stop:    StopOptions{Graceful: 300 * time.Millisecond, Term: 300 * time.Millisecond, Kill: 5 * time.Second},
+		Cleanup: h.noStartWhileReplacing(h.starts.Load())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,8 +226,15 @@ func TestNewerWindowKillsStuckOlderService(t *testing.T) {
 	if Alive(old) {
 		t.Fatalf("the stuck service %d still runs", old)
 	}
-	if w := c.Conn().Welcome(); w.Version != "1.1.0" {
+	conn := c.Conn()
+	if conn == nil {
+		t.Fatal("Connect returned a client without a connection")
+	}
+	if w := conn.Welcome(); w.Version != "1.1.0" {
 		t.Fatalf("serves %+v", w)
+	}
+	if n := h.starts.Load(); n != 2 {
+		t.Fatalf("%d services started, want 2 (the old one, then one new)", n)
 	}
 	if took := time.Since(start); took > 15*time.Second {
 		t.Fatalf("took %s", took)

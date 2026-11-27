@@ -89,6 +89,8 @@ type harness struct {
 	dir  string
 	exe  string
 	pids chan int
+	// starts counts the services started (start), whoever asked.
+	starts atomic.Int32
 }
 
 func newHarness(t *testing.T) *harness {
@@ -121,11 +123,25 @@ func newHarness(t *testing.T) *harness {
 
 // start is ConnectOptions.Start: the service process.
 func (h *harness) start() error {
+	h.starts.Add(1)
 	pid, err := Start(h.exe)
 	if err == nil {
 		h.pids <- pid
 	}
 	return err
+}
+
+// noStartWhileReplacing is a ConnectOptions.Cleanup that fails the test
+// when a service was started while the older one was being replaced: the
+// client still connected to the older one must not start one as it sees
+// that one go (its reconnect loop), or two new services race for the
+// socket. base is h.starts before Connect.
+func (h *harness) noStartWhileReplacing(base int32) func() {
+	return func() {
+		if n := h.starts.Load() - base; n != 0 {
+			h.t.Errorf("%d service(s) started while the older one was being replaced", n)
+		}
+	}
 }
 
 func (h *harness) killAll() {
