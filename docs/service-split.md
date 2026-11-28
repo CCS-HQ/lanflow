@@ -136,7 +136,7 @@ S1 在现有单进程里加了本机接口，界面仍直接调用进程内的 `
 
   bundle 以 `LSUIElement` 启动，避免后台服务先被 LaunchServices 注册成前台应用而出现第二个 Dock 图标。只有窗口和单进程模式显式使用 `ActivationPolicyRegular`；服务在启动就绪和被再次激活时重设 `ActivationPolicyAccessory`。
 - **关窗**：`CloseToTray`（默认开）时关窗 = 界面进程退出，服务、内核、连接不受影响；关掉该设置时关窗 = 退出澜流（与单进程一致）。窗口快捷键在窗口位于前台时关掉窗口（即退出界面进程），否则拉起或显示。
-- **退出澜流**：界面里的 ⌘Q / 应用菜单退出、以及托盘「退出澜流」都走原有确认（系统代理开着时 `Shell.AskQuit`），确认后界面调 `QuitService`，服务按原逻辑恢复系统代理、停内核，并向界面发 `ui quit` 让它直接退出。托盘退出时有界面就让界面确认（`ui ask-quit`），没有界面则用原生对话框确认（`Background.ConfirmQuit`，文字与窗口内相同）。SIGTERM 不确认，直接走同一退出路径。
+- **退出澜流**：界面里的 ⌘Q / 应用菜单退出、以及托盘「退出澜流」都走原有确认（系统代理开着时 `Shell.AskQuit`），确认后界面调 `QuitService`，服务按原逻辑恢复系统代理、停内核，并向界面发 `ui quit` 让它直接退出。托盘退出时有界面就让界面确认（`ui ask-quit`；界面正在关闭时交给新拉起的界面确认）；没有界面时，系统代理没开就直接退出，开着就拉起界面、在窗口里确认（`--open=quit`，即 `view.OpenQuit`），只有拉起界面失败时才用原生对话框（`Background.ConfirmQuit`，文字与窗口内相同；对话框已打开时再点「退出澜流」会把它带回前台）。SIGTERM 不确认，直接走同一退出路径。
 - **agent 授权**：服务进程的 `Prompt` 改为 `Background.AskAgentConsent`：发系统通知，并在托盘菜单顶部加「待授权：<agent>…」，点通知或菜单项弹原生对话框（写入：始终允许 / 仅本次 / 拒绝；ctl 的高影响写同样可选始终允许；其他（含 MCP 的高影响写）：允许 / 拒绝；关闭对话框 = 拒绝）。超时与撤回逻辑不变。单进程模式仍用窗口内的弹窗。
 - **提醒（Notice）**：`TakeNotices` 只能被取走一次，而服务进程需要 `System` 提醒发系统通知、界面需要其余提醒做 toast/对话框。`split.Notices` 包住服务：每次 `TopicNotice` 由服务进程取出，新提醒交给 `Background.SystemNotice`，同时排队留给界面的 `TakeNotices`（最多 20 条，超过 2 分钟的 toast 丢弃）。
 
