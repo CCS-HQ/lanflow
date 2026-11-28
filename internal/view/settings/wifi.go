@@ -59,9 +59,12 @@ func (p *Page) wifiSection(c *ui.Context, t *ui.Theme, s model.Settings) {
 		cur := strings.TrimSpace(e.API.NetInfo().SSID)
 		addDesc := i18n.Tf("当前 Wi-Fi：%s", cur)
 		if cur == "" {
-			if e.Mac {
+			switch {
+			case e.Mac:
 				addDesc = i18n.T("当前 Wi-Fi 名称不可用：macOS 需要定位权限才能读取 Wi-Fi 名称（系统设置 › 隐私与安全性 › 定位服务）")
-			} else {
+			case e.Linux:
+				addDesc = i18n.T("当前 Wi-Fi 名称不可用：没有连接 Wi-Fi，或无法从 NetworkManager 读取")
+			default:
 				addDesc = i18n.T("当前 Wi-Fi 名称不可用：Windows 11 需要开启定位权限才能读取 Wi-Fi 名称（设置 › 隐私和安全性 › 位置）")
 			}
 		}

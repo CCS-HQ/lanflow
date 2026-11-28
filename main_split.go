@@ -463,6 +463,7 @@ func runWindow(args split.Args) {
 	sh := view.New(cl, view.Options{
 		Mac:         runtime.GOOS == "darwin",
 		Windows:     runtime.GOOS == "windows",
+		Linux:       runtime.GOOS == "linux",
 		Elevated:    isElevated(),
 		Remote:      true,
 		SetShortcut: cl.SetShortcut,

@@ -372,6 +372,98 @@ jobs:
   # APK must be signed by. Without the keystore the release goes out without
   # an APK (a warning says so) rather than with one signed by a runner's
   # debug key, which no later release could update.
+  # Linux needs no cgo (MyGo loads GTK at run time), so one runner builds
+  # both architectures; the bundled-core tests run on this runner's amd64.
+  build-linux:
+    name: Build Linux
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GEOIP_SHA256: ${{ needs.validate.outputs.geoip_sha256 }}
+      GEOSITE_SHA256: ${{ needs.validate.outputs.geosite_sha256 }}
+      ASN_SHA256: ${{ needs.validate.outputs.asn_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: geodata
+          path: bin/geo
+
+      - name: Prepare resources
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          scripts/prepare-resources.sh linux amd64
+          scripts/prepare-resources.sh linux arm64
+
+      - name: Test bundled core and geodata
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./internal/core ./internal/controller ./internal/locate ./internal/profile ./internal/capture/agent ./internal/app
+
+      # The Debian and RPM packages (in /opt/lanflow) and the archive that
+      # install.sh installs into ~/.local and updates from; with
+      # MYGO_UPDATER_PRIVATE_KEY also its signed manifest and deltas.
+      - name: Build packages
+        env:
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/build-app.sh linux amd64
+          scripts/build-app.sh linux arm64
+
+      - name: Check bundled helper, geodata and licenses
+        run: |
+          for arch in amd64 arm64; do
+            d="build/linux-${arch}"
+            want="$(sed -n 's/.*ExpectedHelperSHA256=\([0-9a-f]*\).*/\1/p' "bin/linux-${arch}/app-ldflags")"
+            got="$(sha256sum "${d}/lanflow-helper" | cut -d' ' -f1)"
+            echo "linux/${arch} helper: linked ${want}, bundled ${got}"
+            [ -n "$want" ] && [ "$want" = "$got" ]
+            tar tzf "${d}/lanflow-"*"-linux-${arch}.tar.gz" | grep -qx mihomo || { echo "linux/${arch}: no mihomo in the archive" >&2; exit 1; }
+            for pair in "${GEOIP_SHA256}:geoip.metadb" "${GEOSITE_SHA256}:geosite.dat" "${ASN_SHA256}:GeoLite2-ASN.mmdb"; do
+              want="${pair%%:*}"; f="${pair#*:}"
+              got="$(sha256sum "${d}/geo/${f}" | cut -d' ' -f1)"
+              echo "linux/${arch} ${f}: expected ${want}, bundled ${got}"
+              [ -n "$want" ] && [ "$want" = "$got" ]
+            done
+            for f in mihomo/LICENSE mihomo/SOURCE.txt geodata/NOTICE.txt THIRD-PARTY-NOTICES.md go/go/LICENSE; do
+              [ -s "${d}/licenses/${f}" ] || { echo "linux/${arch}: licenses/${f} is not in the package" >&2; exit 1; }
+            done
+          done
+
+      # install.sh is the same for every architecture (it picks the
+      # archive by uname -m), so one copy goes up.
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist/updates
+          for arch in amd64 arm64; do
+            d="build/linux-${arch}"
+            cp "$d"/*.deb "$d"/*.rpm dist/
+            cp "$d"/*.tar.gz "$d"/update-*.json dist/updates/
+            cp "$d"/*.delta dist/updates/ 2>/dev/null || true
+          done
+          cp build/linux-amd64/install.sh dist/
+          cmp build/linux-amd64/install.sh build/linux-arm64/install.sh
+          go version -m build resources > dist/lanflow-linux-buildinfo.txt
+          { echo; echo "geodata (sha256):"; (cd resources/geo && sha256sum -- *); } >> dist/lanflow-linux-buildinfo.txt
+          ls -la dist dist/updates
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lanflow-linux
+          path: dist/*
+          if-no-files-found: error
+
   build-android:
     name: Build Android
     needs: validate
@@ -439,7 +531,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [validate, wait-ci, build-macos, build-windows, build-android]
+    needs: [validate, wait-ci, build-macos, build-windows, build-linux, build-android]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -475,7 +567,7 @@ jobs:
           mv artifacts/updates/update-*.json .
           mv artifacts/updates/* artifacts/
           rmdir artifacts/updates
-          ls update-darwin-arm64.json update-darwin-amd64.json update-windows-amd64.json
+          ls update-darwin-arm64.json update-darwin-amd64.json update-windows-amd64.json update-linux-amd64.json update-linux-arm64.json
 
       # The release page carries only what a person downloads (installers)
       # and what installed apps download (update packages, manifests), plus
@@ -519,10 +611,12 @@ jobs:
           repo="https://github.com/${GITHUB_REPOSITORY}"
           core="$(sed -n 's/^PINNED_VERSION="\([^"]*\)".*/\1/p' src/scripts/fetch-core.sh)"
           [ -n "$core" ]
-          for f in "lanflow-${ver}-arm64.dmg" "lanflow-${ver}-amd64.dmg" "lanflow-setup-${ver}-amd64.exe"; do
+          for f in "lanflow-${ver}-arm64.dmg" "lanflow-${ver}-amd64.dmg" "lanflow-setup-${ver}-amd64.exe" \
+            "lanflow_${ver}_amd64.deb" "lanflow-${ver}-1.x86_64.rpm" "lanflow_${ver}_arm64.deb" "lanflow-${ver}-1.aarch64.rpm" install.sh; do
             [ -s "artifacts/$f" ] || { echo "missing artifacts/$f" >&2; exit 1; }
           done
           apk="lanflow-${ver}-android-arm64.apk"
+          dl="${repo}/releases/download/${GITHUB_REF_NAME}"
           {
             echo "### 下载哪个文件"
             echo
@@ -531,16 +625,19 @@ jobs:
             echo "| Mac（Apple 芯片：M1 及以后） | macOS 12 及以上 | [\`lanflow-${ver}-arm64.dmg\`](${repo}/releases/download/${GITHUB_REF_NAME}/lanflow-${ver}-arm64.dmg) |"
             echo "| Mac（Intel 处理器） | macOS 12 及以上 | [\`lanflow-${ver}-amd64.dmg\`](${repo}/releases/download/${GITHUB_REF_NAME}/lanflow-${ver}-amd64.dmg) |"
             echo "| Windows 电脑（64 位） | Windows 10 / 11 | [\`lanflow-setup-${ver}-amd64.exe\`](${repo}/releases/download/${GITHUB_REF_NAME}/lanflow-setup-${ver}-amd64.exe) |"
+            echo "| Linux 电脑（x64） | Ubuntu、Debian 选 .deb；Fedora、openSUSE 选 .rpm | [\`.deb\`](${dl}/lanflow_${ver}_amd64.deb) · [\`.rpm\`](${dl}/lanflow-${ver}-1.x86_64.rpm) |"
+            echo "| Linux 电脑（arm64） | 同上 | [\`.deb\`](${dl}/lanflow_${ver}_arm64.deb) · [\`.rpm\`](${dl}/lanflow-${ver}-1.aarch64.rpm) |"
             if [ -s "artifacts/$apk" ]; then
               echo "| 安卓手机、平板（arm64） | Android 10 及以上 | [\`${apk}\`](${repo}/releases/download/${GITHUB_REF_NAME}/${apk}) |"
             fi
             echo
             echo "- 不确定 Mac 是哪种芯片：点左上角苹果菜单 › 关于本机，「芯片」写着 Apple M… 选第一行，「处理器」写着 Intel 选第二行。"
             echo "- 安装包没有经过 Apple / 微软签名，第一次打开会被系统拦截，放行方法见 [安装说明](${repo}#安装)。"
+            echo "- Linux 也可以不用 root、装到自己的用户目录：\`curl -fsSL ${repo}/releases/latest/download/install.sh | sh\`。这样装的会在应用内自动更新；.deb / .rpm 装的不会，新版本下载后重新安装。Linux 版目前只能设置 GNOME 的系统代理，TUN 模式还不支持；托盘图标需要 AppIndicator（GNOME 要装 AppIndicator 扩展）。"
             if [ -s "artifacts/$apk" ]; then
               echo "- 安卓版不会在应用内提示更新，新版本下载后直接覆盖安装，设置和订阅都会保留。"
             fi
-            echo "- 其余附件不用手动下载：\`.tar.gz\`、\`.delta\`、\`update-*.json\` 是已安装的桌面版自动更新时下载的；\`SHA256SUMS.txt\` 用来[校验下载](${repo}#验证下载)。"
+            echo "- 其余附件不用手动下载：\`.tar.gz\`、\`.delta\`、\`update-*.json\` 是已安装的桌面版自动更新和 Linux 安装脚本用的；\`SHA256SUMS.txt\` 用来[校验下载](${repo}#验证下载)。"
             echo
             echo "<details><summary>随包组件</summary>"
             echo

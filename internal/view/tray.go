@@ -42,13 +42,13 @@ type tray struct {
 	pinnedMenu  *mygo.Menu
 	retained    []retainedMenu
 	sig         string
-	look        trayart.Look                      // what the icon shows
-	drawn       string                            // look.key() + ink of the icon set last
-	node        string                            // the main group's current node, for the title
-	title       string                            // text beside the icon (macOS)
-	tip         string                            // notification area tooltip (Windows)
-	tipAt       time.Time                         // last live speed tooltip update
-	icons       map[string]*mygo.MenuIcon         // group icons by reference (traycmd.go)
+	look        trayart.Look                       // what the icon shows
+	drawn       string                             // look.key() + ink of the icon set last
+	node        string                             // the main group's current node, for the title
+	title       string                             // text beside the icon (macOS)
+	tip         string                             // notification area tooltip (Windows)
+	tipAt       time.Time                          // last live speed tooltip update
+	icons       map[string]*mygo.MenuIcon          // group icons by reference (traycmd.go)
 	statusIcons map[model.CoreState]*mygo.MenuIcon // colored status indicator dots
 
 	// The node delays the menu shows: a change of them alone rebuilds the
@@ -121,6 +121,11 @@ func startTray(h host) (*tray, error) {
 		tr.drawIcon(true)
 		tr.refresh(true)
 	})
+	if runtime.GOOS == "linux" {
+		// AppIndicator activation (a double click under GNOME's
+		// AppIndicator extension) opens the window; a click shows the menu.
+		t.OnClick(func() { h.showWindow("") })
+	}
 	if runtime.GOOS == "windows" {
 		// Left click opens the window; right click pops up the installed menu.
 		t.OnClick(func() { h.showWindow("") })
@@ -453,7 +458,7 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 		}
 	}
 	openAccel, quitAccel := "CmdOrCtrl+O", "CmdOrCtrl+Q"
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS != "darwin" { // a tray menu there takes no keys
 		openAccel, quitAccel = "", ""
 	}
 	items = append(items,

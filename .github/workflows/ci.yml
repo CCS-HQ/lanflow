@@ -80,7 +80,7 @@ jobs:
           for ref in "MetaCubeX/mihomo/tree/${core}" "MetaCubeX/mihomo/blob/${core}/LICENSE"; do
             grep -qF "$ref" THIRD-PARTY-NOTICES.md || { echo "THIRD-PARTY-NOTICES.md does not mention ${ref}" >&2; ok=0; }
           done
-          for goos in darwin windows; do
+          for goos in darwin windows linux; do
             GOOS="$goos" go list -deps -f '{{with .Module}}{{if .Version}}{{.Path}}{{end}}{{end}}' . ./cmd/lanflow-helper
           done | sort -u > "${RUNNER_TEMP}/modules.txt"
           [ -s "${RUNNER_TEMP}/modules.txt" ]
@@ -127,7 +127,7 @@ jobs:
           TOOLS_BIN="$HOME/.cache/lanflow-ci-tools"
           [ -x "$TOOLS_BIN/govulncheck" ] || GOBIN="$TOOLS_BIN" go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
           status=0
-          for target in darwin/arm64 windows/amd64; do
+          for target in darwin/arm64 windows/amd64 linux/amd64; do
             echo "::group::govulncheck ${target}"
             GOOS="${target%/*}" GOARCH="${target#*/}" "$TOOLS_BIN/govulncheck" ./... || status=1
             echo "::endgroup::"
@@ -187,6 +187,9 @@ jobs:
           - os: windows-2022
             cgo: "0"
             test_flags: "-shuffle=on"
+          - os: ubuntu-24.04
+            cgo: "1"
+            test_flags: "-race -shuffle=on"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30 # a run takes a few minutes; a hung end-to-end test should not hold a runner for hours
     env:
@@ -213,6 +216,16 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+
+      # MyGo lays text out with Pango on Linux, which finds fonts through
+      # fontconfig. The runner has no Chinese font, so the interface tests
+      # would measure fallback glyphs; a Chinese desktop has Noto CJK.
+      - name: Chinese fonts
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends fonts-noto-cjk >/dev/null
+          fc-match 'sans-serif:lang=zh-cn'
 
       # fetch-core.sh verifies every cached archive and geodata file against
       # its pinned SHA-256 or the digest reported by api.github.com before

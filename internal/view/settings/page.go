@@ -649,6 +649,9 @@ func (p *Page) tunTab(c *ui.Context, t *ui.Theme, s model.Settings, st model.Sta
 	e := p.e
 	e.Kit.Section(c, i18n.T("TUN 模式"), i18n.T("通过虚拟网卡接管系统全部流量，包括不遵守系统代理的终端与应用"), func() {
 		tunDesc := i18n.T("接管所有应用的流量，首次开启需要安装权限组件")
+		if !st.TUNAvailable && env.NoTUNHelper(e) {
+			tunDesc = i18n.T("Linux 版暂不支持 TUN 模式，将在后续版本提供；请先使用系统代理")
+		}
 		if st.TUNAvailable {
 			tunDesc = i18n.T("接管所有应用的流量，包括不遵守系统代理的程序")
 		}

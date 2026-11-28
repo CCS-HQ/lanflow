@@ -26,5 +26,13 @@
   "android": {
     "minSdk": 29,
     "permissions": ["INTERNET", "ACCESS_NETWORK_STATE"]
+  },
+  "linux": {
+    "maintainer": "Owlbay <Owlbay@users.noreply.github.com>",
+    "comment": "基于 Mihomo 内核的代理客户端",
+    "categories": ["Network"],
+    "depends": ["libayatana-appindicator3-1"],
+    "webview": false,
+    "command": "lanflow"
   }
 }

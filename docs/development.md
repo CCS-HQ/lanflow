@@ -54,7 +54,7 @@ CI 使用的 staticcheck 与 govulncheck 版本固定在 `.github/workflows/ci.y
   - `mygo vet`；对 darwin/arm64、windows/amd64、linux/amd64、windows/arm64 执行 `go vet`，对 linux/amd64、windows/arm64 执行 `go build`。
   - staticcheck、govulncheck：都是必过项，有告警即失败。
 - **Android build**（Linux）：装好 API 36、NDK 29、JDK 17 后运行 `scripts/build-android.sh`（从源码编译内核并打 arm64 APK，用 runner 的调试密钥签名），保证发布时安卓不会编不过。
-- **Test**（macOS、Windows）：先用 `fetch-core.sh` 下载内核和地理数据（有缓存；仓库变量 `CI_SKIP_CORE=1` 可跳过下载），再跑一遍 `go test`，都带 `-shuffle=on`，macOS 另带 `-race`。失败时完整的测试输出（含界面测试打印的页面元素位置）作为 `test-output-<系统>` 产物保留 14 天；输出里的 `-shuffle=<种子>` 可用来在本地复现同样的顺序。
+- **Test**（macOS、Windows、Linux）：先用 `fetch-core.sh` 下载内核和地理数据（有缓存；仓库变量 `CI_SKIP_CORE=1` 可跳过下载），再跑一遍 `go test`，都带 `-shuffle=on`，macOS 和 Linux 另带 `-race`。失败时完整的测试输出（含界面测试打印的页面元素位置）作为 `test-output-<系统>` 产物保留 14 天；输出里的 `-shuffle=<种子>` 可用来在本地复现同样的顺序。
 
 ## 打包
 
@@ -92,7 +92,7 @@ GitHub Actions（`.github/workflows/release.yml`）随后：
 
 - **校验**（validate）：tag 与上述版本号一致；tag 指向的提交在 main 上；更新签名密钥 `MYGO_UPDATER_PRIVATE_KEY` 已配置；权限组件版本检查通过。地理数据库上游只有每天滚动更新的 `latest`，所以在这里只下载一次，两个平台的构建作业使用同一份并按 SHA-256 核对；三个文件的 SHA-256 写进 Release 说明和各平台的构建信息。
 - **等待 CI**（wait-ci，与构建并行）：该提交要有一次成功的 CI 运行（推送到 main 或在 tag 上手动触发的才算，PR 的不算）；还在运行就等待，最多 45 分钟；没有或失败则终止，可以在 tag 上手动触发 CI 后重跑。vet、竞态检测、staticcheck、govulncheck、交叉编译和完整的单元 / 界面测试都依赖这次 CI 的结果，构建作业里不再重复。
-- **构建**（macOS、Windows）：准备资源后，只对用到真实内核和地理数据的包（`internal/core`、`controller`、`locate`、`profile`、`capture/agent`、`app`）运行测试，确保它们针对将要发布的内核与数据通过；再用 `scripts/build-app.sh` 构建 macOS arm64 / amd64 的 `.dmg` 和 Windows 安装程序，以及签名的更新包、增量包和更新清单；最后核对包内的权限组件摘要、地理数据库和许可证材料。
+- **构建**（macOS、Windows、Linux）：准备资源后，只对用到真实内核和地理数据的包（`internal/core`、`controller`、`locate`、`profile`、`capture/agent`、`app`）运行测试，确保它们针对将要发布的内核与数据通过；再用 `scripts/build-app.sh` 构建 macOS arm64 / amd64 的 `.dmg`、Windows 安装程序、Linux amd64 / arm64 的 `.deb`、`.rpm` 和安装脚本用的归档（见 [linux.md](linux.md)），以及签名的更新包、增量包和更新清单；最后核对包内的权限组件摘要、地理数据库和许可证材料。
 - **构建**（Android）：仓库有发布密钥（`ANDROID_KEYSTORE_BASE64` 等，见 [phone-android.md](phone-android.md#发布)）时，用 `scripts/build-android.sh` 构建并签名 `lanflow-<版本>-android-arm64.apk`，Release 说明里加一段安卓说明；没有密钥时跳过并在运行页给出警告，Release 不带 APK。
 - **发布**（需要以上全部通过）：Release 页只放安装包（dmg、exe、apk）、自动更新文件（`.tar.gz`、`.delta`、`update-*.json`）和 `SHA256SUMS.txt`，并为它们生成构建来源证明（attestation）。SBOM（`lanflow-<tag>.spdx.json`）、各二进制的 `go version -m` 构建信息和地理数据库的 SHA-256 作为这次运行的附件 `release-records` 保留 90 天，不上传到 Release。说明开头是按设备和系统列出该下哪个文件的表格，之后是随包组件（Mihomo 版本与源代码、第三方声明链接、地理数据库 SHA-256），再接 GitHub 自动生成的更新列表。最后上传更新清单——清单一上传，已安装的应用就能看到新版本。
 
