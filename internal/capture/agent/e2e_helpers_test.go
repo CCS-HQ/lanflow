@@ -272,7 +272,8 @@ func startKernel(t *testing.T, cfg []byte, mixed int, host string) *kernel {
 		}
 	})
 	k.ctrl = controller.New(k.dial)
-	deadline := time.Now().Add(15 * time.Second)
+	started := time.Now()
+	deadline := started.Add(15 * time.Second)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		_, err := k.ctrl.Version(ctx)
@@ -284,8 +285,12 @@ func startKernel(t *testing.T, cfg []byte, mixed int, host string) *kernel {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				_, err := k.ctrl.RuleProviders(ctx)
 				cancel()
-				if err == nil {
-					time.Sleep(100 * time.Millisecond)
+				// Mihomo drops connections until it has loaded the
+				// proxies too, after the listeners: wait for that line
+				// of its log, which a busy machine (CI with -race) takes
+				// a while to reach, then give it the moment to finish.
+				if err == nil && (k.logged("Start initial compatible provider") || time.Since(started) > 3*time.Second) {
+					time.Sleep(200 * time.Millisecond)
 					break
 				}
 			}
@@ -528,3 +533,10 @@ func itoa(i int) string { return strconv.Itoa(i) }
 type urlT = url.URL
 
 func parseURL(s string) (*url.URL, error) { return url.Parse(s) }
+
+// logged reports whether the kernel's log has a line containing text.
+func (k *kernel) logged(text string) bool {
+	k.logMu.Lock()
+	defer k.logMu.Unlock()
+	return strings.Contains(k.log.String(), text)
+}
