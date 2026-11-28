@@ -477,47 +477,83 @@ jobs:
           rmdir artifacts/updates
           ls update-darwin-arm64.json update-darwin-amd64.json update-windows-amd64.json
 
-      # What ships besides Lanflow itself goes on record with the release:
-      # the third-party notices (Mihomo's GPL-3.0 and the place of its
-      # source among them), and the SHA-256 of the geo databases packed into
-      # every installer of this release (they come from a rolling upstream
-      # release, so the tag alone would not say which files they were).
-      - name: Add third-party notices and geodata record
+      # The release page carries only what a person downloads (installers)
+      # and what installed apps download (update packages, manifests), plus
+      # SHA256SUMS.txt. The build records (SBOM, `go version -m` of every
+      # binary, the geodata SHA-256) stay with this run as an artifact; the
+      # third-party notices are linked at the tag and ship in every package.
+      - name: Keep build records off the release page
         env:
           GEOIP_SHA256: ${{ needs.validate.outputs.geoip_sha256 }}
           GEOSITE_SHA256: ${{ needs.validate.outputs.geosite_sha256 }}
           ASN_SHA256: ${{ needs.validate.outputs.asn_sha256 }}
-          GEO_FETCHED_AT: ${{ needs.validate.outputs.geo_fetched_at }}
         run: |
-          cp src/THIRD-PARTY-NOTICES.md artifacts/
-          geo="artifacts/lanflow-${GITHUB_REF_NAME}-geodata.sha256"
+          mkdir -p records
+          mv artifacts/*-buildinfo.txt artifacts/*.spdx.json records/
+          geo="records/lanflow-${GITHUB_REF_NAME}-geodata.sha256"
           {
             echo "${GEOIP_SHA256}  geoip.metadb"
             echo "${GEOSITE_SHA256}  geosite.dat"
             echo "${ASN_SHA256}  GeoLite2-ASN.mmdb"
           } > "$geo"
           grep -c -E '^[0-9a-f]{64}  ' "$geo" | grep -qx 3
+          ls -l records
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-records
+          path: records/*
+          if-no-files-found: error
+          retention-days: 90
+
+      # The head of the release notes: which file to download on which
+      # device, then what ships besides Lanflow itself (Mihomo's GPL-3.0 and
+      # its source, and the SHA-256 of the geo databases packed into every
+      # package: they come from a rolling upstream release, so the tag alone
+      # would not say which files they were).
+      - name: Write release notes
+        env:
+          GEO_FETCHED_AT: ${{ needs.validate.outputs.geo_fetched_at }}
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          repo="https://github.com/${GITHUB_REPOSITORY}"
           core="$(sed -n 's/^PINNED_VERSION="\([^"]*\)".*/\1/p' src/scripts/fetch-core.sh)"
           [ -n "$core" ]
+          for f in "lanflow-${ver}-arm64.dmg" "lanflow-${ver}-amd64.dmg" "lanflow-setup-${ver}-amd64.exe"; do
+            [ -s "artifacts/$f" ] || { echo "missing artifacts/$f" >&2; exit 1; }
+          done
+          apk="lanflow-${ver}-android-arm64.apk"
           {
-            echo "### 随包组件"
+            echo "### 下载哪个文件"
             echo
-            echo "- Mihomo ${core}（GPL-3.0，[对应源代码](https://github.com/MetaCubeX/mihomo/tree/${core})）；其余第三方组件见附件 \`THIRD-PARTY-NOTICES.md\` 与安装包内的 \`licenses/\`。"
+            echo "| 设备 | 系统要求 | 下载 |"
+            echo "|---|---|---|"
+            echo "| Mac（Apple 芯片：M1 及以后） | macOS 12 及以上 | [\`lanflow-${ver}-arm64.dmg\`](${repo}/releases/download/${GITHUB_REF_NAME}/lanflow-${ver}-arm64.dmg) |"
+            echo "| Mac（Intel 处理器） | macOS 12 及以上 | [\`lanflow-${ver}-amd64.dmg\`](${repo}/releases/download/${GITHUB_REF_NAME}/lanflow-${ver}-amd64.dmg) |"
+            echo "| Windows 电脑（64 位） | Windows 10 / 11 | [\`lanflow-setup-${ver}-amd64.exe\`](${repo}/releases/download/${GITHUB_REF_NAME}/lanflow-setup-${ver}-amd64.exe) |"
+            if [ -s "artifacts/$apk" ]; then
+              echo "| 安卓手机、平板（arm64） | Android 10 及以上 | [\`${apk}\`](${repo}/releases/download/${GITHUB_REF_NAME}/${apk}) |"
+            fi
+            echo
+            echo "- 不确定 Mac 是哪种芯片：点左上角苹果菜单 › 关于本机，「芯片」写着 Apple M… 选第一行，「处理器」写着 Intel 选第二行。"
+            echo "- 安装包没有经过 Apple / 微软签名，第一次打开会被系统拦截，放行方法见 [安装说明](${repo}#安装)。"
+            if [ -s "artifacts/$apk" ]; then
+              echo "- 安卓版不会在应用内提示更新，新版本下载后直接覆盖安装，设置和订阅都会保留。"
+            fi
+            echo "- 其余附件不用手动下载：\`.tar.gz\`、\`.delta\`、\`update-*.json\` 是已安装的桌面版自动更新时下载的；\`SHA256SUMS.txt\` 用来[校验下载](${repo}#验证下载)。"
+            echo
+            echo "<details><summary>随包组件</summary>"
+            echo
+            echo "- Mihomo ${core}（GPL-3.0，[对应源代码](https://github.com/MetaCubeX/mihomo/tree/${core})）；其余第三方组件见 [THIRD-PARTY-NOTICES.md](${repo}/blob/${GITHUB_REF_NAME}/THIRD-PARTY-NOTICES.md) 与安装包内的 \`licenses/\`。"
             echo "- 地理数据库取自 MetaCubeX/meta-rules-dat 的 \`latest\`（${GEO_FETCHED_AT}），各平台安装包内为同一份，SHA-256："
             echo
             echo '```'
-            cat "$geo"
+            cat "records/lanflow-${GITHUB_REF_NAME}-geodata.sha256"
             echo '```'
             echo
+            echo "</details>"
+            echo
           } > release-body.md
-          if ls artifacts/*-android-arm64.apk >/dev/null 2>&1; then
-            {
-              echo "### 安卓"
-              echo
-              echo "- \`lanflow-*-android-arm64.apk\`：Android 10 及以上、arm64 设备。应用内不检查更新，新版本请到 Release 页下载后覆盖安装。"
-              echo
-            } >> release-body.md
-          fi
           cat release-body.md
 
       - name: Generate SHA-256 checksums

@@ -8,8 +8,8 @@
 
 从 [最新 Release](https://github.com/Owlbay/lanflow/releases/latest) 下载：
 
-- **macOS**：Apple 芯片选 `lanflow-<版本>-arm64.dmg`，Intel 选 `-amd64.dmg`，把 Lanflow 拖到「应用程序」。安装包未经 Apple 签名公证，首次打开会被拦截：在「系统设置 › 隐私与安全性」里点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/Lanflow.app`。
-- **Windows**：运行 `lanflow-setup-<版本>-amd64.exe`。安装程序未签名，SmartScreen 提示时点「更多信息 › 仍要运行」。
+- **macOS**（12 及以上）：Apple 芯片选 `lanflow-<版本>-arm64.dmg`，Intel 选 `-amd64.dmg`，把 Lanflow 拖到「应用程序」。安装包未经 Apple 签名公证，首次打开会被拦截：在「系统设置 › 隐私与安全性」里点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/Lanflow.app`。
+- **Windows**（10 / 11，64 位）：运行 `lanflow-setup-<版本>-amd64.exe`。安装程序未签名，SmartScreen 提示时点「更多信息 › 仍要运行」。
 - **Android**（10 及以上，arm64）：下载 `lanflow-<版本>-android-arm64.apk` 安装，需允许浏览器或文件管理器「安装未知应用」。应用内不检查更新，新版本下载后直接覆盖安装。
 
 ### 验证下载
