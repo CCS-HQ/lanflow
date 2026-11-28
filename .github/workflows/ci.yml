@@ -217,6 +217,16 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # MyGo lays text out with Pango on Linux, which finds fonts through
+      # fontconfig. The runner has no Chinese font, so the interface tests
+      # would measure fallback glyphs; a Chinese desktop has Noto CJK.
+      - name: Chinese fonts
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends fonts-noto-cjk >/dev/null
+          fc-match 'sans-serif:lang=zh-cn'
+
       # fetch-core.sh verifies every cached archive and geodata file against
       # its pinned SHA-256 or the digest reported by api.github.com before
       # accepting it, so caching bin/ speeds up downloads without trusting
