@@ -7,6 +7,11 @@ import (
 	"lanflow/internal/i18n"
 )
 
+// NoTUNHelper is true where Lanflow has no privileged helper yet, so TUN
+// mode cannot be turned on: Linux, until the helper runs there as a
+// systemd service.
+func NoTUNHelper(e *Env) bool { return e.Linux }
+
 // SetTUN turns TUN mode on or off from any page or the tray. The first time
 // it is turned on without the privileged helper, it asks before installing
 // the helper (administrator prompt) and then turns TUN on.
@@ -17,6 +22,11 @@ func SetTUN(e *Env, on bool) {
 	}
 	if e.API.TUNHelperInstalled() {
 		e.Run(func() error { return e.API.SetTUN(true) }, i18n.T("TUN 模式已开启"))
+		return
+	}
+	if NoTUNHelper(e) {
+		e.Toast(i18n.T("Linux 版暂不支持 TUN 模式，请先使用系统代理"), true)
+		e.Redraw() // the switch goes back to off
 		return
 	}
 	e.Confirm(i18n.T("安装权限组件"), i18n.T("TUN 模式需要一个随系统运行的权限组件来创建虚拟网卡。安装时会请求管理员权限，只需一次。"), i18n.T("安装并开启"), false, func() {

@@ -65,6 +65,8 @@ type Options struct {
 	Mac bool
 	// Windows enables Windows-specific settings (default run as admin).
 	Windows bool
+	// Linux is true on Linux desktops.
+	Linux bool
 	// Elevated reports whether the process runs elevated on Windows.
 	Elevated bool
 	// Sync runs Env.Run jobs on the calling thread, for tests.
@@ -211,6 +213,7 @@ func New(api app.API, opts Options) *Shell {
 		RedrawData: s.redrawData,
 		Mac:        opts.Mac,
 		Windows:    opts.Windows,
+		Linux:      opts.Linux,
 		Elevated:   opts.Elevated,
 		Phone:      opts.Phone,
 		Kit:        newKit(opts.Phone),

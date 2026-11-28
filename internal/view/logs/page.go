@@ -305,8 +305,11 @@ func (p *Page) tools(c *ui.Context, all []model.LogEntry) {
 	}).OnClick(func() { p.paused = !p.paused })
 	ui.Button(c, i18n.T("清空")).Disabled(len(all) == 0).OnClick(func() { p.clear() })
 	reveal := i18n.T("在资源管理器中显示日志文件")
-	if e.Mac {
+	switch {
+	case e.Mac:
 		reveal = i18n.T("在访达中显示日志文件")
+	case e.Linux:
+		reveal = i18n.T("在文件管理器中显示日志文件")
 	}
 	ui.Button(c, "⋯").Label(i18n.T("更多")).Tooltip(i18n.T("更多")).PopoverMenuButton(func(m *ui.Menu) {
 		// 复制全部 copies every line held, whatever the level filter and

@@ -709,7 +709,7 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 			p.statusLine(c, t, i18n.T("嗅探"), func() { statusText(c, snf) }, env.Settings, "sniffer")
 			p.statusLine(c, t, "DNS", func() { statusText(c, dnsStatusText(p.effDNS)) }, env.Settings, "dns")
 			ctrlDesc := i18n.T("本机套接字，仅澜流可访问")
-			if !e.Mac {
+			if e.Windows {
 				ctrlDesc = i18n.T("本机命名管道，仅澜流可访问")
 			}
 			p.statusLine(c, t, i18n.T("控制接口"), func() { statusText(c, ctrlDesc) }, "", "")

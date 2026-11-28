@@ -1,4 +1,4 @@
-//go:build (!darwin || ios) && !windows
+//go:build (!darwin || ios) && !windows && (!linux || android)
 
 package sysproxy
 

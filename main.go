@@ -124,6 +124,7 @@ func runSingle(locked bool) {
 	shell := view.New(api, view.Options{
 		Mac:      runtime.GOOS == "darwin",
 		Windows:  runtime.GOOS == "windows",
+		Linux:    runtime.GOOS == "linux",
 		Elevated: isElevated(),
 	})
 	stopLocalAPI := startLocalAPI(api, agentPrompt(shell), singleHost{shell})

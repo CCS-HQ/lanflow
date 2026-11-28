@@ -1,6 +1,6 @@
 # 澜流 Lanflow
 
-基于 MyGo 原生 UI 的桌面代理客户端，内核为 Mihomo（Clash.Meta），支持**系统代理**与 **TUN 模式**，macOS + Windows。
+基于 MyGo 原生 UI 的桌面代理客户端，内核为 Mihomo（Clash.Meta），支持**系统代理**与 **TUN 模式**，macOS + Windows，另有 Linux 版（第一期，见 [docs/linux.md](docs/linux.md)）和安卓版。
 
 界面与功能见 [设计文档](docs/design.md)，可交互原型见 [docs/prototype/index.html](docs/prototype/index.html)；开发、CI 与发布见 [docs/development.md](docs/development.md)。
 
@@ -10,6 +10,7 @@
 
 - **macOS**（12 及以上）：Apple 芯片选 `lanflow-<版本>-arm64.dmg`，Intel 选 `-amd64.dmg`，把 Lanflow 拖到「应用程序」。安装包未经 Apple 签名公证，首次打开会被拦截：在「系统设置 › 隐私与安全性」里点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/Lanflow.app`。
 - **Windows**（10 / 11，64 位）：运行 `lanflow-setup-<版本>-amd64.exe`。安装程序未签名，SmartScreen 提示时点「更多信息 › 仍要运行」。
+- **Linux**（x64 / arm64）：Ubuntu、Debian 装 `lanflow_<版本>_<架构>.deb`，Fedora、openSUSE 装 `.rpm`；也可以不用 root、装到自己的用户目录：`curl -fsSL https://github.com/Owlbay/lanflow/releases/latest/download/install.sh | sh`，这样装的会在应用内自动更新。目前只能设置 GNOME 的系统代理，TUN 模式还不支持，详见 [docs/linux.md](docs/linux.md)。
 - **Android**（10 及以上，arm64）：下载 `lanflow-<版本>-android-arm64.apk` 安装，需允许浏览器或文件管理器「安装未知应用」。应用内不检查更新，新版本下载后直接覆盖安装。
 
 ### 验证下载

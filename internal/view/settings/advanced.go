@@ -262,6 +262,8 @@ func (p *Page) advancedTab(c *ui.Context, t *ui.Theme, s model.Settings, st mode
 				switch {
 				case e.Phone: // no interface name a phone's user would know
 					ifaceDesc = i18n.T("内核的出站流量绑定到这个网卡；留空自动选择（interface-name）")
+				case e.Linux:
+					ifaceDesc = i18n.T("内核的出站流量绑定到这个网卡，例如 eth0 或 wlan0；留空自动选择（interface-name）")
 				case !e.Mac:
 					ifaceDesc = i18n.T("内核的出站流量绑定到这个网卡，例如 WLAN；留空自动选择（interface-name）")
 				}

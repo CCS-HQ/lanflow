@@ -245,13 +245,15 @@ func (p *Page) modeRows(c *ui.Context, st model.Status, pm *model.Mode, busy boo
 			switch {
 			case st.HelperReinstall:
 				desc = i18n.T("需要重新安装权限组件")
+			case !st.TUNAvailable && env.NoTUNHelper(p.e):
+				desc = i18n.T("Linux 版暂不支持")
 			case !st.TUNAvailable:
 				desc = i18n.T("首次开启需安装权限组件")
 			}
 			ui.Text(c, desc).FontSize(12).TextColor(t.TextMuted)
 		}, func() {
 			on := st.TUN
-			ui.Switch(c, &on).Label(i18n.T("TUN 模式开关")).Disabled(busy).OnChange(func() { env.SetTUN(p.e, on) })
+			ui.Switch(c, &on).Label(i18n.T("TUN 模式开关")).Disabled(busy || (!st.TUN && !st.TUNAvailable && env.NoTUNHelper(p.e))).OnChange(func() { env.SetTUN(p.e, on) })
 		})
 
 		mode := st.Mode

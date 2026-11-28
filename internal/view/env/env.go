@@ -147,6 +147,9 @@ type Env struct {
 	Mac bool
 	// Windows is true on Windows (administrator launch & Task Scheduler autostart).
 	Windows bool
+	// Linux is true on Linux desktops (file manager, keyring and Wi-Fi
+	// wording; no tray accelerators).
+	Linux bool
 	// Elevated is true when the current process runs elevated on Windows.
 	Elevated bool
 	// Phone is true on iOS and Android (docs/phone-ui.md): one narrow
